@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { getFeedback, type FeedbackItem } from "../lib/api";
+import { getFeedback, seedOpenNegativeTickets, type FeedbackItem } from "../lib/api";
 
 const ratingLabel: Record<number, string> = {
   1: "Very Poor",
@@ -15,7 +15,9 @@ export function AdminTicketsPage() {
   const [items, setItems] = useState<FeedbackItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const loadTickets = useCallback(async (opts?: { silent?: boolean }) => {
     try {
@@ -37,6 +39,23 @@ export function AdminTicketsPage() {
       }
     }
   }, []);
+
+  const handleOpenNegativeTickets = useCallback(async () => {
+    try {
+      setIsSyncing(true);
+      setSyncMessage(null);
+      setError(null);
+      const result = await seedOpenNegativeTickets();
+      setSyncMessage(
+        `Updated ${result.updated} row(s). ${result.negativeWithTicket} negative item(s) now have tickets.`
+      );
+      await loadTickets({ silent: true });
+    } catch {
+      setError("Could not assign tickets. Is the API running?");
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [loadTickets]);
 
   useEffect(() => {
     void loadTickets();
@@ -60,21 +79,37 @@ export function AdminTicketsPage() {
         <div>
           <h2 className="text-3xl md:text-4xl font-bold text-gray-800">Ticket Management</h2>
           <p className="text-base md:text-lg text-gray-600 mt-2">
-            View and open raised complaint tickets
+            Tickets include critical star ratings and AI-negative sentiment. Use “Open tickets for AI-negative”
+            if older feedback already has Groq sentiment but no ticket ID yet.
           </p>
         </div>
-        <div className="text-sm text-gray-600">
-          Total tickets: <span className="font-bold text-gray-800">{sortedItems.length}</span>{" "}
+        <div className="text-sm text-gray-600 flex flex-wrap items-center gap-2 justify-end">
+          Total tickets: <span className="font-bold text-gray-800">{sortedItems.length}</span>
           <button
             type="button"
             onClick={() => void loadTickets({ silent: true })}
             disabled={isLoading || isRefreshing}
-            className="ml-2 px-3 py-1 rounded-lg border border-gray-300 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3 py-1 rounded-lg border border-gray-300 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isRefreshing ? "Refreshing…" : "Refresh"}
           </button>
+          <button
+            type="button"
+            onClick={() => void handleOpenNegativeTickets()}
+            disabled={isLoading || isSyncing}
+            className="px-3 py-1 rounded-lg border border-[#2A6FDB] text-xs font-semibold text-[#2A6FDB] hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Assign ticket IDs to feedback where AI sentiment is negative (requires Groq analysis on those rows)"
+          >
+            {isSyncing ? "Syncing…" : "Open tickets for AI-negative"}
+          </button>
         </div>
       </div>
+
+      {syncMessage && (
+        <p className="text-sm text-[#2FBF71] mb-4" role="status">
+          {syncMessage}
+        </p>
+      )}
 
       <div className="bg-white rounded-xl shadow-md overflow-hidden">
         {isLoading ? (
@@ -101,7 +136,9 @@ export function AdminTicketsPage() {
               <tbody className="divide-y divide-gray-200">
                 {sortedItems.map((item) => (
                   <tr key={item._id} className="hover:bg-[#F5F7FA] transition-colors">
-                    <td className="px-6 py-4 font-mono text-sm text-gray-800">{item._id}</td>
+                    <td className="px-6 py-4 font-mono text-sm text-gray-800">
+                      {item.ticketId ?? item._id}
+                    </td>
                     <td className="px-6 py-4 font-medium text-gray-800">{item.patientName}</td>
                     <td className="px-6 py-4 text-gray-600">{item.department?.trim() || "—"}</td>
                     <td className="px-6 py-4 text-gray-600 capitalize">

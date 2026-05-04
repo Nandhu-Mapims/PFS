@@ -52,11 +52,16 @@ export function TicketDetail() {
   }
 
   const createdAt = ticket ? new Date(ticket.createdAt) : null;
-  const isNegative = (ticket?.rating ?? 0) <= 2;
+  const sentimentNegative = ticket?.aiSentiment === "negative";
+  const sentimentPositive = ticket?.aiSentiment === "positive";
+  const sentimentNeutral = ticket?.aiSentiment === "neutral";
+  const noAiSentiment = ticket && !ticket.aiSentiment;
   const fallbackAiSummary = ticket
-    ? isNegative
-      ? "Negative sentiment indicated by rating. Recommended: follow up with patient and assign department owner."
-      : "Neutral/positive tone from rating. Monitor trends and close once reviewed."
+    ? noAiSentiment
+      ? "AI sentiment is not available yet. Review the comment text and patient rating, then follow your local escalation policy."
+      : sentimentNegative
+        ? "AI detected negative tone in the comments. Recommended: follow up with the patient and assign a department owner."
+        : "Monitor trends and close the ticket once reviewed."
     : "";
   const aiSummary = ticket?.aiSummary?.trim() || fallbackAiSummary;
 
@@ -96,14 +101,27 @@ export function TicketDetail() {
             <div className="flex flex-wrap gap-3">
               <span
                 className={`px-4 py-2 rounded-full text-sm font-bold text-white ${
-                  ticket.rating <= 2 ? "bg-[#E5533D]" : "bg-[#2FBF71]"
+                  sentimentNegative
+                    ? "bg-[#E5533D]"
+                    : sentimentPositive
+                      ? "bg-[#2FBF71]"
+                      : sentimentNeutral
+                        ? "bg-[#F4A261]"
+                        : "bg-gray-500"
                 }`}
               >
-                {ticket.rating <= 2 ? "Critical" : "Normal"}
+                {ticket.aiSentiment
+                  ? `AI sentiment: ${ticket.aiSentiment}`
+                  : "AI sentiment: pending"}
               </span>
-              <span className="px-4 py-2 rounded-full text-sm font-bold bg-[#F4A261] text-white">
+              <span className="px-4 py-2 rounded-full text-sm font-bold bg-[#94a3b8] text-white">
                 Rating: {ticket.rating}/5
               </span>
+              {(ticket.rating ?? 0) <= 2 && (
+                <span className="px-4 py-2 rounded-full text-sm font-bold bg-[#E5533D] text-white">
+                  Low satisfaction score
+                </span>
+              )}
             </div>
           </div>
           <div className="text-right text-sm text-gray-600">

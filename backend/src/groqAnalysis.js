@@ -27,9 +27,23 @@ function stripJsonFence(text) {
 }
 
 /**
- * @param {{ patientName: string; department: string; rating: number; comments: string }} input
- * @param {{ feedbackId?: string }} [options]
- * @returns {Promise<{ sentiment: string; urgency: string; topics: string[]; summary: string } | null>}
+ * @param {string | null | undefined} raw
+ * @param {{ name: string; description?: string }[]} choices
+ * @returns {string | null} canonical department name from DB or null
+ */
+export function resolveDepartmentFromAi(raw, choices) {
+  if (raw == null || !choices?.length) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const lower = s.toLowerCase();
+  const exact = choices.find((c) => c.name.toLowerCase() === lower);
+  return exact ? exact.name : null;
+}
+
+/**
+ * @param {{ patientName: string; department: string; rating: number; comments: string }} input (rating is not sent to Groq; sentiment uses comments only)
+ * @param {{ feedbackId?: string; departmentChoices?: { name: string; description?: string }[] }} [options]
+ * @returns {Promise<{ sentiment: string; urgency: string; topics: string[]; summary: string; inferredDepartment?: string | null } | null>}
  */
 export async function analyzePatientFeedback(input, options = {}) {
   const feedbackId = options.feedbackId ?? "unknown";
@@ -46,19 +60,52 @@ export async function analyzePatientFeedback(input, options = {}) {
   const comments = String(input.comments || "").trim();
   const truncatedComments = comments.length > 4000 ? `${comments.slice(0, 4000)}…` : comments;
 
+  const departmentChoices = Array.isArray(options.departmentChoices)
+    ? options.departmentChoices.filter((c) => c && String(c.name || "").trim())
+    : [];
+  const deptProvided = Boolean(String(input.department || "").trim());
+  const inferDepartment =
+    !deptProvided && departmentChoices.length > 0;
+
+  const departmentListBlock = inferDepartment
+    ? `
+
+Official departments (choose at most one for routing). Each line is "Name — description":
+${departmentChoices
+  .map((c) => `- ${String(c.name).trim()} — ${String(c.description || "").trim() || "general services"}`)
+  .join("\n")}
+
+Rules for "inferredDepartment":
+- The patient did NOT specify a department. Infer the single best department from their comments (symptoms, procedures, staff roles, location clues).
+- Set "inferredDepartment" to EXACTLY one "Name" string from the list above (character-for-character match to the name before " — "), or null if the text does not clearly fit any department.
+- Do not invent department names.`
+    : "";
+
+  const sentimentDeptLine = deptProvided
+    ? `Department (as entered by patient/staff): ${String(input.department || "").slice(0, 120)}`
+    : `Department: not specified — use inferredDepartment field below only.`;
+
+  // Sentiment must come from language in comments only — do not pass numeric ratings to the model
+  // so it cannot anchor sentiment to stars. Ticket/rating rules remain server-side in index.js.
   const userContent = `You are a healthcare feedback analyst. Analyze this hospital patient feedback.
 
-Rating scale: 1 = very poor, 5 = excellent.
 Patient name: ${String(input.patientName || "").slice(0, 120)}
-Department: ${String(input.department || "unspecified").slice(0, 120)}
-Numeric rating: ${input.rating}
-Comments (may be empty): ${truncatedComments || "(none)"}
+${sentimentDeptLine}
+Patient written comments (may be empty): ${truncatedComments || "(none)"}
+${departmentListBlock}
+
+Rules for the "sentiment" field:
+- Infer sentiment ONLY from the wording and tone of the patient written comments (praise, complaints, frustration, gratitude).
+- Do NOT infer sentiment from any numeric rating or score — you are not given one on purpose.
+- If comments are empty or too vague to judge emotional tone, use "neutral".
+
+Rules for "urgency": judge follow-up priority from the issues described in the comments (safety, repeated failures, severe distress), not from a star rating.
 
 Respond with ONLY a valid JSON object (no markdown fences) using exactly these keys:
-- "sentiment": one of "positive", "neutral", "negative" — infer from rating and comments together.
+- "sentiment": one of "positive", "neutral", "negative" — from comment text only, as above.
 - "urgency": one of "low", "medium", "high" — service/safety follow-up urgency for staff.
 - "topics": array of 1 to 5 short English strings (e.g. "wait time", "nursing care").
-- "summary": one concise sentence for staff (max 220 characters).
+- "summary": one concise sentence for staff (max 220 characters).${inferDepartment ? `\n- "inferredDepartment": either null or EXACTLY one department Name from the official list above.` : ""}
 
 Do not include any text outside the JSON object.`;
 
@@ -66,7 +113,6 @@ Do not include any text outside the JSON object.`;
   console.log("[groq] request", {
     feedbackId,
     model,
-    rating: input.rating,
     department: String(input.department || "").slice(0, 80) || "(none)",
     commentChars: comments.length,
   });
@@ -136,6 +182,11 @@ Do not include any text outside the JSON object.`;
       .slice(0, 300),
   };
 
+  let inferredDepartment = null;
+  if (inferDepartment) {
+    inferredDepartment = resolveDepartmentFromAi(parsed.inferredDepartment, departmentChoices);
+  }
+
   // eslint-disable-next-line no-console
   console.log("[groq] analysis complete", {
     feedbackId,
@@ -143,7 +194,8 @@ Do not include any text outside the JSON object.`;
     urgency: result.urgency,
     topics: result.topics,
     summary: result.summary,
+    inferredDepartment: inferDepartment ? inferredDepartment : undefined,
   });
 
-  return result;
+  return inferDepartment ? { ...result, inferredDepartment } : result;
 }

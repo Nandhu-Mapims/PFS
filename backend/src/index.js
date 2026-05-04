@@ -83,6 +83,10 @@ const User = mongoose.model("User", userSchema);
 const Feedback = mongoose.model("Feedback", feedbackSchema);
 const Branding = mongoose.model("Branding", brandingSchema);
 
+function newTicketId() {
+  return `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+}
+
 async function ensureDefaults() {
   const deptCount = await Department.countDocuments();
   if (deptCount === 0) {
@@ -368,6 +372,34 @@ app.post("/api/seed/mock-feedback", async (_req, res) => {
   }
 });
 
+/** Ensures every Groq-negative feedback has a ticket id (open in Ticket Management) and reopens Resolved rows. */
+app.post("/api/seed/open-negative-tickets", async (_req, res) => {
+  try {
+    const rows = await Feedback.find({ aiSentiment: "negative" }).lean();
+    let updated = 0;
+    for (const row of rows) {
+      const set = {};
+      if (!row.ticketId) {
+        set.ticketId = newTicketId();
+        set.status = "New";
+      } else if (row.status === "Resolved") {
+        set.status = "New";
+      }
+      if (Object.keys(set).length > 0) {
+        await Feedback.updateOne({ _id: row._id }, { $set: set });
+        updated += 1;
+      }
+    }
+    const withTickets = await Feedback.countDocuments({
+      aiSentiment: "negative",
+      ticketId: { $nin: [null, ""] },
+    });
+    return res.json({ updated, negativeWithTicket: withTickets });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to open negative tickets" });
+  }
+});
+
 app.post("/api/feedback", async (req, res) => {
   try {
     const { patientName, department, rating, comments, source } = req.body;
@@ -380,6 +412,7 @@ app.post("/api/feedback", async (req, res) => {
 
     const numericRating = Number(rating);
     const normalizedDepartment = String(department || "").trim();
+    const departmentProvided = Boolean(normalizedDepartment);
     const normalizedComments = String(comments || "")
       .trim()
       .toLowerCase()
@@ -390,7 +423,7 @@ app.post("/api/feedback", async (req, res) => {
 
     // Critical feedback (rating 1) raises an immediate ticket.
     if (numericRating === 1) {
-      ticketId = `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      ticketId = newTicketId();
       ticketRule = "critical_immediate";
     }
 
@@ -420,7 +453,7 @@ app.post("/api/feedback", async (req, res) => {
         const shouldRaise = distinctUsers.size >= 2 && ageHours >= 24;
 
         if (shouldRaise) {
-          ticketId = `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+          ticketId = newTicketId();
           ticketRule = "normal_after_24h_multi_patient";
           if (similarRows.length > 0) {
             await Feedback.updateMany(
@@ -458,6 +491,10 @@ app.post("/api/feedback", async (req, res) => {
 
     if (process.env.GROQ_API_KEY) {
       try {
+        const departmentChoices = await Department.find()
+          .sort({ name: 1 })
+          .select("name description")
+          .lean();
         // eslint-disable-next-line no-console
         console.log("[feedback] groq analysis starting", { feedbackId: String(feedback._id) });
         const ai = await analyzePatientFeedback(
@@ -467,20 +504,33 @@ app.post("/api/feedback", async (req, res) => {
             rating: Number(rating),
             comments: comments || "",
           },
-          { feedbackId: String(feedback._id) }
+          {
+            feedbackId: String(feedback._id),
+            departmentChoices: departmentChoices.map((d) => ({
+              name: d.name,
+              description: d.description || "",
+            })),
+          }
         );
         if (ai) {
+          const setFields = {
+            aiSentiment: ai.sentiment,
+            aiUrgency: ai.urgency,
+            aiTopics: ai.topics.length ? ai.topics : [],
+            aiSummary: ai.summary,
+            aiAnalyzedAt: new Date(),
+          };
+          if (!departmentProvided && ai.inferredDepartment) {
+            setFields.department = ai.inferredDepartment;
+            setFields.complaintSignature = `${String(ai.inferredDepartment).toLowerCase()}|${normalizedComments}`;
+          }
+          if (ai.sentiment === "negative" && !feedback.ticketId) {
+            setFields.ticketId = newTicketId();
+            setFields.status = "New";
+          }
           const updated = await Feedback.findByIdAndUpdate(
             feedback._id,
-            {
-              $set: {
-                aiSentiment: ai.sentiment,
-                aiUrgency: ai.urgency,
-                aiTopics: ai.topics.length ? ai.topics : [],
-                aiSummary: ai.summary,
-                aiAnalyzedAt: new Date(),
-              },
-            },
+            { $set: setFields },
             { new: true }
           ).lean();
           if (updated) {
@@ -491,6 +541,8 @@ app.post("/api/feedback", async (req, res) => {
             feedbackId: String(feedback._id),
             aiSentiment: ai.sentiment,
             aiUrgency: ai.urgency,
+            ticketOpenedForNegative: Boolean(setFields.ticketId),
+            departmentInferred: Boolean(!departmentProvided && ai.inferredDepartment),
           });
         }
       } catch (groqErr) {
@@ -507,7 +559,7 @@ app.post("/api/feedback", async (req, res) => {
 
     return res.status(201).json({
       ...outDoc,
-      ticketRaised: Boolean(ticketId),
+      ticketRaised: Boolean(outDoc.ticketId),
     });
   } catch (error) {
     return res.status(500).json({ message: "Failed to create feedback" });
@@ -530,7 +582,8 @@ app.get("/api/analytics", async (_req, res) => {
 
     const totals = {
       all: rows.length,
-      negative: rows.filter((item) => item.rating <= 2).length,
+      // Sentiment is AI-derived (Groq), not inferred from numeric rating
+      negative: rows.filter((item) => item.aiSentiment === "negative").length,
       aiTickets: rows.filter((item) => item.source === "ai").length,
       averageRating: rows.length
         ? Number(
@@ -553,7 +606,7 @@ app.get("/api/analytics", async (_req, res) => {
         : "New";
       statusCounter[st] = (statusCounter[st] || 0) + 1;
 
-      if (item.rating <= 2) {
+      if (item.aiSentiment === "negative") {
         const department = item.department || "Unknown";
         departmentNegativeCounter[department] =
           (departmentNegativeCounter[department] || 0) + 1;

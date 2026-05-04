@@ -6,10 +6,13 @@ import { getSession } from "../lib/auth";
 export function ThankYou() {
   const navigate = useNavigate();
   const location = useLocation();
-  const rating = location.state?.rating || 5;
   const fromStaffSession = Boolean(location.state?.fromStaffSession);
-  const ticketRaised = Boolean(location.state?.ticketRaised);
-  const ticketId = location.state?.ticketId as string | null | undefined;
+  const aiSentiment = location.state?.aiSentiment as
+    | "positive"
+    | "neutral"
+    | "negative"
+    | null
+    | undefined;
   const aiSummary = typeof location.state?.aiSummary === "string" ? location.state.aiSummary : "";
   const aiTopics = Array.isArray(location.state?.aiTopics)
     ? (location.state.aiTopics as string[])
@@ -17,8 +20,7 @@ export function ThankYou() {
   const session = getSession();
   const isStaffSession = fromStaffSession || session?.role === "staff";
 
-  // Show ticket ID only for negative feedback (rating <= 3)
-  const isNegative = rating <= 3 && ticketRaised && Boolean(ticketId);
+  const showGoogleReviewsPrompt = aiSentiment !== "negative";
 
   useEffect(() => {
     // Could trigger confetti animation here for positive feedback
@@ -65,21 +67,8 @@ export function ThankYou() {
           </div>
         )}
 
-        {/* Conditional Ticket ID - Only for Negative Feedback */}
-        {isNegative && (
-          <div className="bg-[#F5F7FA] border-2 border-[#2A6FDB] rounded-2xl p-6 mb-8 animate-in fade-in slide-in-from-bottom duration-300">
-            <p className="text-sm text-gray-600 mb-2 font-medium">Your Complaint Ticket ID</p>
-            <p className="text-2xl md:text-3xl font-mono font-bold text-[#2A6FDB] mb-3">
-              {ticketId}
-            </p>
-            <p className="text-sm text-gray-600">
-              Our team will contact you within 24 hours
-            </p>
-          </div>
-        )}
-
         {/* Trust Building Message */}
-        {!isNegative && (
+        {showGoogleReviewsPrompt && (
           <div className="bg-gradient-to-r from-[#2A6FDB] bg-opacity-5 to-[#2FBF71] bg-opacity-5 rounded-2xl p-6 mb-8 border border-[#2FBF71] border-opacity-30">
             <p className="text-base md:text-lg text-gray-700 leading-relaxed">
               We're glad you had a positive experience! Would you consider sharing your feedback on Google Reviews?

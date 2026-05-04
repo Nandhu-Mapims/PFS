@@ -60,8 +60,6 @@ export function FeedbackForm() {
         state: {
           rating: selectedEmotion,
           fromStaffSession: isStaffSession,
-          ticketRaised: Boolean(created.ticketRaised),
-          ticketId: created.ticketId || null,
           aiSummary: created.aiSummary || undefined,
           aiSentiment: created.aiSentiment || undefined,
           aiUrgency: created.aiUrgency || undefined,

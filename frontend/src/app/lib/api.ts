@@ -121,6 +121,19 @@ export async function seedMockFeedback(): Promise<{
   return response.json();
 }
 
+export async function seedOpenNegativeTickets(): Promise<{
+  updated: number;
+  negativeWithTicket: number;
+}> {
+  const response = await fetch(`${API_BASE_URL}/api/seed/open-negative-tickets`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error("Could not open tickets for negative AI sentiment");
+  }
+  return response.json();
+}
+
 export interface Department {
   _id: string;
   name: string;

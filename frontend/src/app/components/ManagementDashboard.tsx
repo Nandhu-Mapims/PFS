@@ -16,6 +16,7 @@ import {
 } from "recharts";
 import { TrendingUp, AlertTriangle, CheckCircle, Clock } from "lucide-react";
 import { getFeedback, getFeedbackAnalytics, type FeedbackItem } from "../lib/api";
+import { getAiSentimentBucket } from "../lib/sentiment";
 
 export function ManagementDashboard() {
   const [items, setItems] = useState<FeedbackItem[]>([]);
@@ -39,10 +40,16 @@ export function ManagementDashboard() {
   }, []);
 
   const totalFeedback = items.length;
-  const positiveCount = items.filter((i) => i.rating >= 4).length;
-  const neutralCount = items.filter((i) => i.rating === 3).length;
-  const negativeCount = items.filter((i) => i.rating <= 2).length;
-  const criticalCount = items.filter((i) => i.rating <= 2 && i.status !== "Resolved").length;
+  const positiveCount = items.filter((i) => getAiSentimentBucket(i) === "positive").length;
+  const neutralCount = items.filter((i) => getAiSentimentBucket(i) === "neutral").length;
+  const negativeCount = items.filter((i) => getAiSentimentBucket(i) === "negative").length;
+  const pendingAiSentimentCount = items.filter((i) => getAiSentimentBucket(i) === null).length;
+  const criticalCount = items.filter((i) => {
+    if (i.status === "Resolved") return false;
+    if (i.aiUrgency === "high" || i.aiSentiment === "negative") return true;
+    if (!i.aiAnalyzedAt && (i.rating ?? 0) <= 2) return true;
+    return false;
+  }).length;
 
   const pct = (value: number) =>
     totalFeedback ? `${((value / totalFeedback) * 100).toFixed(1)}% of total` : "0.0% of total";
@@ -83,9 +90,10 @@ export function ManagementDashboard() {
     for (const row of items) {
       const key = dayLabel(new Date(row.createdAt));
       if (!byDay[key]) byDay[key] = { positive: 0, neutral: 0, negative: 0 };
-      if (row.rating >= 4) byDay[key].positive += 1;
-      else if (row.rating === 3) byDay[key].neutral += 1;
-      else byDay[key].negative += 1;
+      const bucket = getAiSentimentBucket(row);
+      if (bucket === "positive") byDay[key].positive += 1;
+      else if (bucket === "neutral") byDay[key].neutral += 1;
+      else if (bucket === "negative") byDay[key].negative += 1;
     }
     const order = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     return order
@@ -119,13 +127,13 @@ export function ManagementDashboard() {
   const highComplaintDepartments = [...departmentData]
     .filter((d) => {
       const rows = items.filter((i) => (i.department || "Unspecified") === d.name);
-      return rows.some((r) => r.rating <= 2);
+      return rows.some((r) => getAiSentimentBucket(r) === "negative");
     })
     .slice(0, 3);
   const topPerforming = [...departmentData]
     .map((d) => {
       const rows = items.filter((i) => (i.department || "Unspecified") === d.name);
-      const positive = rows.filter((r) => r.rating >= 4).length;
+      const positive = rows.filter((r) => getAiSentimentBucket(r) === "positive").length;
       const ratio = rows.length ? Math.round((positive / rows.length) * 100) : 0;
       return { name: d.name, ratio };
     })
@@ -148,9 +156,15 @@ export function ManagementDashboard() {
           Management Dashboard
         </h2>
         <p className="text-base md:text-lg text-gray-600">
-          Decision-making, not decoration
+          Sentiment breakdown uses Groq AI on comment text, not star ratings
         </p>
       </div>
+
+      {pendingAiSentimentCount > 0 && (
+        <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 mb-6">
+          {pendingAiSentimentCount} submission(s) have no AI sentiment yet (Groq disabled or not run).
+        </p>
+      )}
 
       {/* Key Metrics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
@@ -165,7 +179,7 @@ export function ManagementDashboard() {
 
         <div className="bg-white rounded-xl p-6 shadow-md border-l-4 border-[#2FBF71]">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[#2FBF71] text-sm font-bold">Positive</p>
+            <p className="text-[#2FBF71] text-sm font-bold">Positive (AI)</p>
             <span className="text-2xl">😊</span>
           </div>
           <p className="text-3xl font-bold text-[#2FBF71]">{positiveCount}</p>
@@ -174,7 +188,7 @@ export function ManagementDashboard() {
 
         <div className="bg-white rounded-xl p-6 shadow-md border-l-4 border-[#F4A261]">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[#F4A261] text-sm font-bold">Neutral</p>
+            <p className="text-[#F4A261] text-sm font-bold">Neutral (AI)</p>
             <span className="text-2xl">😐</span>
           </div>
           <p className="text-3xl font-bold text-[#F4A261]">{neutralCount}</p>
@@ -183,7 +197,7 @@ export function ManagementDashboard() {
 
         <div className="bg-white rounded-xl p-6 shadow-md border-l-4 border-[#E5533D]">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[#E5533D] text-sm font-bold">Negative</p>
+            <p className="text-[#E5533D] text-sm font-bold">Negative (AI)</p>
             <span className="text-2xl">😟</span>
           </div>
           <p className="text-3xl font-bold text-[#E5533D]">{negativeCount}</p>
