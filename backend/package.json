@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "seed": "node scripts/seedUsers.js",
+    "clean-mock": "node scripts/removeMockFeedback.js",
+    "reset-db": "node scripts/resetDatabase.js --yes"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

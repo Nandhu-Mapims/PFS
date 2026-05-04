@@ -100,23 +100,6 @@ async function ensureDefaults() {
     ]);
   }
 
-  const userCount = await User.countDocuments();
-  if (userCount === 0) {
-    const salt = await bcrypt.genSalt(10);
-    await User.create([
-      {
-        username: "admin",
-        passwordHash: await bcrypt.hash("admin123", salt),
-        role: "admin",
-      },
-      {
-        username: "staff",
-        passwordHash: await bcrypt.hash("staff123", salt),
-        role: "staff",
-      },
-    ]);
-  }
-
   const brandingCount = await Branding.countDocuments();
   if (brandingCount === 0) {
     await Branding.create({
@@ -317,58 +300,6 @@ app.delete("/api/users/:id", async (req, res) => {
     return res.json({ ok: true });
   } catch (error) {
     return res.status(500).json({ message: "Failed to delete user" });
-  }
-});
-
-app.post("/api/seed/mock-feedback", async (_req, res) => {
-  try {
-    const depts = [
-      "Cardiology",
-      "Neurology",
-      "Emergency",
-      "Orthopedics",
-      "Pediatrics",
-      "General Medicine",
-    ];
-    const statuses = ["New", "New", "New", "In Progress", "Resolved"];
-    const sources = ["patient", "patient", "staff", "ai"];
-    const comments = [
-      "Wait time was long",
-      "Excellent care",
-      "Billing issue",
-      "Very helpful nurses",
-      "Room could be cleaner",
-      "Doctor explained well",
-    ];
-    const batch = [];
-    const now = new Date();
-    for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
-      const day = new Date(now);
-      day.setDate(day.getDate() - dayOffset);
-      day.setHours(10 + Math.floor(Math.random() * 8), Math.floor(Math.random() * 59), 0, 0);
-      const perDay = 4 + Math.floor(Math.random() * 7);
-      for (let i = 0; i < perDay; i++) {
-        const rating = Math.max(1, Math.min(5, Math.round(Math.random() * 4 + (Math.random() > 0.65 ? 1 : 0))));
-        const status = statuses[Math.floor(Math.random() * statuses.length)];
-        const source = sources[Math.floor(Math.random() * sources.length)];
-        const department = depts[Math.floor(Math.random() * depts.length)];
-        batch.push({
-          patientName: `Demo Patient ${dayOffset}-${i}`,
-          department,
-          rating,
-          comments: comments[Math.floor(Math.random() * comments.length)],
-          status,
-          source,
-          createdAt: new Date(day.getTime() + i * 60000),
-          updatedAt: new Date(day.getTime() + i * 60000),
-        });
-      }
-    }
-    await Feedback.insertMany(batch);
-    const total = await Feedback.countDocuments();
-    return res.json({ inserted: batch.length, totalFeedback: total });
-  } catch (error) {
-    return res.status(500).json({ message: "Failed to seed mock feedback" });
   }
 });
 
