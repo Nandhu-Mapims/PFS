@@ -1,14 +1,56 @@
+# PFS — Docker stack for Hostinger (avoid port clashes with other stacks)
+# Host ports: 8091 → SPA (+ /api proxied to backend), 5014 → API direct (optional)
+# MongoDB is NOT published on the host (no conflict with mrd-mongodb :27017)
+
+name: pfs
+
 services:
   mongodb:
     image: mongo:7
-    container_name: feedback-mongodb
+    container_name: pfs_mongo
     restart: unless-stopped
-    ports:
-      - "27017:27017"
     environment:
       MONGO_INITDB_DATABASE: feedbacksystem
     volumes:
-      - mongo_data:/data/db
+      - pfs_mongo_data:/data/db
+    networks:
+      - pfs_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pfs_backend
+    restart: unless-stopped
+    ports:
+      - "5014:5000"
+    environment:
+      PORT: "5000"
+      MONGODB_URI: mongodb://mongodb:27017/feedbacksystem
+    # Create backend/.env on the server from backend/.env.example (secrets, GROQ_API_KEY, etc.)
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - mongodb
+    networks:
+      - pfs_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pfs_frontend
+    restart: unless-stopped
+    ports:
+      - "8091:80"
+    depends_on:
+      - backend
+    networks:
+      - pfs_net
 
 volumes:
-  mongo_data:
+  pfs_mongo_data:
+
+networks:
+  pfs_net:
+    driver: bridge
