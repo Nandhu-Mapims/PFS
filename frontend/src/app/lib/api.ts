@@ -108,19 +108,6 @@ export async function getFeedbackAnalytics(): Promise<FeedbackAnalytics> {
   return response.json();
 }
 
-export async function seedMockFeedback(): Promise<{
-  inserted: number;
-  totalFeedback: number;
-}> {
-  const response = await fetch(`${API_BASE_URL}/api/seed/mock-feedback`, {
-    method: "POST",
-  });
-  if (!response.ok) {
-    throw new Error("Could not seed mock data");
-  }
-  return response.json();
-}
-
 export async function seedOpenNegativeTickets(): Promise<{
   updated: number;
   negativeWithTicket: number;

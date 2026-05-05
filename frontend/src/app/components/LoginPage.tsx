@@ -32,17 +32,6 @@ export function LoginPage() {
     continueAfterLogin(session.role);
   }
 
-  async function quickLogin(role: "admin" | "staff") {
-    const demo = role === "admin"
-      ? { username: "admin", password: "admin123" }
-      : { username: "staff", password: "staff123" };
-    setUsername(demo.username);
-    setPassword(demo.password);
-    setError(null);
-    const session = await login(demo.username, demo.password);
-    if (session) continueAfterLogin(session.role);
-  }
-
   return (
     <div className="min-h-[70vh] flex items-center justify-center px-4">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
@@ -57,23 +46,6 @@ export function LoginPage() {
         <p className="text-gray-500 mb-6">
           Login as Admin or Staff to manage feedback.
         </p>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-          <button
-            type="button"
-            onClick={() => quickLogin("admin")}
-            className="py-3 bg-[#111827] text-white font-semibold rounded-lg hover:bg-black transition-colors"
-          >
-            Login as Admin
-          </button>
-          <button
-            type="button"
-            onClick={() => quickLogin("staff")}
-            className="py-3 bg-[#2A6FDB] text-white font-semibold rounded-lg hover:bg-[#1e5bbd] transition-colors"
-          >
-            Login as Staff
-          </button>
-        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -110,12 +82,6 @@ export function LoginPage() {
             Login
           </button>
         </form>
-
-        <div className="mt-6 text-sm text-gray-500 bg-gray-50 rounded-lg p-3">
-          <p className="font-semibold text-gray-700 mb-1">Demo accounts</p>
-          <p>Admin: admin / admin123</p>
-          <p>Staff: staff / staff123</p>
-        </div>
       </div>
     </div>
   );
