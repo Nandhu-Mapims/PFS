@@ -199,3 +199,101 @@ Do not include any text outside the JSON object.`;
 
   return inferDepartment ? { ...result, inferredDepartment } : result;
 }
+
+/**
+ * Map a free-text department hint (possibly informal) to exactly one canonical name from choices.
+ * Used when heuristic rules did not match. Returns null if no clear fit or on API/key failure.
+ *
+ * @param {string | null | undefined} userHint
+ * @param {{ name: string; description?: string }[]} departmentChoices
+ * @returns {Promise<string | null>}
+ */
+export async function resolveDepartmentHintWithGroq(userHint, departmentChoices) {
+  const apiKey = process.env.GROQ_API_KEY;
+  const hint = String(userHint ?? "").trim();
+  if (!apiKey || !String(apiKey).trim() || !hint) return null;
+
+  const choices = Array.isArray(departmentChoices)
+    ? departmentChoices.filter((c) => c && String(c.name || "").trim())
+    : [];
+  if (!choices.length) return null;
+
+  const model = process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+  const listBlock = choices
+    .map(
+      (c) =>
+        `- ${String(c.name).trim()} — ${String(c.description || "").trim() || "general services"}`
+    )
+    .join("\n");
+
+  const userContent = `A staff member or patient typed this optional "department" field on a hospital feedback form:
+"${hint.slice(0, 200)}"
+
+Official departments (you may pick at most one EXACT Name from the list — the part before " — " on each line):
+${listBlock}
+
+Rules:
+- Choose the single Name that best matches their hint (synonyms, informal names, common typos, local abbreviations).
+- If the hint does not clearly correspond to any one department, use null.
+- Never invent a department name that is not in the list.
+
+Respond with ONLY valid JSON (no markdown): {"matchedDepartment": "<exact Name from list>" | null}`;
+
+  // eslint-disable-next-line no-console
+  console.log("[groq] department-hint resolve", {
+    hintPreview: hint.slice(0, 80),
+    model,
+    choices: choices.length,
+  });
+
+  const response = await fetch(GROQ_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You reply only with a single JSON object. No markdown, no explanation.",
+        },
+        { role: "user", content: userContent },
+      ],
+      temperature: 0.15,
+      max_tokens: 128,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    // eslint-disable-next-line no-console
+    console.error("[groq] department-hint HTTP error", {
+      status: response.status,
+      bodyPreview: errText.slice(0, 400),
+    });
+    return null;
+  }
+
+  const data = await response.json();
+  const raw = data.choices?.[0]?.message?.content?.trim();
+  if (!raw) return null;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(stripJsonFence(raw));
+  } catch {
+    // eslint-disable-next-line no-console
+    console.error("[groq] department-hint parse failed", { rawPreview: raw.slice(0, 200) });
+    return null;
+  }
+
+  const resolved = resolveDepartmentFromAi(parsed.matchedDepartment, choices);
+  // eslint-disable-next-line no-console
+  console.log("[groq] department-hint result", {
+    matchedDepartment: resolved,
+  });
+  return resolved;
+}

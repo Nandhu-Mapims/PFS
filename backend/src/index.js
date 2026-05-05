@@ -3,7 +3,8 @@ import cors from "cors";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
-import { analyzePatientFeedback } from "./groqAnalysis.js";
+import { analyzePatientFeedback, resolveDepartmentHintWithGroq } from "./groqAnalysis.js";
+import { resolveDepartmentHeuristic } from "./departmentNormalize.js";
 
 dotenv.config();
 
@@ -341,8 +342,33 @@ app.post("/api/feedback", async (req, res) => {
         .json({ message: "patientName and rating are required" });
     }
 
+    const departmentDocs = await Department.find()
+      .sort({ name: 1 })
+      .select("name description")
+      .lean();
+
     const numericRating = Number(rating);
-    const normalizedDepartment = String(department || "").trim();
+    const deptHeuristic = resolveDepartmentHeuristic(department, departmentDocs);
+    let normalizedDepartment = deptHeuristic.name;
+    let departmentHintFromGroq = false;
+    if (
+      deptHeuristic.method === "unmatched" &&
+      process.env.GROQ_API_KEY &&
+      departmentDocs.length > 0
+    ) {
+      try {
+        const fromAi = await resolveDepartmentHintWithGroq(department, departmentDocs);
+        if (fromAi) {
+          normalizedDepartment = fromAi;
+          departmentHintFromGroq = true;
+        }
+      } catch (deptAiErr) {
+        // eslint-disable-next-line no-console
+        console.error("[feedback] department hint Groq failed", {
+          message: deptAiErr?.message || String(deptAiErr),
+        });
+      }
+    }
     const departmentProvided = Boolean(normalizedDepartment);
     const normalizedComments = String(comments || "")
       .trim()
@@ -418,14 +444,12 @@ app.post("/api/feedback", async (req, res) => {
       ticketId: ticketId || null,
       complaintTicketRaised: Boolean(ticketId),
       ticketRule,
+      departmentHeuristic: deptHeuristic.method,
+      departmentResolvedByGroqHint: departmentHintFromGroq,
     });
 
     if (process.env.GROQ_API_KEY) {
       try {
-        const departmentChoices = await Department.find()
-          .sort({ name: 1 })
-          .select("name description")
-          .lean();
         // eslint-disable-next-line no-console
         console.log("[feedback] groq analysis starting", { feedbackId: String(feedback._id) });
         const ai = await analyzePatientFeedback(
@@ -437,7 +461,7 @@ app.post("/api/feedback", async (req, res) => {
           },
           {
             feedbackId: String(feedback._id),
-            departmentChoices: departmentChoices.map((d) => ({
+            departmentChoices: departmentDocs.map((d) => ({
               name: d.name,
               description: d.description || "",
             })),
