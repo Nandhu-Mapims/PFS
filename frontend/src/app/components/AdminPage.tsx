@@ -129,7 +129,14 @@ export function AdminPage() {
   const averageRating = analytics?.totals.averageRating ?? 0;
 
   const feedbackLink = useMemo(() => {
-    return "http://localhost:5173/feedback";
+    const envBase = (
+      import.meta.env.VITE_PUBLIC_FEEDBACK_ORIGIN as string | undefined
+    )?.trim();
+    const origin =
+      envBase ||
+      (typeof window !== "undefined" ? window.location.origin : "");
+    const base = origin.replace(/\/$/, "");
+    return `${base}/feedback`;
   }, []);
 
   useEffect(() => {
