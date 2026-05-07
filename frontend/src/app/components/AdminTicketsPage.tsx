@@ -126,19 +126,6 @@ export function AdminTicketsPage() {
           >
             {isSyncing ? "Syncing…" : "Open tickets for AI-negative"}
           </button>
-          <button
-            type="button"
-            onClick={() =>
-              navigate(showDeleteActions ? "/admin/tickets" : "/admin/tickets/delete")
-            }
-            className={`px-3 py-1 rounded-lg border text-xs font-semibold ${
-              showDeleteActions
-                ? "border-red-300 text-red-700 hover:bg-red-50"
-                : "border-gray-300 text-gray-700 hover:bg-gray-50"
-            }`}
-          >
-            {showDeleteActions ? "Hide delete buttons" : "Show delete buttons"}
-          </button>
         </div>
       </div>
 
