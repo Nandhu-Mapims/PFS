@@ -1,6 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
-import { getFeedback, seedOpenNegativeTickets, type FeedbackItem } from "../lib/api";
+import { useLocation, useNavigate } from "react-router";
+import {
+  deleteFeedback,
+  getFeedback,
+  seedOpenNegativeTickets,
+  type FeedbackItem,
+} from "../lib/api";
 
 const ratingLabel: Record<number, string> = {
   1: "Very Poor",
@@ -12,6 +17,7 @@ const ratingLabel: Record<number, string> = {
 
 export function AdminTicketsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [items, setItems] = useState<FeedbackItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -72,6 +78,24 @@ export function AdminTicketsPage() {
     const ticketRows = items.filter((item) => Boolean(item.ticketId));
     return [...ticketRows].sort((a, b) => b._id.localeCompare(a._id));
   }, [items]);
+  const showDeleteActions = location.pathname.includes("/delete");
+
+  const handleDelete = useCallback(
+    async (item: FeedbackItem) => {
+      const confirmed = window.confirm(
+        `Delete ticket ${item.ticketId ?? item._id}? This action cannot be undone.`
+      );
+      if (!confirmed) return;
+      try {
+        setError(null);
+        await deleteFeedback(item._id);
+        setItems((current) => current.filter((row) => row._id !== item._id));
+      } catch {
+        setError("Failed to delete ticket.");
+      }
+    },
+    []
+  );
 
   return (
     <div className="w-full">
@@ -101,6 +125,19 @@ export function AdminTicketsPage() {
             title="Assign ticket IDs to feedback where AI sentiment is negative (requires Groq analysis on those rows)"
           >
             {isSyncing ? "Syncing…" : "Open tickets for AI-negative"}
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              navigate(showDeleteActions ? "/admin/tickets" : "/admin/tickets/delete")
+            }
+            className={`px-3 py-1 rounded-lg border text-xs font-semibold ${
+              showDeleteActions
+                ? "border-red-300 text-red-700 hover:bg-red-50"
+                : "border-gray-300 text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            {showDeleteActions ? "Hide delete buttons" : "Show delete buttons"}
           </button>
         </div>
       </div>
@@ -152,13 +189,24 @@ export function AdminTicketsPage() {
                       {new Date(item.createdAt).toLocaleString()}
                     </td>
                     <td className="px-6 py-4">
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/ticket/${item._id}`)}
-                        className="px-3 py-2 rounded-lg bg-[#2A6FDB] text-white text-sm font-semibold hover:bg-[#1e5bbd] transition-colors"
-                      >
-                        View Ticket
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/ticket/${item._id}`)}
+                          className="px-3 py-2 rounded-lg bg-[#2A6FDB] text-white text-sm font-semibold hover:bg-[#1e5bbd] transition-colors"
+                        >
+                          View Ticket
+                        </button>
+                        {showDeleteActions && (
+                          <button
+                            type="button"
+                            onClick={() => void handleDelete(item)}
+                            className="px-3 py-2 rounded-lg bg-[#E5533D] text-white text-sm font-semibold hover:bg-[#d43e29] transition-colors"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

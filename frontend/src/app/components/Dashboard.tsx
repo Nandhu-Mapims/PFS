@@ -1,12 +1,24 @@
-import { Search } from "lucide-react";
+import { Search, Users, CircleAlert, LoaderCircle, CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { getFeedback, updateFeedbackStatus, type FeedbackItem } from "../lib/api";
-
-const statusStyles: Record<FeedbackItem["status"], string> = {
-  New: "bg-[#2A6FDB] text-white",
-  "In Progress": "bg-[#F4A261] text-white",
-  Resolved: "bg-[#2FBF71] text-white",
-};
+import { Badge } from "./ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Input } from "./ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "./ui/table";
 
 const ratingLabel: Record<number, string> = {
   1: "Very Poor",
@@ -15,6 +27,8 @@ const ratingLabel: Record<number, string> = {
   4: "Good",
   5: "Excellent",
 };
+
+const statusOptions: FeedbackItem["status"][] = ["New", "In Progress", "Resolved"];
 
 export function Dashboard() {
   const [items, setItems] = useState<FeedbackItem[]>([]);
@@ -50,12 +64,17 @@ export function Dashboard() {
     const search = searchTerm.trim().toLowerCase();
     const matchesSearch =
       item.patientName.toLowerCase().includes(search) ||
-      item.comments.toLowerCase().includes(search);
+      (item.comments || "").toLowerCase().includes(search);
     const matchesDepartment =
       filterDepartment === "All" || item.department === filterDepartment;
     const matchesStatus = filterStatus === "All" || item.status === filterStatus;
     return matchesSearch && matchesDepartment && matchesStatus;
   });
+
+  const totalCount = items.length;
+  const newCount = items.filter((item) => item.status === "New").length;
+  const inProgressCount = items.filter((item) => item.status === "In Progress").length;
+  const resolvedCount = items.filter((item) => item.status === "Resolved").length;
 
   async function handleStatusChange(id: string, status: FeedbackItem["status"]) {
     try {
@@ -70,154 +89,200 @@ export function Dashboard() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-2">
+    <div className="mx-auto max-w-7xl space-y-6">
+      <div className="space-y-1">
+        <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">
           Staff Feedback Queue
         </h2>
-        <p className="text-base md:text-lg text-gray-600">
+        <p className="text-muted-foreground text-sm md:text-base">
           Track, prioritize, and resolve feedback
         </p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white rounded-xl p-5 shadow-md border-l-4 border-[#2A6FDB]">
-          <p className="text-gray-600 text-sm mb-1 font-medium">Total</p>
-          <p className="text-3xl font-bold text-gray-800">{items.length}</p>
-        </div>
-        <div className="bg-white rounded-xl p-5 shadow-md border-l-4 border-[#2A6FDB]">
-          <p className="text-[#2A6FDB] text-sm mb-1 font-bold">New</p>
-          <p className="text-3xl font-bold text-[#2A6FDB]">
-            {items.filter((item) => item.status === "New").length}
-          </p>
-        </div>
-        <div className="bg-white rounded-xl p-5 shadow-md border-l-4 border-[#F4A261]">
-          <p className="text-[#F4A261] text-sm mb-1 font-bold">In Progress</p>
-          <p className="text-3xl font-bold text-[#F4A261]">
-            {items.filter((item) => item.status === "In Progress").length}
-          </p>
-        </div>
-        <div className="bg-white rounded-xl p-5 shadow-md border-l-4 border-[#2FBF71]">
-          <p className="text-[#2FBF71] text-sm mb-1 font-bold">Resolved</p>
-          <p className="text-3xl font-bold text-[#2FBF71]">
-            {items.filter((item) => item.status === "Resolved").length}
-          </p>
-        </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs uppercase tracking-wide">Total</CardDescription>
+            <CardTitle className="text-3xl">{totalCount}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-muted-foreground flex items-center gap-2 text-xs">
+            <Users size={14} />
+            Live queue volume
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs uppercase tracking-wide">New</CardDescription>
+            <CardTitle className="text-3xl text-blue-600">{newCount}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-muted-foreground text-xs">
+            Needs initial triage
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs uppercase tracking-wide">
+              In Progress
+            </CardDescription>
+            <CardTitle className="text-3xl text-amber-600">{inProgressCount}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-muted-foreground flex items-center gap-2 text-xs">
+            <LoaderCircle size={14} />
+            Assigned and in review
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs uppercase tracking-wide">Resolved</CardDescription>
+            <CardTitle className="text-3xl text-emerald-600">{resolvedCount}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-muted-foreground flex items-center gap-2 text-xs">
+            <CheckCircle2 size={14} />
+            Closed this cycle
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="bg-white rounded-xl p-4 mb-6 shadow-md">
-        <div className="flex flex-col md:flex-row gap-4">
-          <div className="flex-1 relative">
+      <Card className="rounded-2xl shadow-sm">
+        <CardContent className="pt-6">
+          <div className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
+            <div className="relative">
             <Search
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              size={20}
+                className="text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2"
+                size={18}
             />
-            <input
+              <Input
               type="text"
               placeholder="Search by patient name or comments..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 border-2 border-gray-300 rounded-lg focus:border-[#2A6FDB] focus:ring-2 focus:ring-[#2A6FDB] focus:ring-opacity-20 outline-none text-base"
+                className="pl-9"
             />
           </div>
-          <select
-            value={filterDepartment}
-            onChange={(e) => setFilterDepartment(e.target.value)}
-            className="px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-[#2A6FDB] focus:ring-2 focus:ring-[#2A6FDB] focus:ring-opacity-20 outline-none bg-white font-medium"
-          >
-            {departments.map((dept) => (
-              <option key={dept} value={dept}>
-                {dept === "All" ? "All Departments" : dept}
-              </option>
-            ))}
-          </select>
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-[#2A6FDB] focus:ring-2 focus:ring-[#2A6FDB] focus:ring-opacity-20 outline-none bg-white font-medium"
-          >
-            <option value="All">All Status</option>
-            <option value="New">New</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Resolved">Resolved</option>
-          </select>
-        </div>
-      </div>
 
-      <div className="bg-white rounded-xl shadow-md overflow-hidden">
-        {isLoading ? (
-          <p className="p-6 text-gray-600">Loading staff queue...</p>
-        ) : error ? (
-          <p className="p-6 text-red-600">{error}</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-[#F5F7FA]">
-                <tr>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">
-                    Patient
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">
-                    Department
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">
-                    Rating
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">
-                    Status
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">
-                    Comments
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">
-                    Submitted
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {filteredItems.map((item) => (
-                  <tr key={item._id} className="hover:bg-[#F5F7FA] transition-colors">
-                    <td className="px-6 py-4 font-medium text-gray-800">
-                      {item.patientName}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">{item.department}</td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {item.rating} - {ratingLabel[item.rating]}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-bold ${statusStyles[item.status]}`}
-                      >
-                        {item.status}
-                      </span>
-                      <select
-                        value={item.status}
-                        onChange={(e) =>
-                          handleStatusChange(
-                            item._id,
-                            e.target.value as FeedbackItem["status"]
-                          )
-                        }
-                        className="mt-2 block px-2 py-1 border rounded text-sm"
-                      >
-                        <option value="New">New</option>
-                        <option value="In Progress">In Progress</option>
-                        <option value="Resolved">Resolved</option>
-                      </select>
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {item.comments || "No comment"}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600 text-sm">
-                      {new Date(item.createdAt).toLocaleString()}
-                    </td>
-                  </tr>
+            <Select value={filterDepartment} onValueChange={setFilterDepartment}>
+              <SelectTrigger className="w-full md:w-44">
+                <SelectValue placeholder="Department" />
+              </SelectTrigger>
+              <SelectContent>
+                {departments.map((dept) => (
+                  <SelectItem key={dept} value={dept}>
+                    {dept === "All" ? "All Departments" : dept}
+                  </SelectItem>
                 ))}
-              </tbody>
-            </table>
+              </SelectContent>
+            </Select>
+
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger className="w-full md:w-40">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="All">All Status</SelectItem>
+                <SelectItem value="New">New</SelectItem>
+                <SelectItem value="In Progress">In Progress</SelectItem>
+                <SelectItem value="Resolved">Resolved</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl shadow-sm">
+        {isLoading ? (
+          <p className="text-muted-foreground p-6">Loading staff queue...</p>
+        ) : error ? (
+          <p className="p-6 text-red-600 flex items-center gap-2">
+            <CircleAlert size={16} />
+            {error}
+          </p>
+        ) : (
+          <CardContent className="px-0 pb-0">
+            <div className="max-h-[70vh] overflow-auto">
+              <Table>
+                <TableHeader className="bg-muted/30 sticky top-0 z-10">
+                  <TableRow>
+                    <TableHead className="px-6">
+                    Patient
+                    </TableHead>
+                    <TableHead>
+                    Department
+                    </TableHead>
+                    <TableHead>
+                    Rating
+                    </TableHead>
+                    <TableHead>
+                    Status
+                    </TableHead>
+                    <TableHead className="min-w-[280px]">
+                    Comments
+                    </TableHead>
+                    <TableHead className="pr-6">
+                    Submitted
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredItems.map((item) => (
+                    <TableRow key={item._id}>
+                      <TableCell className="px-6 font-medium">{item.patientName}</TableCell>
+                      <TableCell className="text-muted-foreground">{item.department}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {item.rating} - {ratingLabel[item.rating]}
+                      </TableCell>
+                      <TableCell className="space-y-2">
+                        <Badge
+                          variant="outline"
+                          className={`${
+                            item.status === "New"
+                              ? "border-blue-200 bg-blue-50 text-blue-700"
+                              : item.status === "In Progress"
+                                ? "border-amber-200 bg-amber-50 text-amber-700"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          }`}
+                        >
+                          {item.status}
+                        </Badge>
+                        <Select
+                          value={item.status}
+                          onValueChange={(value) =>
+                            handleStatusChange(item._id, value as FeedbackItem["status"])
+                          }
+                        >
+                          <SelectTrigger size="sm" className="w-36">
+                            <SelectValue placeholder="Update status" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {statusOptions.map((status) => (
+                              <SelectItem key={status} value={status}>
+                                {status}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground whitespace-normal">
+                        {item.comments || "No comment"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground pr-6 text-sm">
+                        {new Date(item.createdAt).toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            {filteredItems.length === 0 && (
+              <div className="text-muted-foreground p-8 text-center text-sm">
+                No feedback matches the current filters.
+              </div>
+            )}
+          </CardContent>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

@@ -14,9 +14,17 @@ import {
   Line,
   ResponsiveContainer,
 } from "recharts";
-import { TrendingUp, AlertTriangle, CheckCircle, Clock } from "lucide-react";
+import {
+  TrendingUp,
+  AlertTriangle,
+  CheckCircle,
+  Clock,
+  MessageSquareWarning,
+} from "lucide-react";
 import { getFeedback, getFeedbackAnalytics, type FeedbackItem } from "../lib/api";
 import { getAiSentimentBucket } from "../lib/sentiment";
+import { Badge } from "./ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 
 export function ManagementDashboard() {
   const [items, setItems] = useState<FeedbackItem[]>([]);
@@ -141,7 +149,7 @@ export function ManagementDashboard() {
     .slice(0, 3);
 
   if (isLoading) {
-    return <p className="p-6 text-gray-600">Loading management dashboard...</p>;
+    return <p className="text-muted-foreground p-6">Loading management dashboard...</p>;
   }
 
   if (error) {
@@ -149,277 +157,237 @@ export function ManagementDashboard() {
   }
 
   return (
-    <div className="w-full">
-      {/* Header */}
-      <div className="mb-6">
-        <h2 className="text-3xl md:text-4xl font-bold text-gray-800 mb-2">
+    <div className="w-full space-y-6">
+      <div className="space-y-1">
+        <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">
           Management Dashboard
         </h2>
-        <p className="text-base md:text-lg text-gray-600">
+        <p className="text-muted-foreground text-sm md:text-base">
           Sentiment breakdown uses Groq AI on comment text, not star ratings
         </p>
       </div>
 
       {pendingAiSentimentCount > 0 && (
-        <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 mb-6">
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
           {pendingAiSentimentCount} submission(s) have no AI sentiment yet (Groq disabled or not run).
         </p>
       )}
 
-      {/* Key Metrics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-        <div className="bg-white rounded-xl p-6 shadow-md border-l-4 border-[#2A6FDB]">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-gray-600 text-sm font-medium">Total Feedback</p>
-            <TrendingUp size={20} className="text-[#2A6FDB]" />
-          </div>
-          <p className="text-3xl font-bold text-gray-800">{totalFeedback}</p>
-          <p className="text-sm text-[#2FBF71] mt-2 font-semibold">Live from API</p>
-        </div>
-
-        <div className="bg-white rounded-xl p-6 shadow-md border-l-4 border-[#2FBF71]">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[#2FBF71] text-sm font-bold">Positive (AI)</p>
-            <span className="text-2xl">😊</span>
-          </div>
-          <p className="text-3xl font-bold text-[#2FBF71]">{positiveCount}</p>
-          <p className="text-sm text-gray-600 mt-2">{pct(positiveCount)}</p>
-        </div>
-
-        <div className="bg-white rounded-xl p-6 shadow-md border-l-4 border-[#F4A261]">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[#F4A261] text-sm font-bold">Neutral (AI)</p>
-            <span className="text-2xl">😐</span>
-          </div>
-          <p className="text-3xl font-bold text-[#F4A261]">{neutralCount}</p>
-          <p className="text-sm text-gray-600 mt-2">{pct(neutralCount)}</p>
-        </div>
-
-        <div className="bg-white rounded-xl p-6 shadow-md border-l-4 border-[#E5533D]">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[#E5533D] text-sm font-bold">Negative (AI)</p>
-            <span className="text-2xl">😟</span>
-          </div>
-          <p className="text-3xl font-bold text-[#E5533D]">{negativeCount}</p>
-          <p className="text-sm text-gray-600 mt-2">{pct(negativeCount)}</p>
-        </div>
-
-        <div className="bg-white rounded-xl p-6 shadow-md border-l-4 border-[#E5533D]">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[#E5533D] text-sm font-bold">Critical</p>
-            <AlertTriangle size={20} className="text-[#E5533D]" />
-          </div>
-          <p className="text-3xl font-bold text-[#E5533D]">{criticalCount}</p>
-          <p className="text-sm text-gray-600 mt-2">Requires action</p>
-        </div>
-      </div>
-
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {/* Feedback Trend */}
-        <div className="bg-white rounded-xl p-6 shadow-md">
-          <h3 className="text-xl font-bold text-gray-800 mb-4">Feedback Trend (Last 4 Months)</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={trendData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="month" stroke="#6b7280" style={{ fontSize: "14px" }} />
-                <YAxis stroke="#6b7280" style={{ fontSize: "14px" }} />
-              <Tooltip
-                contentStyle={{
-                    backgroundColor: "#fff",
-                    border: "2px solid #2A6FDB",
-                    borderRadius: "0.75rem",
-                    fontWeight: 600,
-                  }}
-              />
-              <Line
-                type="monotone"
-                dataKey="feedback"
-                stroke="#2A6FDB"
-                strokeWidth={3}
-                dot={{ fill: "#2A6FDB", r: 6 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Department Distribution */}
-        <div className="bg-white rounded-xl p-6 shadow-md">
-          <h3 className="text-xl font-bold text-gray-800 mb-4">
-            Department-wise Breakdown
-          </h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={departmentData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                outerRadius={100}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {departmentData.map((entry) => (
-                  <Cell key={entry.name} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Weekly Breakdown */}
-      <div className="bg-white rounded-xl p-6 shadow-md mb-6">
-        <h3 className="text-xl font-bold text-gray-800 mb-4">
-          Weekly Feedback Breakdown
-        </h3>
-        <ResponsiveContainer width="100%" height={350}>
-          <BarChart data={feedbackData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="name" stroke="#6b7280" style={{ fontSize: "14px" }} />
-            <YAxis stroke="#6b7280" style={{ fontSize: "14px" }} />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: "#fff",
-                border: "2px solid #2A6FDB",
-                borderRadius: "0.75rem",
-                fontWeight: 600,
-              }}
-            />
-            <Legend />
-            <Bar dataKey="positive" fill="#2FBF71" name="Positive" radius={[8, 8, 0, 0]} />
-            <Bar dataKey="neutral" fill="#F4A261" name="Neutral" radius={[8, 8, 0, 0]} />
-            <Bar dataKey="negative" fill="#E5533D" name="Negative" radius={[8, 8, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Complaint Categories */}
-      <div className="bg-white rounded-xl p-6 shadow-md mb-6">
-        <h3 className="text-xl font-bold text-gray-800 mb-4">
-          Top Complaint Categories
-        </h3>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={categoryData} layout="vertical">
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis type="number" stroke="#6b7280" style={{ fontSize: "14px" }} />
-            <YAxis
-              dataKey="category"
-              type="category"
-              stroke="#6b7280"
-              style={{ fontSize: "14px" }}
-              width={120}
-            />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: "#fff",
-                border: "2px solid #2A6FDB",
-                borderRadius: "0.75rem",
-                fontWeight: 600,
-              }}
-            />
-            <Bar dataKey="count" fill="#2A6FDB" radius={[0, 8, 8, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* INSIGHTS PANEL - Action-Driven */}
-      <div className="bg-gradient-to-r from-[#2A6FDB] to-[#2FBF71] rounded-xl p-1 shadow-lg">
-        <div className="bg-white rounded-lg p-6">
-          <h3 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-            <AlertTriangle size={28} className="text-[#F4A261]" />
+      <Card className="rounded-2xl shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <AlertTriangle size={18} className="text-amber-600" />
             Action Required - This Week
-          </h3>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Top Issues */}
-            <div className="bg-[#F5F7FA] rounded-xl p-5 border-l-4 border-[#E5533D]">
-              <div className="flex items-start gap-3 mb-3">
-                <AlertTriangle size={24} className="text-[#E5533D] flex-shrink-0" />
-                <div>
-                  <h4 className="font-bold text-gray-800 text-lg mb-1">Top Issues This Week</h4>
-                  <p className="text-sm text-gray-600 mb-3">Immediate attention needed</p>
-                </div>
-              </div>
+          </CardTitle>
+          <CardDescription>Prioritized insights for operational follow-up</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-xl border bg-muted/20 p-4">
+              <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                <AlertTriangle size={16} className="text-red-600" />
+                Top Issues
+              </h4>
               <ul className="space-y-2">
-                {topIssues.map((issue, index) => (
-                  <li key={issue.category} className="flex items-center gap-2">
-                    <div
-                      className={`w-2 h-2 rounded-full ${
-                        index === 0 ? "bg-[#E5533D]" : "bg-[#F4A261]"
-                      }`}
-                    />
-                    <span className="text-sm font-semibold text-gray-700">
-                      {issue.category} ({issue.count})
-                    </span>
+                {topIssues.map((issue) => (
+                  <li key={issue.category} className="flex items-center justify-between text-sm">
+                    <span>{issue.category}</span>
+                    <Badge variant="outline">{issue.count}</Badge>
                   </li>
                 ))}
               </ul>
             </div>
 
-            {/* Departments with Highest Complaints */}
-            <div className="bg-[#F5F7FA] rounded-xl p-5 border-l-4 border-[#F4A261]">
-              <div className="flex items-start gap-3 mb-3">
-                <Clock size={24} className="text-[#F4A261] flex-shrink-0" />
-                <div>
-                  <h4 className="font-bold text-gray-800 text-lg mb-1">High Complaint Departments</h4>
-                  <p className="text-sm text-gray-600 mb-3">Focus areas for improvement</p>
-                </div>
-              </div>
+            <div className="rounded-xl border bg-muted/20 p-4">
+              <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                <Clock size={16} className="text-amber-600" />
+                High Complaint Depts
+              </h4>
               <ul className="space-y-2">
-                {highComplaintDepartments.map((dept, index) => (
-                  <li key={dept.name} className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-gray-700">{dept.name}</span>
-                    <span
-                      className={`px-2 py-1 text-white text-xs rounded-full font-bold ${
-                        index === 0 ? "bg-[#E5533D]" : "bg-[#F4A261]"
-                      }`}
-                    >
-                      {dept.value}
-                    </span>
+                {highComplaintDepartments.map((dept) => (
+                  <li key={dept.name} className="flex items-center justify-between text-sm">
+                    <span>{dept.name}</span>
+                    <Badge variant="outline">{dept.value}</Badge>
                   </li>
                 ))}
               </ul>
             </div>
 
-            {/* Positive Highlights */}
-            <div className="bg-[#F5F7FA] rounded-xl p-5 border-l-4 border-[#2FBF71]">
-              <div className="flex items-start gap-3 mb-3">
-                <CheckCircle size={24} className="text-[#2FBF71] flex-shrink-0" />
-                <div>
-                  <h4 className="font-bold text-gray-800 text-lg mb-1">Top Performing Areas</h4>
-                  <p className="text-sm text-gray-600 mb-3">Keep up the good work</p>
-                </div>
-              </div>
+            <div className="rounded-xl border bg-muted/20 p-4">
+              <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                <CheckCircle size={16} className="text-emerald-600" />
+                Top Performing Areas
+              </h4>
               <ul className="space-y-2">
                 {topPerforming.map((dept) => (
-                  <li key={dept.name} className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-gray-700">{dept.name}</span>
-                    <span className="text-xs font-bold text-[#2FBF71]">{dept.ratio}% positive</span>
+                  <li key={dept.name} className="flex items-center justify-between text-sm">
+                    <span>{dept.name}</span>
+                    <span className="text-emerald-600 font-semibold">{dept.ratio}% positive</span>
                   </li>
                 ))}
               </ul>
             </div>
           </div>
+        </CardContent>
+      </Card>
 
-          {/* Action Recommendations */}
-          <div className="mt-6 bg-gradient-to-r from-[#2A6FDB] bg-opacity-5 to-[#2FBF71] bg-opacity-5 rounded-xl p-5 border border-[#2A6FDB] border-opacity-30">
-            <h4 className="font-bold text-gray-800 mb-3 text-lg">Recommended Actions</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <button className="flex items-center gap-3 bg-white p-4 rounded-lg border-2 border-[#2A6FDB] hover:bg-[#2A6FDB] hover:text-white transition-all group text-left">
-                <Clock size={20} className="text-[#2A6FDB] group-hover:text-white" />
-                <span className="font-semibold text-sm">Review Emergency wait times</span>
-              </button>
-              <button className="flex items-center gap-3 bg-white p-4 rounded-lg border-2 border-[#2FBF71] hover:bg-[#2FBF71] hover:text-white transition-all group text-left">
-                <CheckCircle size={20} className="text-[#2FBF71] group-hover:text-white" />
-                <span className="font-semibold text-sm">Schedule staff training session</span>
-              </button>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardDescription className="text-xs uppercase tracking-wide">
+                Total Feedback
+              </CardDescription>
+              <TrendingUp size={16} className="text-blue-600" />
             </div>
-          </div>
-        </div>
+            <CardTitle className="text-3xl">{totalFeedback}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <Badge variant="outline">Live from API</Badge>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs uppercase tracking-wide">
+              Positive (AI)
+            </CardDescription>
+            <CardTitle className="text-3xl text-emerald-600">{positiveCount}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-muted-foreground pt-0 text-xs">{pct(positiveCount)}</CardContent>
+        </Card>
+
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs uppercase tracking-wide">
+              Neutral (AI)
+            </CardDescription>
+            <CardTitle className="text-3xl text-amber-600">{neutralCount}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-muted-foreground pt-0 text-xs">{pct(neutralCount)}</CardContent>
+        </Card>
+
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs uppercase tracking-wide">
+              Negative (AI)
+            </CardDescription>
+            <CardTitle className="text-3xl text-red-600">{negativeCount}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-muted-foreground pt-0 text-xs">{pct(negativeCount)}</CardContent>
+        </Card>
+
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardDescription className="text-xs uppercase tracking-wide">Critical</CardDescription>
+              <MessageSquareWarning size={16} className="text-red-600" />
+            </div>
+            <CardTitle className="text-3xl text-red-600">{criticalCount}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-muted-foreground pt-0 text-xs">Requires action</CardContent>
+        </Card>
       </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Feedback Trend</CardTitle>
+            <CardDescription>Last 4 months</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={trendData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="month" stroke="#6b7280" style={{ fontSize: "14px" }} />
+                <YAxis stroke="#6b7280" style={{ fontSize: "14px" }} />
+                <Tooltip />
+                <Line
+                  type="monotone"
+                  dataKey="feedback"
+                  stroke="#2563eb"
+                  strokeWidth={3}
+                  dot={{ fill: "#2563eb", r: 5 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Department Breakdown</CardTitle>
+            <CardDescription>Top contributors by volume</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={departmentData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  outerRadius={100}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {departmentData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="rounded-2xl shadow-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-lg">Weekly Sentiment Breakdown</CardTitle>
+          <CardDescription>Positive, neutral, and negative feedback by weekday</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={350}>
+            <BarChart data={feedbackData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="name" stroke="#6b7280" style={{ fontSize: "14px" }} />
+              <YAxis stroke="#6b7280" style={{ fontSize: "14px" }} />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="positive" fill="#10b981" name="Positive" radius={[8, 8, 0, 0]} />
+              <Bar dataKey="neutral" fill="#f59e0b" name="Neutral" radius={[8, 8, 0, 0]} />
+              <Bar dataKey="negative" fill="#ef4444" name="Negative" radius={[8, 8, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl shadow-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-lg">Top Complaint Categories</CardTitle>
+          <CardDescription>Most frequently mentioned topics in comments</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={categoryData} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis type="number" stroke="#6b7280" style={{ fontSize: "14px" }} />
+              <YAxis
+                dataKey="category"
+                type="category"
+                stroke="#6b7280"
+                style={{ fontSize: "14px" }}
+                width={120}
+              />
+              <Tooltip />
+              <Bar dataKey="count" fill="#2563eb" radius={[0, 8, 8, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
     </div>
   );
 }

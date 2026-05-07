@@ -621,6 +621,19 @@ app.patch("/api/feedback/:id/status", async (req, res) => {
   }
 });
 
+app.delete("/api/feedback/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await Feedback.findByIdAndDelete(id).lean();
+    if (!deleted) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+    return res.json({ success: true, id });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to delete feedback" });
+  }
+});
+
 app.get("/api/branding", async (_req, res) => {
   try {
     let branding = await Branding.findOne({ key: "global" }).lean();

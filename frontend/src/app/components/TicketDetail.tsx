@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { ArrowLeft, User, Calendar, Building2, AlertCircle, Save, MessageSquare, CheckCircle } from "lucide-react";
-import { getFeedbackById, type FeedbackItem, updateFeedbackStatus } from "../lib/api";
+import { deleteFeedback, getFeedbackById, type FeedbackItem, updateFeedbackStatus } from "../lib/api";
 import { getSession } from "../lib/auth";
 
 export function TicketDetail() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams();
   const [ticket, setTicket] = useState<FeedbackItem | null>(null);
   const [status, setStatus] = useState<FeedbackItem["status"]>("New");
@@ -15,6 +16,7 @@ export function TicketDetail() {
   const [error, setError] = useState<string | null>(null);
   const session = getSession();
   const isAdmin = session?.role === "admin";
+  const showDeleteAction = location.pathname.includes("/delete");
 
   useEffect(() => {
     async function loadTicket() {
@@ -48,6 +50,21 @@ export function TicketDetail() {
       setError("Could not update ticket status.");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!ticket) return;
+    const confirmed = window.confirm(
+      `Delete ticket ${ticket.ticketId || ticket._id}? This action cannot be undone.`
+    );
+    if (!confirmed) return;
+    try {
+      setError(null);
+      await deleteFeedback(ticket._id);
+      navigate(isAdmin ? "/admin/tickets/delete" : "/dashboard");
+    } catch {
+      setError("Could not delete ticket.");
     }
   }
 
@@ -294,6 +311,14 @@ export function TicketDetail() {
               <button className="w-full px-4 py-3 bg-[#E5533D] text-white rounded-lg hover:bg-[#d43e29] transition-colors text-sm font-bold">
                 Escalate to Manager
               </button>
+              {showDeleteAction && (
+                <button
+                  onClick={() => void handleDelete()}
+                  className="w-full px-4 py-3 bg-red-700 text-white rounded-lg hover:bg-red-800 transition-colors text-sm font-bold"
+                >
+                  Delete Ticket
+                </button>
+              )}
             </div>
           </div>
         </div>

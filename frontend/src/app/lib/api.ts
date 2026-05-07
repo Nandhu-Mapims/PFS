@@ -96,6 +96,16 @@ export async function updateFeedbackStatus(
   return response.json();
 }
 
+export async function deleteFeedback(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/${id}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    throw new Error("Could not delete feedback");
+  }
+}
+
 export async function getFeedbackAnalytics(): Promise<FeedbackAnalytics> {
   const response = await fetch(`${API_BASE_URL}/api/analytics`, {
     cache: "no-store",
