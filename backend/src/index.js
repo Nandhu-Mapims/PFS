@@ -223,7 +223,7 @@ async function getDepartmentDocsForFeedback() {
     const mapped = tmsRows
       .filter((row) => row && row.name)
       .map((row) => ({
-        _id: String(row._id || ""),
+        _id: String(row._id || row.id || ""),
         name: String(row.name || "").trim(),
         description: String(row.description || "").trim(),
       }))
@@ -232,7 +232,8 @@ async function getDepartmentDocsForFeedback() {
     throw new Error("No departments found in TMS");
   } catch (error) {
     logTmsFailure("listTmsDepartments", error);
-    throw new Error("Could not load departments from TMS");
+    const inner = String(error?.message || error || "unknown");
+    throw new Error(`Could not load departments from TMS: ${inner}`);
   }
 }
 
@@ -794,7 +795,12 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       msg.includes("No departments found in TMS") ||
       msg.includes("TMS integration is not configured")
     ) {
-      return res.status(503).json({ message: "TMS departments are required before creating feedback" });
+      return res.status(503).json({
+        message: "TMS departments are required before creating feedback",
+        detail: msg,
+        hint:
+          "Check Feedback backend TMS_API_BASE_URL (e.g. https://tms.mapims.edu.in/api), network access to TMS, and that TMS_INGEST_TOKEN matches TMS FEEDBACK_INGEST_TOKEN when either is set. Test: GET /api/tms/departments on this server.",
+      });
     }
     return res.status(500).json({ message: "Failed to create feedback" });
   }
