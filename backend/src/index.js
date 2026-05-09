@@ -998,7 +998,7 @@ app.get("/api/tms/health", async (_req, res) => {
     return res.status(200).json({
       configured: false,
       message:
-        "TMS integration is not configured. Set TMS_MONGODB_URI in backend/.env (or ensure default tms_hospital DB is reachable).",
+        "TMS integration is not configured. Set TMS_API_BASE_URL to the TMS API root (e.g. https://tms.mapims.edu.in/api).",
     });
   }
   try {

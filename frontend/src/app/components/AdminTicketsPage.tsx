@@ -223,9 +223,9 @@ export function AdminTicketsPage() {
           {tmsHealth.configured
             ? tmsHealth.reachable
               ? "Connected. New negative-feedback tickets will be created in TMS automatically."
-              : "Configured but unreachable. Check that TMS MongoDB is running and TMS_MONGODB_URI is correct."
+              : "Configured but unreachable. Check TMS_API_BASE_URL and that the TMS server is running."
             : tmsHealth.message ||
-              "Not configured. Set TMS_MONGODB_URI in backend/.env (or keep default local tms_hospital DB)."}
+              "Not configured. Set TMS_API_BASE_URL in Feedback backend/.env (e.g. https://tms.mapims.edu.in/api)."}
         </div>
       )}
 
