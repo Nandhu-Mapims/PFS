@@ -85,6 +85,37 @@ QR codes in admin analytics typically target **`/feedback`** (not `/`).
 | DELETE | `/api/branding` | Reset branding defaults |
 | GET | `/api/departments` | Departments |
 | GET | `/api/users` | Users (no password hash) |
+| GET | `/api/tms/health` | TMS connectivity check |
+| GET | `/api/tms/departments` | Proxy: TMS department list |
+| GET | `/api/tms/tickets` | Proxy: TMS ticket list (query passthrough) |
+| GET | `/api/tms/tickets/:id` | Proxy: single TMS ticket |
+| POST | `/api/tms/tickets/sync/:feedbackId` | Manually push a feedback to TMS (retry) |
+
+---
+
+## TMS integration (Ticket Management System)
+
+When the four `TMS_*` env vars in `backend/.env` are set, every feedback that triggers a ticket (rating 1, repeated rating 2 within the dedup window, or AI-negative sentiment) is forwarded to the standalone [[TMS]] project as a real ticket. The returned TMS `ticketNumber` replaces the local placeholder, and a clickable TMS link is shown on `Admin → Tickets`.
+
+Operator one-time setup in TMS:
+
+1. Create a department, e.g. "Patient Feedback".
+2. Create a `REQUESTER` user assigned to that department. This is the service account.
+3. Copy the department `_id` and service-account `empId`/`password` into `backend/.env`:
+
+```
+TMS_API_URL=http://localhost:5013
+TMS_EMP_ID=...
+TMS_PASSWORD=...
+TMS_FEEDBACK_DEPARTMENT_ID=...
+# Optional: provide all three to skip TMS's Groq classification.
+# TMS_FEEDBACK_CATEGORY_ID=...
+# TMS_FEEDBACK_SUBCATEGORY_ID=...
+# TMS_FEEDBACK_PRIORITY=HIGH
+TMS_CLIENT_URL=http://localhost:8090
+```
+
+Failures degrade gracefully: a local `TKT-XXXX` id is kept on the Feedback row and `tmsSyncError` is populated, so the admin UI surfaces a "Push to TMS" retry button per row.
 
 ---
 

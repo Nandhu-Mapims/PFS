@@ -4,6 +4,8 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import multer from "multer";
 import bcrypt from "bcryptjs";
+import path from "path";
+import fs from "fs/promises";
 import {
   analyzePatientFeedback,
   resolveDepartmentHintWithGroq,
@@ -11,6 +13,18 @@ import {
 } from "./groqAnalysis.js";
 import { extractSarvamTranscript, stringifySarvamError } from "./sarvamSpeech.js";
 import { resolveDepartmentHeuristic } from "./departmentNormalize.js";
+import {
+  isTmsConfigured,
+  createTicketForFeedback,
+  patchTmsTicketFeedbackVoice,
+  getTmsHealth,
+  listTmsDepartments,
+  getTmsTicket,
+  listTmsTickets,
+  buildTmsTicketUrl,
+  tmsErrorToHttp,
+  logTmsFailure,
+} from "./tmsClient.js";
 
 dotenv.config();
 
@@ -26,6 +40,14 @@ const speechUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 },
 });
+
+const feedbackVoiceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
+
+const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
+app.use("/uploads", express.static(UPLOADS_ROOT));
 
 const departmentSchema = new mongoose.Schema(
   {
@@ -76,9 +98,33 @@ const feedbackSchema = new mongoose.Schema(
     aiTopics: { type: [String], default: [] },
     aiSummary: { type: String, default: "" },
     aiAnalyzedAt: { type: Date, default: null },
+    tmsTicketId: { type: String, default: null, index: true },
+    tmsTicketNumber: { type: String, default: null, index: true },
+    tmsTicketUrl: { type: String, default: null },
+    tmsSyncedAt: { type: Date, default: null },
+    tmsSyncError: { type: String, default: null },
+    voiceRecordingRelPath: { type: String, default: null, index: false },
   },
   { timestamps: true }
 );
+
+function attachVoicePlaybackUrl(doc) {
+  if (!doc) return doc;
+  const plain = typeof doc.toObject === "function" ? doc.toObject() : { ...doc };
+  if (plain.voiceRecordingRelPath) {
+    plain.voiceRecordingUrl = `/uploads/${String(plain.voiceRecordingRelPath).replace(/^\/+/, "")}`;
+  }
+  return plain;
+}
+
+async function saveFeedbackVoiceRecording(feedbackId, fileBuffer, mimeHint = "") {
+  const ext = String(mimeHint).includes("mp4") ? "m4a" : "webm";
+  const dir = path.join(UPLOADS_ROOT, "feedback-voice");
+  await fs.mkdir(dir, { recursive: true });
+  const rel = path.join("feedback-voice", `${feedbackId}.${ext}`).replace(/\\/g, "/");
+  await fs.writeFile(path.join(UPLOADS_ROOT, rel), fileBuffer);
+  return rel;
+}
 
 const brandingSchema = new mongoose.Schema(
   {
@@ -97,6 +143,50 @@ const Branding = mongoose.model("Branding", brandingSchema);
 
 function newTicketId() {
   return `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+}
+
+/**
+ * Pushes a feedback record to TMS as a real ticket. If TMS isn't configured or
+ * the call fails, we keep the local `ticketId` so the UI keeps working and we
+ * stash the error on the feedback row for diagnostics. Returns the patched doc.
+ */
+async function syncFeedbackToTms(feedback, { reason } = {}) {
+  if (!isTmsConfigured()) {
+    return feedback;
+  }
+  try {
+    const tmsTicket = await createTicketForFeedback(feedback);
+    const tmsId = tmsTicket?.id || tmsTicket?._id || null;
+    const tmsNumber = tmsTicket?.ticketNumber || null;
+    const set = {
+      tmsTicketId: tmsId ? String(tmsId) : null,
+      tmsTicketNumber: tmsNumber || null,
+      tmsTicketUrl: buildTmsTicketUrl(tmsNumber || tmsId),
+      tmsSyncedAt: new Date(),
+      tmsSyncError: null,
+    };
+    if (tmsNumber) {
+      // Replace the placeholder TKT-XXXX with the real TMS ticket number for clarity.
+      set.ticketId = tmsNumber;
+    }
+    const updated = await Feedback.findByIdAndUpdate(feedback._id, { $set: set }, { new: true }).lean();
+    // eslint-disable-next-line no-console
+    console.log("[feedback] tms sync ok", {
+      feedbackId: String(feedback._id),
+      reason: reason || "unspecified",
+      tmsTicketId: set.tmsTicketId,
+      tmsTicketNumber: set.tmsTicketNumber,
+    });
+    return updated || feedback;
+  } catch (error) {
+    logTmsFailure("createTicketForFeedback", error);
+    const set = {
+      tmsSyncError: String(error?.message || "TMS sync failed").slice(0, 500),
+      tmsSyncedAt: new Date(),
+    };
+    const updated = await Feedback.findByIdAndUpdate(feedback._id, { $set: set }, { new: true }).lean();
+    return updated || feedback;
+  }
 }
 
 async function ensureDefaults() {
@@ -120,6 +210,29 @@ async function ensureDefaults() {
       pageBackgroundColor: "#F5F7FA",
       logoDataUrl: null,
     });
+  }
+}
+
+async function getDepartmentDocsForFeedback() {
+  if (!isTmsConfigured()) {
+    throw new Error("TMS integration is not configured");
+  }
+  try {
+    const result = await listTmsDepartments();
+    const tmsRows = Array.isArray(result?.data) ? result.data : [];
+    const mapped = tmsRows
+      .filter((row) => row && row.name)
+      .map((row) => ({
+        _id: String(row._id || ""),
+        name: String(row.name || "").trim(),
+        description: String(row.description || "").trim(),
+      }))
+      .filter((row) => row.name.length > 0);
+    if (mapped.length > 0) return mapped;
+    throw new Error("No departments found in TMS");
+  } catch (error) {
+    logTmsFailure("listTmsDepartments", error);
+    throw new Error("Could not load departments from TMS");
   }
 }
 
@@ -215,10 +328,16 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.get("/api/departments", async (_req, res) => {
   try {
-    const list = await Department.find().sort({ name: 1 }).lean();
-    return res.json(list);
+    const list = await getDepartmentDocsForFeedback();
+    return res.json(
+      list.map((row) => ({
+        _id: row._id,
+        name: row.name,
+        description: row.description || "",
+      }))
+    );
   } catch (error) {
-    return res.status(500).json({ message: "Failed to list departments" });
+    return res.status(503).json({ message: error?.message || "Failed to list departments from TMS" });
   }
 });
 
@@ -387,11 +506,15 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
   try {
     const rows = await Feedback.find({ aiSentiment: "negative" }).lean();
     let updated = 0;
+    let tmsSynced = 0;
+    let tmsFailed = 0;
     for (const row of rows) {
       const set = {};
+      let opened = false;
       if (!row.ticketId) {
         set.ticketId = newTicketId();
         set.status = "New";
+        opened = true;
       } else if (row.status === "Resolved") {
         set.status = "New";
       }
@@ -399,12 +522,24 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
         await Feedback.updateOne({ _id: row._id }, { $set: set });
         updated += 1;
       }
+      if (opened && isTmsConfigured() && !row.tmsTicketId) {
+        const fresh = await Feedback.findById(row._id).lean();
+        const after = await syncFeedbackToTms(fresh, { reason: "seed_open_negative" });
+        if (after?.tmsTicketId) tmsSynced += 1;
+        else tmsFailed += 1;
+      }
     }
     const withTickets = await Feedback.countDocuments({
       aiSentiment: "negative",
       ticketId: { $nin: [null, ""] },
     });
-    return res.json({ updated, negativeWithTicket: withTickets });
+    return res.json({
+      updated,
+      negativeWithTicket: withTickets,
+      tmsSynced,
+      tmsFailed,
+      tmsConfigured: isTmsConfigured(),
+    });
   } catch (error) {
     return res.status(500).json({ message: "Failed to open negative tickets" });
   }
@@ -426,9 +561,13 @@ app.post("/api/feedback/infer-voice-rating", async (req, res) => {
   }
 });
 
-app.post("/api/feedback", async (req, res) => {
+app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (req, res) => {
   try {
-    const { patientName, department, rating, comments, source } = req.body;
+    const patientName = req.body.patientName;
+    const department = req.body.department;
+    const comments = req.body.comments;
+    const source = req.body.source;
+    const rating = Number(req.body.rating);
 
     if (!patientName || !rating) {
       return res
@@ -436,10 +575,7 @@ app.post("/api/feedback", async (req, res) => {
         .json({ message: "patientName and rating are required" });
     }
 
-    const departmentDocs = await Department.find()
-      .sort({ name: 1 })
-      .select("name description")
-      .lean();
+    const departmentDocs = await getDepartmentDocsForFeedback();
 
     const numericRating = Number(rating);
     const deptHeuristic = resolveDepartmentHeuristic(department, departmentDocs);
@@ -471,10 +607,12 @@ app.post("/api/feedback", async (req, res) => {
     const complaintSignature = `${normalizedDepartment.toLowerCase()}|${normalizedComments}`;
     let ticketId = null;
     let ticketRule = "none";
+    let ticketIsFresh = false;
 
     // Critical feedback (rating 1) raises an immediate ticket.
     if (numericRating === 1) {
       ticketId = newTicketId();
+      ticketIsFresh = true;
       ticketRule = "critical_immediate";
     }
 
@@ -492,6 +630,7 @@ app.post("/api/feedback", async (req, res) => {
       const existingTicketId = similarRows.find((row) => row.ticketId)?.ticketId;
       if (existingTicketId) {
         ticketId = existingTicketId;
+        ticketIsFresh = false;
         ticketRule = "normal_reuse_existing";
       } else {
         const distinctUsers = new Set(
@@ -505,6 +644,7 @@ app.post("/api/feedback", async (req, res) => {
 
         if (shouldRaise) {
           ticketId = newTicketId();
+          ticketIsFresh = true;
           ticketRule = "normal_after_24h_multi_patient";
           if (similarRows.length > 0) {
             await Feedback.updateMany(
@@ -521,7 +661,7 @@ app.post("/api/feedback", async (req, res) => {
     const feedback = await Feedback.create({
       patientName,
       department: normalizedDepartment,
-      rating,
+      rating: numericRating,
       comments: comments || "",
       source: ["patient", "staff", "ai"].includes(source) ? source : "patient",
       complaintSignature,
@@ -550,7 +690,7 @@ app.post("/api/feedback", async (req, res) => {
           {
             patientName,
             department: normalizedDepartment,
-            rating: Number(rating),
+            rating: numericRating,
             comments: comments || "",
           },
           {
@@ -576,6 +716,8 @@ app.post("/api/feedback", async (req, res) => {
           if (ai.sentiment === "negative" && !feedback.ticketId) {
             setFields.ticketId = newTicketId();
             setFields.status = "New";
+            ticketIsFresh = true;
+            ticketRule = ticketRule === "none" ? "ai_negative_sentiment" : ticketRule;
           }
           const updated = await Feedback.findByIdAndUpdate(
             feedback._id,
@@ -606,11 +748,54 @@ app.post("/api/feedback", async (req, res) => {
       console.log("[feedback] groq skipped (set GROQ_API_KEY in .env to enable AI analysis)");
     }
 
+    if (outDoc.ticketId && ticketIsFresh && !outDoc.tmsTicketId && isTmsConfigured()) {
+      outDoc = await syncFeedbackToTms(outDoc, { reason: ticketRule });
+    }
+
+    if (req.file?.buffer?.length) {
+      try {
+        const rel = await saveFeedbackVoiceRecording(
+          feedback._id,
+          req.file.buffer,
+          req.file.mimetype || ""
+        );
+        await Feedback.updateOne({ _id: feedback._id }, { $set: { voiceRecordingRelPath: rel } });
+        outDoc = { ...outDoc, voiceRecordingRelPath: rel };
+        const tmsId = outDoc.tmsTicketId;
+        if (tmsId && isTmsConfigured()) {
+          try {
+            await patchTmsTicketFeedbackVoice(String(tmsId), {
+              feedbackVoiceRecordingRelPath: rel,
+              feedbackSourceId: String(feedback._id),
+            });
+          } catch (patchErr) {
+            logTmsFailure("patchTmsTicketFeedbackVoice", patchErr);
+          }
+        }
+      } catch (voiceErr) {
+        // eslint-disable-next-line no-console
+        console.error("[feedback] failed to persist voice recording", {
+          feedbackId: String(feedback._id),
+          message: voiceErr?.message || String(voiceErr),
+        });
+      }
+    }
+
+    const payload = attachVoicePlaybackUrl(outDoc);
     return res.status(201).json({
-      ...outDoc,
+      ...payload,
       ticketRaised: Boolean(outDoc.ticketId),
+      tmsConfigured: isTmsConfigured(),
     });
   } catch (error) {
+    const msg = String(error?.message || "");
+    if (
+      msg.includes("departments from TMS") ||
+      msg.includes("No departments found in TMS") ||
+      msg.includes("TMS integration is not configured")
+    ) {
+      return res.status(503).json({ message: "TMS departments are required before creating feedback" });
+    }
     return res.status(500).json({ message: "Failed to create feedback" });
   }
 });
@@ -619,7 +804,7 @@ app.get("/api/feedback", async (_req, res) => {
   try {
     // Sort by insertion time from ObjectId to avoid skew from synthetic createdAt values.
     const feedback = await Feedback.find().sort({ _id: -1 }).lean();
-    return res.json(feedback);
+    return res.json(feedback.map((row) => attachVoicePlaybackUrl(row)));
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch feedback" });
   }
@@ -709,7 +894,7 @@ app.patch("/api/feedback/:id/status", async (req, res) => {
       return res.status(404).json({ message: "Feedback not found" });
     }
 
-    return res.json(updated);
+    return res.json(attachVoicePlaybackUrl(updated));
   } catch (error) {
     return res.status(500).json({ message: "Failed to update feedback status" });
   }
@@ -801,6 +986,104 @@ app.delete("/api/branding", async (_req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ message: "Failed to reset branding" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TMS (Ticket Management System) proxy/integration routes
+// ---------------------------------------------------------------------------
+
+app.get("/api/tms/health", async (_req, res) => {
+  if (!isTmsConfigured()) {
+    return res.status(200).json({
+      configured: false,
+      message:
+        "TMS integration is not configured. Set TMS_MONGODB_URI in backend/.env (or ensure default tms_hospital DB is reachable).",
+    });
+  }
+  try {
+    const result = await getTmsHealth();
+    return res.status(result.ok ? 200 : 502).json({
+      configured: true,
+      reachable: result.ok,
+      status: result.status,
+      tms: result.body,
+    });
+  } catch (error) {
+    const { status, body } = tmsErrorToHttp(error);
+    return res.status(status).json({ configured: true, reachable: false, ...body });
+  }
+});
+
+app.get("/api/tms/departments", async (_req, res) => {
+  if (!isTmsConfigured()) {
+    return res.status(503).json({ message: "TMS integration is not configured" });
+  }
+  try {
+    const result = await listTmsDepartments();
+    return res.json(result);
+  } catch (error) {
+    const { status, body } = tmsErrorToHttp(error);
+    return res.status(status).json(body);
+  }
+});
+
+app.get("/api/tms/tickets", async (req, res) => {
+  if (!isTmsConfigured()) {
+    return res.status(503).json({ message: "TMS integration is not configured" });
+  }
+  try {
+    const result = await listTmsTickets(req.query || {});
+    return res.json(result);
+  } catch (error) {
+    const { status, body } = tmsErrorToHttp(error);
+    return res.status(status).json(body);
+  }
+});
+
+app.get("/api/tms/tickets/:id", async (req, res) => {
+  if (!isTmsConfigured()) {
+    return res.status(503).json({ message: "TMS integration is not configured" });
+  }
+  try {
+    const ticket = await getTmsTicket(req.params.id);
+    return res.json(ticket);
+  } catch (error) {
+    const { status, body } = tmsErrorToHttp(error);
+    return res.status(status).json(body);
+  }
+});
+
+/**
+ * Manually push a feedback to TMS (e.g. retry after a previous sync failure).
+ * Accepts either the Feedback _id or the local ticketId.
+ */
+app.post("/api/tms/tickets/sync/:feedbackId", async (req, res) => {
+  if (!isTmsConfigured()) {
+    return res.status(503).json({ message: "TMS integration is not configured" });
+  }
+  try {
+    const { feedbackId } = req.params;
+    const query = mongoose.Types.ObjectId.isValid(feedbackId)
+      ? { _id: feedbackId }
+      : { ticketId: feedbackId };
+    const feedback = await Feedback.findOne(query).lean();
+    if (!feedback) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+    if (!feedback.ticketId) {
+      // Open a local ticket id first so the row is treated as a ticket.
+      const ticketId = newTicketId();
+      await Feedback.updateOne({ _id: feedback._id }, { $set: { ticketId, status: "New" } });
+      feedback.ticketId = ticketId;
+    }
+    const updated = await syncFeedbackToTms(feedback, { reason: "manual_resync" });
+    return res.json({
+      ok: Boolean(updated?.tmsTicketId),
+      feedback: updated,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to sync to TMS" });
   }
 });
 

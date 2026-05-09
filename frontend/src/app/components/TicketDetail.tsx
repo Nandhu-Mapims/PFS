@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { ArrowLeft, User, Calendar, Building2, AlertCircle, Save, MessageSquare, CheckCircle } from "lucide-react";
-import { deleteFeedback, getFeedbackById, type FeedbackItem, updateFeedbackStatus } from "../lib/api";
+import {
+  deleteFeedback,
+  getFeedbackById,
+  type FeedbackItem,
+  updateFeedbackStatus,
+} from "../lib/api";
+
+const FEEDBACK_API_ORIGIN = import.meta.env.VITE_API_URL || "";
 import { getSession } from "../lib/auth";
 
 export function TicketDetail() {
@@ -81,6 +88,16 @@ export function TicketDetail() {
         : "Monitor trends and close the ticket once reviewed."
     : "";
   const aiSummary = ticket?.aiSummary?.trim() || fallbackAiSummary;
+
+  const voiceAudioSrc = ticket?.voiceRecordingUrl
+    ? ticket.voiceRecordingUrl.startsWith("http")
+      ? ticket.voiceRecordingUrl
+      : FEEDBACK_API_ORIGIN
+        ? `${FEEDBACK_API_ORIGIN.replace(/\/$/, "")}${
+            ticket.voiceRecordingUrl.startsWith("/") ? ticket.voiceRecordingUrl : `/${ticket.voiceRecordingUrl}`
+          }`
+        : ticket.voiceRecordingUrl
+    : null;
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -185,6 +202,14 @@ export function TicketDetail() {
             </h3>
             <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
               <p className="text-gray-700 leading-relaxed">{ticket.comments || "No comment provided."}</p>
+              {voiceAudioSrc ? (
+                <div className="mt-5 pt-4 border-t border-gray-200">
+                  <p className="text-sm font-semibold text-gray-700 mb-2">Voice recording</p>
+                  <audio controls className="w-full max-w-xl" preload="metadata" src={voiceAudioSrc}>
+                    Your browser does not support audio playback.
+                  </audio>
+                </div>
+              ) : null}
             </div>
           </div>
 

@@ -3,6 +3,7 @@ import { Mic, Square, Loader } from "lucide-react";
 import {
   coerceTranscriptText,
   inferVoiceRatingFromTranscript,
+  type SpeechLanguageCode,
   transcribeVoiceRecording,
 } from "../lib/api";
 
@@ -32,6 +33,8 @@ export interface FeedbackVoiceSectionProps {
   onVoiceSuccess: (transcript: string, inferredRating: number) => void;
   onVoiceCleared: () => void;
   onVoiceError: (message: string | null) => void;
+  /** Full-session recording blob for server upload (parallel to segmented transcription). */
+  onVoiceRecordingReady?: (blob: Blob | null) => void;
 }
 
 export function FeedbackVoiceSection({
@@ -41,7 +44,10 @@ export function FeedbackVoiceSection({
   onVoiceSuccess,
   onVoiceCleared,
   onVoiceError,
+  onVoiceRecordingReady,
 }: FeedbackVoiceSectionProps) {
+  const [speechLanguageCode, setSpeechLanguageCode] =
+    useState<SpeechLanguageCode>("unknown");
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
   const [localTranscript, setLocalTranscript] = useState("");
   /** Shown during recording — how many parts have finished uploading (not guaranteed order) */
@@ -61,6 +67,49 @@ export function FeedbackVoiceSection({
   const rotateBusyRef = useRef(false);
   const finishingSessionRef = useRef(false);
   const recordingStateRef = useRef<RecordingState>("idle");
+
+  /** One continuous recorder for archiving the whole session (segmented recorder still used for STT). */
+  const archiveRecorderRef = useRef<MediaRecorder | null>(null);
+  const archiveChunksRef = useRef<BlobPart[]>([]);
+  const archiveMimeRef = useRef<string>("audio/webm");
+
+  const stopArchiveRecorderAsync = useCallback(
+    async (notify: boolean) => {
+      const ar = archiveRecorderRef.current;
+      if (!ar || ar.state === "inactive") {
+        archiveRecorderRef.current = null;
+        archiveChunksRef.current = [];
+        if (notify) onVoiceRecordingReady?.(null);
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        ar.onstop = () => {
+          try {
+            if (notify) {
+              const blob = new Blob(archiveChunksRef.current, {
+                type: ar.mimeType || archiveMimeRef.current,
+              });
+              onVoiceRecordingReady?.(blob.size > 0 ? blob : null);
+            }
+          } catch {
+            if (notify) onVoiceRecordingReady?.(null);
+          }
+          archiveChunksRef.current = [];
+          archiveRecorderRef.current = null;
+          resolve();
+        };
+        try {
+          ar.stop();
+        } catch {
+          if (notify) onVoiceRecordingReady?.(null);
+          archiveChunksRef.current = [];
+          archiveRecorderRef.current = null;
+          resolve();
+        }
+      });
+    },
+    [onVoiceRecordingReady]
+  );
 
   useEffect(() => {
     recordingStateRef.current = recordingState;
@@ -97,11 +146,15 @@ export function FeedbackVoiceSection({
           ? "webm"
           : "audio";
     const filename = `seg-${segmentIdx}.${ext}`;
-    const { transcript: raw } = await transcribeVoiceRecording(blob, filename);
+    const { transcript: raw } = await transcribeVoiceRecording(
+      blob,
+      filename,
+      speechLanguageCode
+    );
     const t = coerceTranscriptText(raw).trim();
     transcriptsBySegmentRef.current.set(segmentIdx, t);
     setSegmentsDoneUi((n) => n + 1);
-  }, []);
+  }, [speechLanguageCode]);
 
   const attachRecorderCallbacks = useCallback((recorder: MediaRecorder) => {
     recorder.ondataavailable = (e) => {
@@ -142,7 +195,10 @@ export function FeedbackVoiceSection({
     async (stopFully: boolean) => {
       const recorder = mediaRecorderRef.current;
       if (!recorder || recorder.state === "inactive") {
-        if (stopFully) stopTracks();
+        if (stopFully) {
+          await stopArchiveRecorderAsync(true);
+          stopTracks();
+        }
         return;
       }
 
@@ -188,10 +244,17 @@ export function FeedbackVoiceSection({
           scheduleSegmentRotate();
         }
       } else {
+        await stopArchiveRecorderAsync(true);
         stopTracks();
       }
     },
-    [clearSegmentTimer, createAndStartRecorder, enqueueTranscription, stopTracks]
+    [
+      clearSegmentTimer,
+      createAndStartRecorder,
+      enqueueTranscription,
+      stopArchiveRecorderAsync,
+      stopTracks,
+    ]
   );
 
   const rotateSegmentAutomatically = useCallback(async () => {
@@ -214,6 +277,15 @@ export function FeedbackVoiceSection({
     return () => {
       clearSegmentTimer();
       mediaRecorderRef.current?.stop();
+      try {
+        if (archiveRecorderRef.current && archiveRecorderRef.current.state !== "inactive") {
+          archiveRecorderRef.current.stop();
+        }
+      } catch {
+        /* noop */
+      }
+      archiveRecorderRef.current = null;
+      archiveChunksRef.current = [];
       stopTracks();
     };
   }, [clearSegmentTimer, stopTracks]);
@@ -231,7 +303,8 @@ export function FeedbackVoiceSection({
     transcriptionJobsRef.current = [];
     finishingSessionRef.current = false;
     onVoiceError(null);
-  }, [resetRevision, stopTracks, onVoiceError, clearSegmentTimer]);
+    onVoiceRecordingReady?.(null);
+  }, [resetRevision, stopTracks, onVoiceError, clearSegmentTimer, onVoiceRecordingReady]);
 
   const finishRecordingPipeline = useCallback(async () => {
     for (let i = 0; i < 50 && rotateBusyRef.current; i += 1) {
@@ -249,6 +322,8 @@ export function FeedbackVoiceSection({
       const msg =
         err instanceof Error ? err.message : typeof err === "string" ? err : "Recording finalize failed.";
       onVoiceError(msg);
+      await stopArchiveRecorderAsync(false);
+      stopTracks();
       setRecordingState("idle");
       finishingSessionRef.current = false;
       return;
@@ -286,7 +361,7 @@ export function FeedbackVoiceSection({
     setRecordingState("completed");
     setSegmentsDoneUi(0);
     finishingSessionRef.current = false;
-  }, [finalizeCurrentSegment, clearSegmentTimer, onVoiceError, onVoiceSuccess]);
+  }, [finalizeCurrentSegment, clearSegmentTimer, onVoiceError, onVoiceSuccess, stopArchiveRecorderAsync, stopTracks]);
 
   const startRecording = async () => {
     if (!nameReady) {
@@ -296,6 +371,7 @@ export function FeedbackVoiceSection({
 
     onVoiceError(null);
     onVoiceCleared();
+    onVoiceRecordingReady?.(null);
     setLocalTranscript("");
     nextSegmentIdxRef.current = 0;
     transcriptsBySegmentRef.current.clear();
@@ -313,8 +389,27 @@ export function FeedbackVoiceSection({
 
     streamRef.current = stream;
 
+    archiveChunksRef.current = [];
+    const arcMime = pickRecorderMime();
+    archiveMimeRef.current = arcMime || "audio/webm";
+    try {
+      const arcRec = arcMime ? new MediaRecorder(stream, { mimeType: arcMime }) : new MediaRecorder(stream);
+      archiveRecorderRef.current = arcRec;
+      arcRec.ondataavailable = (e) => {
+        if (e.data.size > 0) archiveChunksRef.current.push(e.data);
+      };
+      arcRec.start(250);
+    } catch {
+      archiveRecorderRef.current = null;
+    }
+
     createAndStartRecorder(stream);
-    if (!mediaRecorderRef.current) return;
+    if (!mediaRecorderRef.current) {
+      await stopArchiveRecorderAsync(false);
+      stopTracks();
+      onVoiceError("This browser cannot record audio for upload.");
+      return;
+    }
 
     setRecordingState("recording");
     scheduleSegmentRotate();
@@ -343,6 +438,7 @@ export function FeedbackVoiceSection({
     setSegmentsDoneUi(0);
     onVoiceCleared();
     onVoiceError(null);
+    onVoiceRecordingReady?.(null);
     nextSegmentIdxRef.current = 0;
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
@@ -352,6 +448,24 @@ export function FeedbackVoiceSection({
   return (
     <div className="mb-8">
       <div className="flex flex-col items-center gap-8 mb-8">
+        <div className="w-full max-w-sm">
+          <label className="mb-2 block text-sm font-semibold text-gray-700">
+            Speech language
+          </label>
+          <select
+            value={speechLanguageCode}
+            onChange={(e) => setSpeechLanguageCode(e.target.value as SpeechLanguageCode)}
+            disabled={recordingState === "recording" || recordingState === "processing"}
+            className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700"
+          >
+            <option value="unknown">Auto detect</option>
+            <option value="en-IN">English</option>
+            <option value="ta-IN">Tamil</option>
+            <option value="te-IN">Telugu</option>
+            <option value="kn-IN">Kannada</option>
+          </select>
+        </div>
+
         <div className="text-center min-h-[56px]">
           <p className="text-xl md:text-2xl font-bold text-gray-800 mb-1">
             {recordingState === "idle" && "Tap to speak"}

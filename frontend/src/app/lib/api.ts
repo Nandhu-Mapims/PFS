@@ -4,6 +4,8 @@ export interface FeedbackPayload {
   rating: number;
   comments: string;
   source?: "patient" | "staff" | "ai";
+  /** When set, multipart upload stores audio under this feedback (voice flow). */
+  voiceRecording?: Blob | null;
 }
 
 export interface BrandingSettings {
@@ -16,7 +18,7 @@ export interface CreateFeedbackResponse extends FeedbackItem {
   ticketRaised?: boolean;
 }
 
-export interface FeedbackItem extends FeedbackPayload {
+export interface FeedbackItem extends Omit<FeedbackPayload, "voiceRecording"> {
   _id: string;
   status: "New" | "In Progress" | "Resolved";
   source: "patient" | "staff" | "ai";
@@ -28,6 +30,13 @@ export interface FeedbackItem extends FeedbackPayload {
   aiTopics?: string[];
   aiSummary?: string;
   aiAnalyzedAt?: string | null;
+  tmsTicketId?: string | null;
+  tmsTicketNumber?: string | null;
+  tmsTicketUrl?: string | null;
+  tmsSyncedAt?: string | null;
+  tmsSyncError?: string | null;
+  voiceRecordingRelPath?: string | null;
+  voiceRecordingUrl?: string | null;
 }
 
 export interface FeedbackAnalytics {
@@ -45,17 +54,44 @@ export interface FeedbackAnalytics {
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
 
 export async function createFeedback(payload: FeedbackPayload): Promise<CreateFeedbackResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/feedback`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const { voiceRecording, ...fields } = payload;
+  let response: Response;
 
-  if (!response.ok) {
-    throw new Error("Could not save feedback");
+  if (voiceRecording && voiceRecording.size > 0) {
+    const fd = new FormData();
+    fd.append("patientName", fields.patientName);
+    if (fields.department != null && fields.department !== "") {
+      fd.append("department", fields.department);
+    }
+    fd.append("rating", String(fields.rating));
+    fd.append("comments", fields.comments ?? "");
+    if (fields.source) fd.append("source", fields.source);
+    const mime = voiceRecording.type || "audio/webm";
+    const ext = mime.includes("mp4") ? "m4a" : "webm";
+    fd.append("voiceRecording", voiceRecording, `voice-feedback.${ext}`);
+
+    response = await fetch(`${API_BASE_URL}/api/feedback`, {
+      method: "POST",
+      body: fd,
+    });
+  } else {
+    response = await fetch(`${API_BASE_URL}/api/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields),
+    });
   }
 
-  return response.json();
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const msg =
+      typeof body === "object" && body && "message" in body && typeof (body as { message?: string }).message === "string"
+        ? (body as { message: string }).message
+        : "Could not save feedback";
+    throw new Error(msg);
+  }
+
+  return body as CreateFeedbackResponse;
 }
 
 export async function getFeedback(): Promise<FeedbackItem[]> {
@@ -290,6 +326,8 @@ export interface TranscribeSpeechResponse {
   request_id?: string | null;
 }
 
+export type SpeechLanguageCode = "unknown" | "en-IN" | "ta-IN" | "te-IN" | "kn-IN";
+
 function readApiErrorMessage(body: unknown): string {
   if (!body || typeof body !== "object") {
     return typeof body === "string" ? body : "Request failed";
@@ -342,15 +380,91 @@ export async function inferVoiceRatingFromTranscript(
   return body as { rating: number; sentiment: string };
 }
 
+// ---------------------------------------------------------------------------
+// TMS (Ticket Management System) integration — proxied via this backend so the
+// browser never sees TMS service-account credentials.
+// ---------------------------------------------------------------------------
+
+export interface TmsHealth {
+  configured: boolean;
+  reachable?: boolean;
+  status?: number;
+  message?: string;
+  tms?: unknown;
+}
+
+export interface TmsDepartment {
+  _id?: string;
+  id?: string;
+  name?: string;
+  code?: string;
+  isActive?: boolean;
+}
+
+export interface TmsTicket {
+  _id?: string;
+  id?: string;
+  ticketNumber?: string;
+  title?: string;
+  description?: string;
+  status?: string;
+  priority?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [k: string]: unknown;
+}
+
+export async function getTmsHealth(): Promise<TmsHealth> {
+  const response = await fetch(`${API_BASE_URL}/api/tms/health`, { cache: "no-store" });
+  const body = await response.json().catch(() => ({}));
+  return body as TmsHealth;
+}
+
+export async function getTmsDepartments(): Promise<{ data: TmsDepartment[]; meta?: unknown }> {
+  const response = await fetch(`${API_BASE_URL}/api/tms/departments`, { cache: "no-store" });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not load TMS departments");
+  }
+  return body as { data: TmsDepartment[]; meta?: unknown };
+}
+
+export async function getTmsTicket(idOrNumber: string): Promise<TmsTicket> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/tms/tickets/${encodeURIComponent(idOrNumber)}`,
+    { cache: "no-store" }
+  );
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not load TMS ticket");
+  }
+  return body as TmsTicket;
+}
+
+export async function syncFeedbackToTms(
+  feedbackIdOrTicketId: string
+): Promise<{ ok: boolean; feedback: FeedbackItem }> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/tms/tickets/sync/${encodeURIComponent(feedbackIdOrTicketId)}`,
+    { method: "POST" }
+  );
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not sync ticket to TMS");
+  }
+  return body as { ok: boolean; feedback: FeedbackItem };
+}
+
 export async function transcribeVoiceRecording(
   audioBlob: Blob,
-  filename = "recording.webm"
+  filename = "recording.webm",
+  languageCode: SpeechLanguageCode = "unknown"
 ): Promise<TranscribeSpeechResponse> {
   const formData = new FormData();
   formData.append("audio", audioBlob, filename);
   formData.append("model", "saaras:v3");
   formData.append("mode", "codemix");
-  formData.append("language_code", "unknown");
+  formData.append("language_code", languageCode);
 
   const response = await fetch(`${API_BASE_URL}/api/speech-to-text`, {
     method: "POST",

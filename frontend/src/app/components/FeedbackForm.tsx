@@ -27,6 +27,7 @@ export function FeedbackForm() {
   const inputKind: InputKind = modeParam === "voice" ? "voice" : "type";
 
   const [voiceReady, setVoiceReady] = useState(false);
+  const [voiceRecordingBlob, setVoiceRecordingBlob] = useState<Blob | null>(null);
   const [voiceRevision, setVoiceRevision] = useState(0);
   const [selectedEmotion, setSelectedEmotion] = useState<number | null>(null);
   const [patientName, setPatientName] = useState("");
@@ -49,6 +50,7 @@ export function FeedbackForm() {
     setSelectedEmotion(null);
     setComments("");
     setVoiceReady(false);
+    setVoiceRecordingBlob(null);
     setVoiceRevision((r) => r + 1);
   }, [modeParam]);
 
@@ -83,6 +85,10 @@ export function FeedbackForm() {
     setSubmitError(message);
   }, []);
 
+  const onVoiceRecordingReady = useCallback((blob: Blob | null) => {
+    setVoiceRecordingBlob(blob);
+  }, []);
+
   const handleSubmit = async () => {
     if (!patientName.trim()) {
       setSubmitError("Please enter your name.");
@@ -97,6 +103,10 @@ export function FeedbackForm() {
     } else {
       if (!voiceReady || selectedEmotion == null) {
         setSubmitError("Record your voice feedback first.");
+        return;
+      }
+      if (!voiceRecordingBlob || voiceRecordingBlob.size === 0) {
+        setSubmitError("Voice recording was not captured. Tap record again.");
         return;
       }
       const c = comments.trim();
@@ -116,6 +126,10 @@ export function FeedbackForm() {
         rating: selectedEmotion as number,
         comments: comments.trim(),
         source: isStaffSession ? "staff" : "patient",
+        voiceRecording:
+          inputKind === "voice" && voiceRecordingBlob && voiceRecordingBlob.size > 0
+            ? voiceRecordingBlob
+            : undefined,
       });
       navigate("/thank-you", {
         state: {
@@ -127,8 +141,8 @@ export function FeedbackForm() {
           aiTopics: created.aiTopics || undefined,
         },
       });
-    } catch {
-      setSubmitError("Could not submit feedback. Please try again.");
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Could not submit feedback. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -222,6 +236,7 @@ export function FeedbackForm() {
             onVoiceSuccess={onVoiceSuccess}
             onVoiceCleared={onVoiceCleared}
             onVoiceError={onVoiceError}
+            onVoiceRecordingReady={onVoiceRecordingReady}
           />
         )}
 

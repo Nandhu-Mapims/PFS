@@ -3,8 +3,11 @@ import { useLocation, useNavigate } from "react-router";
 import {
   deleteFeedback,
   getFeedback,
+  getTmsHealth,
   seedOpenNegativeTickets,
+  syncFeedbackToTms,
   type FeedbackItem,
+  type TmsHealth,
 } from "../lib/api";
 
 const ratingLabel: Record<number, string> = {
@@ -24,6 +27,9 @@ export function AdminTicketsPage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [tmsHealth, setTmsHealth] = useState<TmsHealth | null>(null);
+  const [tmsRowSyncing, setTmsRowSyncing] = useState<string | null>(null);
+  const [autoSyncingIds, setAutoSyncingIds] = useState<Record<string, boolean>>({});
 
   const loadTickets = useCallback(async (opts?: { silent?: boolean }) => {
     try {
@@ -68,11 +74,79 @@ export function AdminTicketsPage() {
   }, [loadTickets]);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const h = await getTmsHealth();
+        if (!cancelled) setTmsHealth(h);
+      } catch {
+        if (!cancelled) setTmsHealth({ configured: false, message: "TMS check failed" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       void loadTickets({ silent: true });
     }, 5000);
     return () => window.clearInterval(interval);
   }, [loadTickets]);
+
+  const handleSyncRowToTms = useCallback(
+    async (item: FeedbackItem) => {
+      const key = item._id;
+      try {
+        setTmsRowSyncing(key);
+        setError(null);
+        const result = await syncFeedbackToTms(item._id);
+        setItems((current) =>
+          current.map((row) => (row._id === key ? { ...row, ...result.feedback } : row))
+        );
+        if (!result.ok) {
+          setError(
+            result.feedback?.tmsSyncError ||
+              "TMS rejected the ticket. Check service-account access in backend logs."
+          );
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "TMS sync failed");
+      } finally {
+        setTmsRowSyncing(null);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!tmsHealth?.configured || !tmsHealth?.reachable) return;
+    const pending = items.filter(
+      (item) => Boolean(item.ticketId) && !item.tmsTicketId && !autoSyncingIds[item._id]
+    );
+    if (!pending.length) return;
+
+    pending.slice(0, 5).forEach((item) => {
+      setAutoSyncingIds((prev) => ({ ...prev, [item._id]: true }));
+      void syncFeedbackToTms(item._id)
+        .then((result) => {
+          setItems((current) =>
+            current.map((row) => (row._id === item._id ? { ...row, ...result.feedback } : row))
+          );
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "TMS auto-sync failed");
+        })
+        .finally(() => {
+          setAutoSyncingIds((prev) => {
+            const next = { ...prev };
+            delete next[item._id];
+            return next;
+          });
+        });
+    });
+  }, [autoSyncingIds, items, tmsHealth]);
 
   const sortedItems = useMemo(() => {
     const ticketRows = items.filter((item) => Boolean(item.ticketId));
@@ -135,6 +209,26 @@ export function AdminTicketsPage() {
         </p>
       )}
 
+      {tmsHealth && (
+        <div
+          className={`mb-4 px-4 py-2 rounded-lg text-sm border ${
+            tmsHealth.configured && tmsHealth.reachable
+              ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+              : tmsHealth.configured
+                ? "bg-amber-50 border-amber-200 text-amber-800"
+                : "bg-gray-50 border-gray-200 text-gray-700"
+          }`}
+        >
+          <strong>TMS:</strong>{" "}
+          {tmsHealth.configured
+            ? tmsHealth.reachable
+              ? "Connected. New negative-feedback tickets will be created in TMS automatically."
+              : "Configured but unreachable. Check that TMS MongoDB is running and TMS_MONGODB_URI is correct."
+            : tmsHealth.message ||
+              "Not configured. Set TMS_MONGODB_URI in backend/.env (or keep default local tms_hospital DB)."}
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-md overflow-hidden">
         {isLoading ? (
           <p className="p-6 text-gray-600">Loading tickets...</p>
@@ -153,6 +247,7 @@ export function AdminTicketsPage() {
                   <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">AI sentiment</th>
                   <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Rating</th>
                   <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Status</th>
+                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">TMS</th>
                   <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Submitted</th>
                   <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Action</th>
                 </tr>
@@ -172,6 +267,44 @@ export function AdminTicketsPage() {
                       {item.rating} - {ratingLabel[item.rating] ?? "N/A"}
                     </td>
                     <td className="px-6 py-4 text-gray-600">{item.status}</td>
+                    <td className="px-6 py-4 text-sm">
+                      {item.tmsTicketNumber || item.tmsTicketId ? (
+                        <div className="flex flex-col">
+                          {item.tmsTicketUrl ? (
+                            <a
+                              href={item.tmsTicketUrl}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="font-mono text-[#2A6FDB] hover:underline"
+                            >
+                              {item.tmsTicketNumber || item.tmsTicketId}
+                            </a>
+                          ) : (
+                            <span className="font-mono text-emerald-700">
+                              {item.tmsTicketNumber || item.tmsTicketId}
+                            </span>
+                          )}
+                          <span className="text-[11px] text-gray-500">
+                            {item.tmsSyncedAt
+                              ? `synced ${new Date(item.tmsSyncedAt).toLocaleString()}`
+                              : "synced"}
+                          </span>
+                        </div>
+                      ) : tmsHealth?.configured ? (
+                        <span
+                          className="inline-flex px-2 py-1 rounded border border-amber-300 text-amber-800 text-xs font-semibold"
+                          title={item.tmsSyncError || "Auto-syncing to TMS"}
+                        >
+                          {autoSyncingIds[item._id] || tmsRowSyncing === item._id
+                            ? "Auto-syncing…"
+                            : item.tmsSyncError
+                              ? "Auto-sync failed"
+                              : "Pending auto-sync"}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-gray-600">
                       {new Date(item.createdAt).toLocaleString()}
                     </td>
