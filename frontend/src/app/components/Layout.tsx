@@ -18,6 +18,7 @@ export function Layout() {
   const session = getSession();
   const isAdmin = session?.role === "admin";
   const path = location.pathname;
+  const isPatientFeedbackArea = path === "/feedback" || path.startsWith("/feedback/");
   const isStaffRoute =
     path.includes("staff") ||
     path.includes("dashboard") ||
@@ -357,9 +358,9 @@ export function Layout() {
                   type="button"
                   onClick={() => navigate("/feedback")}
                   className={`flex flex-col items-center gap-1 px-4 py-2 ${
-                    path === "/feedback" ? "" : "text-gray-500"
+                    isPatientFeedbackArea ? "" : "text-gray-500"
                   }`}
-                  style={path === "/feedback" ? activePrimaryStyle : undefined}
+                  style={isPatientFeedbackArea ? activePrimaryStyle : undefined}
                 >
                   <ClipboardList size={24} />
                   <span className="text-xs">Feedback</span>

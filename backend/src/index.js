@@ -2,8 +2,14 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
+import multer from "multer";
 import bcrypt from "bcryptjs";
-import { analyzePatientFeedback, resolveDepartmentHintWithGroq } from "./groqAnalysis.js";
+import {
+  analyzePatientFeedback,
+  resolveDepartmentHintWithGroq,
+  inferRatingFromVoiceTranscript,
+} from "./groqAnalysis.js";
+import { extractSarvamTranscript, stringifySarvamError } from "./sarvamSpeech.js";
 import { resolveDepartmentHeuristic } from "./departmentNormalize.js";
 
 dotenv.config();
@@ -15,6 +21,11 @@ const MONGODB_URI =
 
 app.use(cors());
 app.use(express.json());
+
+const speechUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+});
 
 const departmentSchema = new mongoose.Schema(
   {
@@ -114,6 +125,73 @@ async function ensureDefaults() {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.post("/api/speech-to-text", speechUpload.single("audio"), async (req, res) => {
+  try {
+    const sarvamKey = process.env.SARVAM_API_KEY;
+    if (!sarvamKey) {
+      return res.status(503).json({ message: "Speech transcription is not configured" });
+    }
+    if (!req.file?.buffer?.length) {
+      return res.status(400).json({ message: "Missing audio file (field name: audio)" });
+    }
+
+    const model =
+      (typeof req.body.model === "string" && req.body.model.trim()) ||
+      process.env.SARVAM_STT_MODEL ||
+      "saaras:v3";
+    const mode =
+      (typeof req.body.mode === "string" && req.body.mode.trim()) ||
+      process.env.SARVAM_STT_MODE ||
+      "codemix";
+    const language_code =
+      (typeof req.body.language_code === "string" && req.body.language_code.trim()) || "unknown";
+
+    const filename = req.file.originalname || "recording.webm";
+    const blob = new Blob([req.file.buffer], {
+      type: req.file.mimetype || "application/octet-stream",
+    });
+
+    const formData = new FormData();
+    formData.append("file", blob, filename);
+    formData.append("model", model);
+    if (model === "saaras:v3") {
+      formData.append("mode", mode);
+    }
+    formData.append("language_code", language_code);
+
+    const sarvamRes = await fetch("https://api.sarvam.ai/speech-to-text", {
+      method: "POST",
+      headers: { "api-subscription-key": sarvamKey },
+      body: formData,
+    });
+
+    const rawText = await sarvamRes.text();
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      data = { message: rawText };
+    }
+
+    if (!sarvamRes.ok) {
+      const msg = stringifySarvamError(data);
+      return res.status(sarvamRes.status >= 400 && sarvamRes.status < 600 ? sarvamRes.status : 502).json({
+        message: msg,
+      });
+    }
+
+    const transcriptText = extractSarvamTranscript(data);
+
+    return res.json({
+      transcript: transcriptText,
+      language_code: data.language_code ?? null,
+      request_id: data.request_id ?? null,
+    });
+  } catch (error) {
+    return res.status(502).json({ message: "Could not reach speech transcription service" });
+  }
 });
 
 app.post("/api/auth/login", async (req, res) => {
@@ -329,6 +407,22 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
     return res.json({ updated, negativeWithTicket: withTickets });
   } catch (error) {
     return res.status(500).json({ message: "Failed to open negative tickets" });
+  }
+});
+
+app.post("/api/feedback/infer-voice-rating", async (req, res) => {
+  try {
+    const transcript = req.body?.transcript;
+    if (typeof transcript !== "string" || !transcript.trim()) {
+      return res.status(400).json({ message: "transcript is required" });
+    }
+    const out = await inferRatingFromVoiceTranscript(transcript);
+    return res.json({
+      rating: out.rating,
+      sentiment: out.sentiment,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: "Could not infer rating" });
   }
 });
 

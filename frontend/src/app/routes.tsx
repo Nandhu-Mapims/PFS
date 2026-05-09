@@ -1,9 +1,8 @@
-import { createBrowserRouter } from "react-router";
+import { createBrowserRouter, Navigate } from "react-router";
 import { Layout } from "./components/Layout";
 import { Welcome } from "./components/Welcome";
 import { FeedbackMode } from "./components/FeedbackMode";
 import { FeedbackForm } from "./components/FeedbackForm";
-import { VoiceFeedback } from "./components/VoiceFeedback";
 import { PaperUpload } from "./components/PaperUpload";
 import { ThankYou } from "./components/ThankYou";
 import { Dashboard } from "./components/Dashboard";
@@ -26,10 +25,11 @@ export const router = createBrowserRouter([
       { index: true, Component: LoginPage },
       { path: "login", Component: LoginPage },
       { path: "welcome", Component: Welcome },
-      { path: "feedback", Component: FeedbackForm },
-      { path: "feedback-mode", Component: FeedbackMode },
-      { path: "feedback-form", Component: FeedbackForm },
-      { path: "voice-feedback", Component: VoiceFeedback },
+      { path: "feedback/give", Component: FeedbackForm },
+      { path: "feedback", Component: FeedbackMode },
+      { path: "feedback-mode", element: <Navigate to="/feedback" replace /> },
+      { path: "feedback-form", element: <Navigate to="/feedback/give" replace /> },
+      { path: "voice-feedback", element: <Navigate to="/feedback/give?mode=voice" replace /> },
       { path: "paper-upload", Component: PaperUpload },
       { path: "thank-you", Component: ThankYou },
       {

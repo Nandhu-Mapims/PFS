@@ -283,3 +283,90 @@ export async function resetBrandingSettingsApi(): Promise<BrandingSettings> {
   }
   return response.json();
 }
+
+export interface TranscribeSpeechResponse {
+  transcript: string;
+  language_code?: string | null;
+  request_id?: string | null;
+}
+
+function readApiErrorMessage(body: unknown): string {
+  if (!body || typeof body !== "object") {
+    return typeof body === "string" ? body : "Request failed";
+  }
+  const b = body as Record<string, unknown>;
+  if (typeof b.message === "string" && b.message.trim()) {
+    return b.message.trim().slice(0, 900);
+  }
+  const nested = b.error;
+  if (nested && typeof nested === "object" && typeof (nested as { message?: unknown }).message === "string") {
+    const m = (nested as { message: string }).message.trim();
+    if (m) return m.slice(0, 900);
+  }
+  try {
+    const s = JSON.stringify(body);
+    return s.length <= 600 ? s : `${s.slice(0, 600)}…`;
+  } catch {
+    return "Request failed";
+  }
+}
+
+/** Safe string for UI (avoid "[object Object]" if API shape differs). */
+export function coerceTranscriptText(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) {
+    return raw.map(coerceTranscriptText).join(" ").trim();
+  }
+  if (raw != null && typeof raw === "object") {
+    const o = raw as Record<string, unknown>;
+    const inner = o.text ?? o.content ?? o.value ?? o.utterance ?? o.transcript;
+    if (typeof inner === "string") return inner;
+    if (Array.isArray(inner)) return coerceTranscriptText(inner);
+  }
+  return "";
+}
+
+/** Proxies audio to the backend, which calls Sarvam (key never in the browser). */
+export async function inferVoiceRatingFromTranscript(
+  transcript: string
+): Promise<{ rating: number; sentiment: string }> {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/infer-voice-rating`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transcript }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not infer rating from voice");
+  }
+  return body as { rating: number; sentiment: string };
+}
+
+export async function transcribeVoiceRecording(
+  audioBlob: Blob,
+  filename = "recording.webm"
+): Promise<TranscribeSpeechResponse> {
+  const formData = new FormData();
+  formData.append("audio", audioBlob, filename);
+  formData.append("model", "saaras:v3");
+  formData.append("mode", "codemix");
+  formData.append("language_code", "unknown");
+
+  const response = await fetch(`${API_BASE_URL}/api/speech-to-text`, {
+    method: "POST",
+    body: formData,
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not transcribe audio");
+  }
+
+  const row = body as Record<string, unknown>;
+  const transcript = coerceTranscriptText(row.transcript);
+  return {
+    transcript,
+    language_code: (row.language_code as string | null) ?? null,
+    request_id: (row.request_id as string | null) ?? null,
+  };
+}

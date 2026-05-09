@@ -110,7 +110,7 @@ export function PaperUpload() {
         {/* Back Link */}
         <div className="text-center">
           <button
-            onClick={() => navigate('/feedback-mode')}
+            onClick={() => navigate('/feedback')}
             className="text-gray-500 hover:text-[#2A6FDB] text-lg transition-colors"
           >
             ← Choose Different Method

@@ -45,6 +45,125 @@ export function resolveDepartmentFromAi(raw, choices) {
  * @param {{ feedbackId?: string; departmentChoices?: { name: string; description?: string }[] }} [options]
  * @returns {Promise<{ sentiment: string; urgency: string; topics: string[]; summary: string; inferredDepartment?: string | null } | null>}
  */
+/**
+ * Map a voice transcript (Tamil / English / mixed) to rating 1–5 and coarse sentiment for the emoji scale.
+ *
+ * @param {string | null | undefined} transcript
+ * @returns {Promise<{ rating: number; sentiment: string }>}
+ */
+export async function inferRatingFromVoiceTranscript(transcript) {
+  const textRaw = String(transcript || "").trim();
+  const noop = () => ({ rating: 3, sentiment: "neutral" });
+  const shortNoContent =
+    !textRaw ||
+    /^\(No speech detected\.\)$/i.test(textRaw) ||
+    textRaw.toLowerCase() === "no speech detected";
+
+  if (shortNoContent) {
+    return noop();
+  }
+
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey || !String(apiKey).trim()) {
+    // eslint-disable-next-line no-console
+    console.log("[groq] infer voice rating skipped (GROQ_API_KEY not set)");
+    return noop();
+  }
+
+  const model = process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+  const truncated =
+    textRaw.length > 4000 ? `${textRaw.slice(0, 4000)}…` : textRaw;
+
+  const userContent = `You classify a single hospital patient's SPOKEN feedback (shown below as transcription text).
+
+The transcript may be English, Tamil, or mixed — infer satisfaction only from wording and tone in the transcript.
+
+Rating scale (exactly ONE integer):
+- 5 = Excellent — strong praise, gratitude, "very happy", exceeded expectations.
+- 4 = Good — generally positive experience, minor nuisances acceptable.
+- 3 = Okay / neutral — mixed, vague, mostly factual without strong emotion, or ambiguous.
+- 2 = Poor — clear complaints, frustration, disappointment, problems with care/service.
+- 1 = Very Poor — rage, trauma, outrage, accusations of negligence/safety failures, vows to escalate.
+
+sentiment MUST align coarsely:
+- ratings 5–4 → sentiment "positive"
+- rating 3 → sentiment "neutral"
+- ratings 2–1 → sentiment "negative"
+
+Rules:
+- Do not consider anything outside this transcript.
+- If text is meaningless noise or shorter than three meaningful words → use rating 3 and sentiment neutral.
+
+Transcript:
+"""
+
+${truncated}
+
+"""
+
+Respond with ONLY valid JSON (no markdown): {"rating": <integer 1-5>, "sentiment": "positive"|"neutral"|"negative"}`;
+
+  const response = await fetch(GROQ_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You reply only with a single JSON object. No markdown, no explanation.",
+        },
+        { role: "user", content: userContent },
+      ],
+      temperature: 0.2,
+      max_tokens: 128,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    // eslint-disable-next-line no-console
+    console.error("[groq] infer voice rating HTTP error", {
+      status: response.status,
+      bodyPreview: errText.slice(0, 400),
+    });
+    return noop();
+  }
+
+  const data = await response.json();
+  const raw = data.choices?.[0]?.message?.content?.trim();
+  if (!raw) {
+    return noop();
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(stripJsonFence(raw));
+  } catch {
+    // eslint-disable-next-line no-console
+    console.error("[groq] infer voice rating parse failed", {
+      rawPreview: raw.slice(0, 300),
+    });
+    return noop();
+  }
+
+  const r = Number(parsed.rating);
+  const bounded = Number.isFinite(r)
+    ? Math.min(5, Math.max(1, Math.round(r)))
+    : 3;
+
+  let sentiment;
+  if (bounded >= 4) sentiment = "positive";
+  else if (bounded === 3) sentiment = "neutral";
+  else sentiment = "negative";
+
+  return { rating: bounded, sentiment };
+}
+
 export async function analyzePatientFeedback(input, options = {}) {
   const feedbackId = options.feedbackId ?? "unknown";
 
