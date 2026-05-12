@@ -47,7 +47,30 @@ const feedbackVoiceUpload = multer({
 });
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
-app.use("/uploads", express.static(UPLOADS_ROOT));
+
+/** TMS loads `<audio src="https://feedback.../uploads/...">` — browsers may send Range; OPTIONS needs explicit CORS. */
+function uploadsCorsAndOptions(req, res, next) {
+  const list = String(process.env.FEEDBACK_CORS_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const origin = req.headers.origin;
+  if (list.length && origin && list.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Range");
+  res.setHeader("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+}
+
+app.use("/uploads", uploadsCorsAndOptions, express.static(UPLOADS_ROOT));
 
 const departmentSchema = new mongoose.Schema(
   {
