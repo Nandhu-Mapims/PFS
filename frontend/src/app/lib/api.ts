@@ -16,6 +16,10 @@ export interface BrandingSettings {
 
 export interface CreateFeedbackResponse extends FeedbackItem {
   ticketRaised?: boolean;
+  /** True when Feedback API has TMS_API_BASE_URL set. */
+  tmsConfigured?: boolean;
+  /** Human-readable reason when a ticket was opened but TMS did not get a row. */
+  tmsSyncHint?: string | null;
 }
 
 export interface FeedbackItem extends Omit<FeedbackPayload, "voiceRecording"> {

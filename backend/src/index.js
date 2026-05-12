@@ -880,10 +880,23 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
     }
 
     const payload = attachVoicePlaybackUrl(outDoc);
+    const tmsConfigured = isTmsConfigured();
+    let tmsSyncHint = null;
+    if (outDoc.ticketId && !tmsConfigured) {
+      tmsSyncHint =
+        "TMS sync skipped: set TMS_API_BASE_URL (and optional TMS_INGEST_TOKEN) on the Feedback API server, then restart the process.";
+    } else if (outDoc.ticketId && tmsConfigured && !outDoc.tmsTicketId && outDoc.tmsSyncError) {
+      tmsSyncHint = `TMS sync failed: ${String(outDoc.tmsSyncError).slice(0, 300)}`;
+    } else if (outDoc.ticketId && tmsConfigured && !outDoc.tmsTicketId) {
+      tmsSyncHint =
+        "Feedback ticket was opened locally but no TMS row was created (check server logs for [feedback] tms push skipped / FAILED).";
+    }
+
     return res.status(201).json({
       ...payload,
       ticketRaised: Boolean(outDoc.ticketId),
-      tmsConfigured: isTmsConfigured(),
+      tmsConfigured,
+      tmsSyncHint,
     });
   } catch (error) {
     return res.status(500).json({ message: "Failed to create feedback" });
