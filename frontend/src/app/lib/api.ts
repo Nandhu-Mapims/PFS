@@ -84,14 +84,11 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
 
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const b = body as { message?: string; detail?: string; hint?: string };
     const msg =
-      typeof b?.message === "string" && b.message.trim()
-        ? b.message.trim()
+      typeof body === "object" && body && "message" in body && typeof (body as { message?: string }).message === "string"
+        ? (body as { message: string }).message
         : "Could not save feedback";
-    const detail = typeof b?.detail === "string" && b.detail.trim() ? `\n${b.detail.trim()}` : "";
-    const hint = typeof b?.hint === "string" && b.hint.trim() ? `\n${b.hint.trim()}` : "";
-    throw new Error(`${msg}${detail}${hint}`.trim());
+    throw new Error(msg);
   }
 
   return body as CreateFeedbackResponse;

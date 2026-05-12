@@ -213,9 +213,15 @@ async function ensureDefaults() {
   }
 }
 
-async function getDepartmentDocsForFeedback() {
+/**
+ * Loads TMS departments for routing/Groq hints. Never throws — returns [] if TMS is
+ * unreachable (common on production when the Feedback server cannot call tms.mapims.edu.in).
+ */
+async function loadTmsDepartmentDocsOrEmpty() {
   if (!isTmsConfigured()) {
-    throw new Error("TMS integration is not configured");
+    // eslint-disable-next-line no-console
+    console.warn("[feedback] TMS_API_BASE_URL not set — department list disabled");
+    return [];
   }
   try {
     const result = await listTmsDepartments();
@@ -223,17 +229,23 @@ async function getDepartmentDocsForFeedback() {
     const mapped = tmsRows
       .filter((row) => row && row.name)
       .map((row) => ({
-        _id: String(row._id || row.id || ""),
+        _id: String(row._id || ""),
         name: String(row.name || "").trim(),
         description: String(row.description || "").trim(),
       }))
       .filter((row) => row.name.length > 0);
     if (mapped.length > 0) return mapped;
-    throw new Error("No departments found in TMS");
+    // eslint-disable-next-line no-console
+    console.warn("[feedback] TMS departments list was empty — continuing without department matching");
+    return [];
   } catch (error) {
     logTmsFailure("listTmsDepartments", error);
-    const inner = String(error?.message || error || "unknown");
-    throw new Error(`Could not load departments from TMS: ${inner}`);
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[feedback] Could not load departments from TMS (check server outbound HTTPS to TMS_API_BASE_URL, TLS, FEEDBACK_INGEST_TOKEN). Continuing without department list.",
+      error?.message || error
+    );
+    return [];
   }
 }
 
@@ -328,18 +340,14 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 app.get("/api/departments", async (_req, res) => {
-  try {
-    const list = await getDepartmentDocsForFeedback();
-    return res.json(
-      list.map((row) => ({
-        _id: row._id,
-        name: row.name,
-        description: row.description || "",
-      }))
-    );
-  } catch (error) {
-    return res.status(503).json({ message: error?.message || "Failed to list departments from TMS" });
-  }
+  const list = await loadTmsDepartmentDocsOrEmpty();
+  return res.json(
+    list.map((row) => ({
+      _id: row._id,
+      name: row.name,
+      description: row.description || "",
+    }))
+  );
 });
 
 app.post("/api/departments", async (req, res) => {
@@ -576,7 +584,7 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
         .json({ message: "patientName and rating are required" });
     }
 
-    const departmentDocs = await getDepartmentDocsForFeedback();
+    const departmentDocs = await loadTmsDepartmentDocsOrEmpty();
 
     const numericRating = Number(rating);
     const deptHeuristic = resolveDepartmentHeuristic(department, departmentDocs);
@@ -789,19 +797,6 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       tmsConfigured: isTmsConfigured(),
     });
   } catch (error) {
-    const msg = String(error?.message || "");
-    if (
-      msg.includes("departments from TMS") ||
-      msg.includes("No departments found in TMS") ||
-      msg.includes("TMS integration is not configured")
-    ) {
-      return res.status(503).json({
-        message: "TMS departments are required before creating feedback",
-        detail: msg,
-        hint:
-          "Check Feedback backend TMS_API_BASE_URL (e.g. https://tms.mapims.edu.in/api), network access to TMS, and that TMS_INGEST_TOKEN matches TMS FEEDBACK_INGEST_TOKEN when either is set. Test: GET /api/tms/departments on this server.",
-      });
-    }
     return res.status(500).json({ message: "Failed to create feedback" });
   }
 });
