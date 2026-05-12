@@ -64,6 +64,7 @@ async function tmsFetch(path, options = {}) {
   }
   const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
   const hasBody = options.body != null && options.body !== "";
+  const method = String(options.method || "GET").toUpperCase();
   const res = await fetch(url, {
     ...options,
     headers: {
@@ -73,6 +74,17 @@ async function tmsFetch(path, options = {}) {
   });
   const payload = await parseJsonSafe(res);
   if (!res.ok) {
+    const bodyPreview =
+      typeof payload === "object" && payload
+        ? JSON.stringify(payload).slice(0, 800)
+        : String(payload).slice(0, 800);
+    errLog("TMS HTTP error", {
+      method,
+      url,
+      status: res.status,
+      statusText: res.statusText,
+      bodyPreview,
+    });
     const msg =
       payload?.message ||
       payload?.error ||
@@ -90,6 +102,14 @@ export async function createTicketForFeedback(feedback) {
       : { ...feedback };
 
   if (plain._id != null) plain._id = String(plain._id);
+
+  log("createTicketForFeedback → POST /integrations/feedback/tickets", {
+    feedbackId: plain._id || "(none)",
+    rating: plain.rating,
+    hasVoicePath: Boolean(plain.voiceRecordingRelPath),
+    apiBase: getTmsApiBase(),
+    ingestTokenSet: Boolean(getIngestToken()),
+  });
 
   const wrapped = await tmsFetch("/integrations/feedback/tickets", {
     method: "POST",
@@ -118,6 +138,12 @@ export async function patchTmsTicketFeedbackVoice(ticketIdStr, { feedbackVoiceRe
   const idStr = String(ticketIdStr || "").trim();
   if (!idStr) return;
 
+  log("patchTmsTicketFeedbackVoice → PATCH voice-meta", {
+    tmsTicketId: idStr,
+    feedbackVoiceRecordingRelPath,
+    feedbackSourceId,
+  });
+
   await tmsFetch(`/integrations/feedback/tickets/${encodeURIComponent(idStr)}/voice-meta`, {
     method: "PATCH",
     body: JSON.stringify({
@@ -125,6 +151,7 @@ export async function patchTmsTicketFeedbackVoice(ticketIdStr, { feedbackVoiceRe
       feedbackSourceId,
     }),
   });
+  log("patchTmsTicketFeedbackVoice ok", { tmsTicketId: idStr });
 }
 
 export async function getTmsHealth() {

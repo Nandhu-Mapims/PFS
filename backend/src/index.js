@@ -152,9 +152,21 @@ function newTicketId() {
  */
 async function syncFeedbackToTms(feedback, { reason } = {}) {
   if (!isTmsConfigured()) {
+    // eslint-disable-next-line no-console
+    console.log("[feedback] tms sync skipped", {
+      feedbackId: String(feedback?._id || ""),
+      reason: "TMS_API_BASE_URL not set",
+    });
     return feedback;
   }
   try {
+    // eslint-disable-next-line no-console
+    console.log("[feedback] tms sync calling TMS…", {
+      feedbackId: String(feedback._id),
+      trigger: reason || "unspecified",
+      localTicketId: feedback.ticketId || null,
+      rating: feedback.rating,
+    });
     const tmsTicket = await createTicketForFeedback(feedback);
     const tmsId = tmsTicket?.id || tmsTicket?._id || null;
     const tmsNumber = tmsTicket?.ticketNumber || null;
@@ -180,6 +192,13 @@ async function syncFeedbackToTms(feedback, { reason } = {}) {
     return updated || feedback;
   } catch (error) {
     logTmsFailure("createTicketForFeedback", error);
+    // eslint-disable-next-line no-console
+    console.error("[feedback] tms sync FAILED", {
+      feedbackId: String(feedback?._id || ""),
+      message: error?.message || String(error),
+      httpStatus: error?.status ?? null,
+      tmsResponseBody: error?.body ?? null,
+    });
     const set = {
       tmsSyncError: String(error?.message || "TMS sync failed").slice(0, 500),
       tmsSyncedAt: new Date(),
@@ -234,7 +253,14 @@ async function loadTmsDepartmentDocsOrEmpty() {
         description: String(row.description || "").trim(),
       }))
       .filter((row) => row.name.length > 0);
-    if (mapped.length > 0) return mapped;
+    if (mapped.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log("[feedback] TMS departments loaded", {
+        count: mapped.length,
+        sampleNames: mapped.slice(0, 5).map((d) => d.name),
+      });
+      return mapped;
+    }
     // eslint-disable-next-line no-console
     console.warn("[feedback] TMS departments list was empty — continuing without department matching");
     return [];
@@ -757,8 +783,64 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       console.log("[feedback] groq skipped (set GROQ_API_KEY in .env to enable AI analysis)");
     }
 
+    const tmsReady = isTmsConfigured();
+    const willSyncTms = Boolean(
+      outDoc.ticketId && ticketIsFresh && !outDoc.tmsTicketId && tmsReady
+    );
+    if (!tmsReady) {
+      // eslint-disable-next-line no-console
+      console.log("[feedback] tms push skipped", {
+        feedbackId: String(feedback._id),
+        why: "TMS_API_BASE_URL not set",
+        ticketId: outDoc.ticketId || null,
+        ticketIsFresh,
+        ticketRule,
+        rating: numericRating,
+      });
+    } else if (!outDoc.ticketId) {
+      // eslint-disable-next-line no-console
+      console.log("[feedback] tms push skipped", {
+        feedbackId: String(feedback._id),
+        why: "no_feedback_ticket_id",
+        detail:
+          "TMS only runs when a feedback ticket is opened (rating 1, or rating 2 with multi-patient rule, or Groq negative sentiment). Rating 3–5 with neutral/positive AI usually does not open a ticket.",
+        rating: numericRating,
+        ticketRule,
+        aiSentiment: outDoc.aiSentiment || null,
+      });
+    } else if (!ticketIsFresh) {
+      // eslint-disable-next-line no-console
+      console.log("[feedback] tms push skipped", {
+        feedbackId: String(feedback._id),
+        why: "ticket_not_fresh_reuse_or_no_new_sync",
+        ticketId: outDoc.ticketId,
+        ticketRule,
+      });
+    } else if (outDoc.tmsTicketId) {
+      // eslint-disable-next-line no-console
+      console.log("[feedback] tms push skipped", {
+        feedbackId: String(feedback._id),
+        why: "already_has_tmsTicketId",
+        tmsTicketId: outDoc.tmsTicketId,
+      });
+    } else if (willSyncTms) {
+      // eslint-disable-next-line no-console
+      console.log("[feedback] tms push starting", {
+        feedbackId: String(feedback._id),
+        ticketId: outDoc.ticketId,
+        ticketRule,
+      });
+    }
+
     if (outDoc.ticketId && ticketIsFresh && !outDoc.tmsTicketId && isTmsConfigured()) {
       outDoc = await syncFeedbackToTms(outDoc, { reason: ticketRule });
+      // eslint-disable-next-line no-console
+      console.log("[feedback] tms push finished", {
+        feedbackId: String(feedback._id),
+        tmsTicketId: outDoc.tmsTicketId || null,
+        tmsTicketNumber: outDoc.tmsTicketNumber || null,
+        tmsSyncError: outDoc.tmsSyncError || null,
+      });
     }
 
     if (req.file?.buffer?.length) {
@@ -779,6 +861,13 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
             });
           } catch (patchErr) {
             logTmsFailure("patchTmsTicketFeedbackVoice", patchErr);
+            // eslint-disable-next-line no-console
+            console.error("[feedback] voice meta PATCH to TMS failed", {
+              feedbackId: String(feedback._id),
+              tmsTicketId: String(tmsId),
+              message: patchErr?.message || String(patchErr),
+              httpStatus: patchErr?.status ?? null,
+            });
           }
         }
       } catch (voiceErr) {
