@@ -25,6 +25,7 @@ import {
   tmsErrorToHttp,
   logTmsFailure,
 } from "./tmsClient.js";
+import { lookupPatientRecords, isEmrPatientLookupEnabled } from "./emrPatientLookup.js";
 
 dotenv.config();
 
@@ -93,6 +94,13 @@ const userSchema = new mongoose.Schema(
 const feedbackSchema = new mongoose.Schema(
   {
     patientName: { type: String, required: true, trim: true },
+    /** Hospital registration / UHID when the patient used EMR lookup */
+    patientRegNo: { type: String, default: "", trim: true },
+    /** Last matched encounter from EMR: outpatient vs inpatient */
+    patientEncounterType: { type: String, enum: ["", "op", "ip"], default: "" },
+    ward: { type: String, default: "", trim: true },
+    ipNo: { type: String, default: "", trim: true },
+    visitOrAdmissionDate: { type: String, default: "", trim: true },
     department: { type: String, default: "", trim: true },
     rating: { type: Number, required: true, min: 1, max: 5 },
     comments: { type: String, default: "", trim: true },
@@ -603,6 +611,41 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
   }
 });
 
+app.post("/api/patient/lookup", async (req, res) => {
+  if (!isEmrPatientLookupEnabled()) {
+    return res.status(503).json({
+      message: "Patient lookup is disabled on this server.",
+      disabled: true,
+    });
+  }
+  try {
+    const regNo = typeof req.body?.regNo === "string" ? req.body.regNo.trim() : "";
+    const patientName = typeof req.body?.patientName === "string" ? req.body.patientName.trim() : "";
+    const frmDate = typeof req.body?.frmDate === "string" ? req.body.frmDate.trim() : "";
+    const toDate = typeof req.body?.toDate === "string" ? req.body.toDate.trim() : "";
+    if (!regNo && !patientName) {
+      return res.status(400).json({ message: "Provide regNo (UHID) or patientName." });
+    }
+    if (regNo.length > 80 || patientName.length > 200) {
+      return res.status(400).json({ message: "Lookup input is too long." });
+    }
+    const result = await lookupPatientRecords({ regNo, patientName, frmDate, toDate });
+    return res.json(result);
+  } catch (error) {
+    if (error?.code === "VALIDATION") {
+      return res.status(400).json({ message: error.message });
+    }
+    if (error?.name === "AbortError") {
+      return res.status(504).json({ message: "Hospital records lookup timed out. Try again." });
+    }
+    // eslint-disable-next-line no-console
+    console.error("[patient lookup] failed", { message: error?.message || String(error) });
+    return res.status(502).json({
+      message: error?.message || "Could not reach hospital records for lookup.",
+    });
+  }
+});
+
 app.post("/api/feedback/infer-voice-rating", async (req, res) => {
   try {
     const transcript = req.body?.transcript;
@@ -626,6 +669,12 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
     const comments = req.body.comments;
     const source = req.body.source;
     const rating = Number(req.body.rating);
+    const rawEncounter = String(req.body.patientEncounterType || "").toLowerCase().trim();
+    const patientEncounterType = ["op", "ip"].includes(rawEncounter) ? rawEncounter : "";
+    const patientRegNo = String(req.body.patientRegNo || "").trim().slice(0, 80);
+    const ward = String(req.body.ward || "").trim().slice(0, 120);
+    const ipNo = String(req.body.ipNo || "").trim().slice(0, 80);
+    const visitOrAdmissionDate = String(req.body.visitOrAdmissionDate || "").trim().slice(0, 80);
 
     if (!patientName || !rating) {
       return res
@@ -718,6 +767,11 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
 
     const feedback = await Feedback.create({
       patientName,
+      patientRegNo,
+      patientEncounterType,
+      ward,
+      ipNo,
+      visitOrAdmissionDate,
       department: normalizedDepartment,
       rating: numericRating,
       comments: comments || "",

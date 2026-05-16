@@ -6,6 +6,28 @@ export interface FeedbackPayload {
   source?: "patient" | "staff" | "ai";
   /** When set, multipart upload stores audio under this feedback (voice flow). */
   voiceRecording?: Blob | null;
+  /** Hospital registration number / UHID when supplied or resolved via EMR lookup */
+  patientRegNo?: string;
+  patientEncounterType?: "op" | "ip" | "";
+  ward?: string;
+  ipNo?: string;
+  visitOrAdmissionDate?: string;
+}
+
+export interface PatientLookupMatch {
+  encounterType: "op" | "ip";
+  regNo: string;
+  patientName: string;
+  department: string;
+  ward: string;
+  patientType: string;
+  ipNo: string;
+  visitDate: string;
+  admissionDate: string;
+  tokenNo: string;
+  frmDate: string;
+  toDate: string;
+  key: string;
 }
 
 export interface BrandingSettings {
@@ -61,6 +83,20 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
   const { voiceRecording, ...fields } = payload;
   let response: Response;
 
+  const appendEmrFields = (fd: FormData) => {
+    if (fields.patientRegNo != null && fields.patientRegNo !== "") {
+      fd.append("patientRegNo", fields.patientRegNo);
+    }
+    if (fields.patientEncounterType != null && fields.patientEncounterType !== "") {
+      fd.append("patientEncounterType", fields.patientEncounterType);
+    }
+    if (fields.ward != null && fields.ward !== "") fd.append("ward", fields.ward);
+    if (fields.ipNo != null && fields.ipNo !== "") fd.append("ipNo", fields.ipNo);
+    if (fields.visitOrAdmissionDate != null && fields.visitOrAdmissionDate !== "") {
+      fd.append("visitOrAdmissionDate", fields.visitOrAdmissionDate);
+    }
+  };
+
   if (voiceRecording && voiceRecording.size > 0) {
     const fd = new FormData();
     fd.append("patientName", fields.patientName);
@@ -70,6 +106,7 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
     fd.append("rating", String(fields.rating));
     fd.append("comments", fields.comments ?? "");
     if (fields.source) fd.append("source", fields.source);
+    appendEmrFields(fd);
     const mime = voiceRecording.type || "audio/webm";
     const ext = mime.includes("mp4") ? "m4a" : "webm";
     fd.append("voiceRecording", voiceRecording, `voice-feedback.${ext}`);
@@ -96,6 +133,28 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
   }
 
   return body as CreateFeedbackResponse;
+}
+
+export async function lookupPatientRecords(payload: {
+  regNo?: string;
+  patientName?: string;
+  frmDate?: string;
+  toDate?: string;
+}): Promise<{ frmDate: string; toDate: string; matches: PatientLookupMatch[] }> {
+  const response = await fetch(`${API_BASE_URL}/api/patient/lookup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const msg =
+      typeof body === "object" && body && "message" in body && typeof (body as { message?: string }).message === "string"
+        ? (body as { message: string }).message
+        : "Patient lookup failed";
+    throw new Error(msg);
+  }
+  return body as { frmDate: string; toDate: string; matches: PatientLookupMatch[] };
 }
 
 export async function getFeedback(): Promise<FeedbackItem[]> {

@@ -258,7 +258,17 @@ export function AdminTicketsPage() {
                     <td className="px-6 py-4 font-mono text-sm text-gray-800">
                       {item.ticketId ?? item._id}
                     </td>
-                    <td className="px-6 py-4 font-medium text-gray-800">{item.patientName}</td>
+                    <td className="px-6 py-4 font-medium text-gray-800">
+                      <div>{item.patientName}</div>
+                      {item.patientRegNo?.trim() ? (
+                        <div className="text-xs text-gray-500 font-normal mt-0.5 font-mono">
+                          UHID {item.patientRegNo.trim()}
+                          {item.patientEncounterType === "op" || item.patientEncounterType === "ip"
+                            ? ` · ${item.patientEncounterType.toUpperCase()}`
+                            : ""}
+                        </div>
+                      ) : null}
+                    </td>
                     <td className="px-6 py-4 text-gray-600">{item.department?.trim() || "—"}</td>
                     <td className="px-6 py-4 text-gray-600 capitalize">
                       {item.aiSentiment ?? "—"}

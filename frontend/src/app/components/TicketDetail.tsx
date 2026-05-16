@@ -184,8 +184,34 @@ export function TicketDetail() {
                 <p className="text-base font-semibold text-gray-800 capitalize">{ticket.source}</p>
               </div>
               <div>
+                <p className="text-sm text-gray-600 mb-1">UHID / Reg. no.</p>
+                <p className="text-base font-semibold text-gray-800">{ticket.patientRegNo?.trim() || "—"}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Visit type</p>
+                <p className="text-base font-semibold text-gray-800 uppercase">
+                  {ticket.patientEncounterType === "op"
+                    ? "OP"
+                    : ticket.patientEncounterType === "ip"
+                      ? "IP"
+                      : "—"}
+                </p>
+              </div>
+              <div>
                 <p className="text-sm text-gray-600 mb-1">Department</p>
                 <p className="text-base font-semibold text-gray-800">{ticket.department || "N/A"}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Ward</p>
+                <p className="text-base font-semibold text-gray-800">{ticket.ward?.trim() || "—"}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">IP number</p>
+                <p className="text-base font-semibold text-gray-800">{ticket.ipNo?.trim() || "—"}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Visit / admission date</p>
+                <p className="text-base font-semibold text-gray-800">{ticket.visitOrAdmissionDate?.trim() || "—"}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Current Status</p>
