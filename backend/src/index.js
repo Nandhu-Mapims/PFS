@@ -8,9 +8,9 @@ import path from "path";
 import fs from "fs/promises";
 import {
   analyzePatientFeedback,
-  resolveDepartmentHintWithGroq,
+  resolveDepartmentHintWithOpenRouter,
   inferRatingFromVoiceTranscript,
-} from "./groqAnalysis.js";
+} from "./openRouterAnalysis.js";
 import { extractSarvamTranscript, stringifySarvamError } from "./sarvamSpeech.js";
 import { resolveDepartmentHeuristic } from "./departmentNormalize.js";
 import {
@@ -264,7 +264,7 @@ async function ensureDefaults() {
 }
 
 /**
- * Loads TMS departments for routing/Groq hints. Never throws — returns [] if TMS is
+ * Loads TMS departments for routing/AI hints. Never throws — returns [] if TMS is
  * unreachable (common on production when the Feedback server cannot call tms.mapims.edu.in).
  */
 async function loadTmsDepartmentDocsOrEmpty() {
@@ -567,7 +567,7 @@ app.delete("/api/users/:id", async (req, res) => {
   }
 });
 
-/** Ensures every Groq-negative feedback has a ticket id (open in Ticket Management) and reopens Resolved rows. */
+/** Ensures every AI-negative feedback has a ticket id (open in Ticket Management) and reopens Resolved rows. */
 app.post("/api/seed/open-negative-tickets", async (_req, res) => {
   try {
     const rows = await Feedback.find({ aiSentiment: "negative" }).lean();
@@ -687,21 +687,24 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
     const numericRating = Number(rating);
     const deptHeuristic = resolveDepartmentHeuristic(department, departmentDocs);
     let normalizedDepartment = deptHeuristic.name;
-    let departmentHintFromGroq = false;
+    let departmentHintFromAi = false;
     if (
       deptHeuristic.method === "unmatched" &&
-      process.env.GROQ_API_KEY &&
+      process.env.OPENROUTER_API_KEY &&
       departmentDocs.length > 0
     ) {
       try {
-        const fromAi = await resolveDepartmentHintWithGroq(department, departmentDocs);
+        const fromAi = await resolveDepartmentHintWithOpenRouter(
+          department,
+          departmentDocs
+        );
         if (fromAi) {
           normalizedDepartment = fromAi;
-          departmentHintFromGroq = true;
+          departmentHintFromAi = true;
         }
       } catch (deptAiErr) {
         // eslint-disable-next-line no-console
-        console.error("[feedback] department hint Groq failed", {
+        console.error("[feedback] department hint OpenRouter failed", {
           message: deptAiErr?.message || String(deptAiErr),
         });
       }
@@ -791,13 +794,15 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       complaintTicketRaised: Boolean(ticketId),
       ticketRule,
       departmentHeuristic: deptHeuristic.method,
-      departmentResolvedByGroqHint: departmentHintFromGroq,
+      departmentResolvedByAiHint: departmentHintFromAi,
     });
 
-    if (process.env.GROQ_API_KEY) {
+    if (process.env.OPENROUTER_API_KEY) {
       try {
         // eslint-disable-next-line no-console
-        console.log("[feedback] groq analysis starting", { feedbackId: String(feedback._id) });
+        console.log("[feedback] AI analysis starting", {
+          feedbackId: String(feedback._id),
+        });
         const ai = await analyzePatientFeedback(
           {
             patientName,
@@ -840,7 +845,7 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
             outDoc = updated;
           }
           // eslint-disable-next-line no-console
-          console.log("[feedback] groq fields saved to DB", {
+          console.log("[feedback] AI fields saved to DB", {
             feedbackId: String(feedback._id),
             aiSentiment: ai.sentiment,
             aiUrgency: ai.urgency,
@@ -848,16 +853,18 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
             departmentInferred: Boolean(!departmentProvided && ai.inferredDepartment),
           });
         }
-      } catch (groqErr) {
+      } catch (aiErr) {
         // eslint-disable-next-line no-console
-        console.error("[feedback] groq analysis failed", {
+        console.error("[feedback] AI analysis failed", {
           feedbackId: String(feedback._id),
-          message: groqErr?.message || String(groqErr),
+          message: aiErr?.message || String(aiErr),
         });
       }
     } else {
       // eslint-disable-next-line no-console
-      console.log("[feedback] groq skipped (set GROQ_API_KEY in .env to enable AI analysis)");
+      console.log(
+        "[feedback] AI analysis skipped (set OPENROUTER_API_KEY in .env to enable)"
+      );
     }
 
     const tmsReady = isTmsConfigured();
@@ -880,7 +887,7 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
         feedbackId: String(feedback._id),
         why: "no_feedback_ticket_id",
         detail:
-          "TMS only runs when a feedback ticket is opened (rating 1, or rating 2 with multi-patient rule, or Groq negative sentiment). Rating 3–5 with neutral/positive AI usually does not open a ticket.",
+          "TMS only runs when a feedback ticket is opened (rating 1, or rating 2 with multi-patient rule, or AI negative sentiment). Rating 3–5 with neutral/positive AI usually does not open a ticket.",
         rating: numericRating,
         ticketRule,
         aiSentiment: outDoc.aiSentiment || null,
@@ -996,7 +1003,7 @@ app.get("/api/analytics", async (_req, res) => {
 
     const totals = {
       all: rows.length,
-      // Sentiment is AI-derived (Groq), not inferred from numeric rating
+      // Sentiment is AI-derived (OpenRouter), not inferred from numeric rating
       negative: rows.filter((item) => item.aiSentiment === "negative").length,
       aiTickets: rows.filter((item) => item.source === "ai").length,
       averageRating: rows.length

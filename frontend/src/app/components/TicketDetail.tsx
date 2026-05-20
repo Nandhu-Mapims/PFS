@@ -239,7 +239,7 @@ export function TicketDetail() {
             </div>
           </div>
 
-          {/* AI Analysis (Groq when configured on API) */}
+          {/* AI Analysis (OpenRouter when configured on API) */}
           <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl p-6 border-2 border-[#2A6FDB] shadow-sm">
             <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
               <AlertCircle size={24} className="text-[#2A6FDB]" />

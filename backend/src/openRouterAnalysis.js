@@ -1,9 +1,32 @@
 /**
- * Groq OpenAI-compatible chat completions for patient-feedback analysis.
- * Requires GROQ_API_KEY in environment.
+ * OpenRouter OpenAI-compatible chat completions for patient-feedback analysis.
+ * Requires OPENROUTER_API_KEY in environment.
+ * @see https://openrouter.ai/docs/api/reference/overview
  */
 
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_MODEL = "meta-llama/llama-3.1-8b-instruct";
+
+function openRouterHeaders(apiKey) {
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+  const referer = process.env.OPENROUTER_HTTP_REFERER?.trim();
+  const title =
+    process.env.OPENROUTER_APP_TITLE?.trim() || "MAPIMS Feedback System";
+  if (referer) headers["HTTP-Referer"] = referer;
+  headers["X-Title"] = title;
+  return headers;
+}
+
+function getApiKey() {
+  return process.env.OPENROUTER_API_KEY?.trim() || "";
+}
+
+function getModel() {
+  return process.env.OPENROUTER_MODEL?.trim() || DEFAULT_MODEL;
+}
 
 function normalizeSentiment(value) {
   const v = String(value || "").toLowerCase();
@@ -41,7 +64,7 @@ export function resolveDepartmentFromAi(raw, choices) {
 }
 
 /**
- * @param {{ patientName: string; department: string; rating: number; comments: string }} input (rating is not sent to Groq; sentiment uses comments only)
+ * @param {{ patientName: string; department: string; rating: number; comments: string }} input (rating is not sent to the model; sentiment uses comments only)
  * @param {{ feedbackId?: string; departmentChoices?: { name: string; description?: string }[] }} [options]
  * @returns {Promise<{ sentiment: string; urgency: string; topics: string[]; summary: string; inferredDepartment?: string | null } | null>}
  */
@@ -63,14 +86,16 @@ export async function inferRatingFromVoiceTranscript(transcript) {
     return noop();
   }
 
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey || !String(apiKey).trim()) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
     // eslint-disable-next-line no-console
-    console.log("[groq] infer voice rating skipped (GROQ_API_KEY not set)");
+    console.log(
+      "[openrouter] infer voice rating skipped (OPENROUTER_API_KEY not set)"
+    );
     return noop();
   }
 
-  const model = process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+  const model = getModel();
   const truncated =
     textRaw.length > 4000 ? `${textRaw.slice(0, 4000)}…` : textRaw;
 
@@ -103,12 +128,9 @@ ${truncated}
 
 Respond with ONLY valid JSON (no markdown): {"rating": <integer 1-5>, "sentiment": "positive"|"neutral"|"negative"}`;
 
-  const response = await fetch(GROQ_URL, {
+  const response = await fetch(OPENROUTER_URL, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: openRouterHeaders(apiKey),
     body: JSON.stringify({
       model,
       messages: [
@@ -127,7 +149,7 @@ Respond with ONLY valid JSON (no markdown): {"rating": <integer 1-5>, "sentiment
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
     // eslint-disable-next-line no-console
-    console.error("[groq] infer voice rating HTTP error", {
+    console.error("[openrouter] infer voice rating HTTP error", {
       status: response.status,
       bodyPreview: errText.slice(0, 400),
     });
@@ -145,7 +167,7 @@ Respond with ONLY valid JSON (no markdown): {"rating": <integer 1-5>, "sentiment
     parsed = JSON.parse(stripJsonFence(raw));
   } catch {
     // eslint-disable-next-line no-console
-    console.error("[groq] infer voice rating parse failed", {
+    console.error("[openrouter] infer voice rating parse failed", {
       rawPreview: raw.slice(0, 300),
     });
     return noop();
@@ -167,31 +189,34 @@ Respond with ONLY valid JSON (no markdown): {"rating": <integer 1-5>, "sentiment
 export async function analyzePatientFeedback(input, options = {}) {
   const feedbackId = options.feedbackId ?? "unknown";
 
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey || !String(apiKey).trim()) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
     // eslint-disable-next-line no-console
-    console.log("[groq] skipped (GROQ_API_KEY not set)");
+    console.log("[openrouter] skipped (OPENROUTER_API_KEY not set)");
     return null;
   }
 
-  const model = process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+  const model = getModel();
 
   const comments = String(input.comments || "").trim();
-  const truncatedComments = comments.length > 4000 ? `${comments.slice(0, 4000)}…` : comments;
+  const truncatedComments =
+    comments.length > 4000 ? `${comments.slice(0, 4000)}…` : comments;
 
   const departmentChoices = Array.isArray(options.departmentChoices)
     ? options.departmentChoices.filter((c) => c && String(c.name || "").trim())
     : [];
   const deptProvided = Boolean(String(input.department || "").trim());
-  const inferDepartment =
-    !deptProvided && departmentChoices.length > 0;
+  const inferDepartment = !deptProvided && departmentChoices.length > 0;
 
   const departmentListBlock = inferDepartment
     ? `
 
 Official departments (choose at most one for routing). Each line is "Name — description":
 ${departmentChoices
-  .map((c) => `- ${String(c.name).trim()} — ${String(c.description || "").trim() || "general services"}`)
+  .map(
+    (c) =>
+      `- ${String(c.name).trim()} — ${String(c.description || "").trim() || "general services"}`
+  )
   .join("\n")}
 
 Rules for "inferredDepartment":
@@ -204,8 +229,6 @@ Rules for "inferredDepartment":
     ? `Department (as entered by patient/staff): ${String(input.department || "").slice(0, 120)}`
     : `Department: not specified — use inferredDepartment field below only.`;
 
-  // Sentiment must come from language in comments only — do not pass numeric ratings to the model
-  // so it cannot anchor sentiment to stars. Ticket/rating rules remain server-side in index.js.
   const userContent = `You are a healthcare feedback analyst. Analyze this hospital patient feedback.
 
 Patient name: ${String(input.patientName || "").slice(0, 120)}
@@ -229,19 +252,16 @@ Respond with ONLY a valid JSON object (no markdown fences) using exactly these k
 Do not include any text outside the JSON object.`;
 
   // eslint-disable-next-line no-console
-  console.log("[groq] request", {
+  console.log("[openrouter] request", {
     feedbackId,
     model,
     department: String(input.department || "").slice(0, 80) || "(none)",
     commentChars: comments.length,
   });
 
-  const response = await fetch(GROQ_URL, {
+  const response = await fetch(OPENROUTER_URL, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: openRouterHeaders(apiKey),
     body: JSON.stringify({
       model,
       messages: [
@@ -260,20 +280,22 @@ Do not include any text outside the JSON object.`;
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
     // eslint-disable-next-line no-console
-    console.error("[groq] HTTP error", {
+    console.error("[openrouter] HTTP error", {
       feedbackId,
       status: response.status,
       bodyPreview: errText.slice(0, 400),
     });
-    throw new Error(`Groq HTTP ${response.status}: ${errText.slice(0, 500)}`);
+    throw new Error(
+      `OpenRouter HTTP ${response.status}: ${errText.slice(0, 500)}`
+    );
   }
 
   const data = await response.json();
   const raw = data.choices?.[0]?.message?.content?.trim();
   if (!raw) {
     // eslint-disable-next-line no-console
-    console.error("[groq] empty completion", { feedbackId, model });
-    throw new Error("Empty Groq completion");
+    console.error("[openrouter] empty completion", { feedbackId, model });
+    throw new Error("Empty OpenRouter completion");
   }
 
   let parsed;
@@ -281,11 +303,11 @@ Do not include any text outside the JSON object.`;
     parsed = JSON.parse(stripJsonFence(raw));
   } catch {
     // eslint-disable-next-line no-console
-    console.error("[groq] parse JSON failed", {
+    console.error("[openrouter] parse JSON failed", {
       feedbackId,
       rawPreview: raw.slice(0, 500),
     });
-    throw new Error("Groq returned non-JSON");
+    throw new Error("OpenRouter returned non-JSON");
   }
 
   const topics = Array.isArray(parsed.topics)
@@ -303,11 +325,14 @@ Do not include any text outside the JSON object.`;
 
   let inferredDepartment = null;
   if (inferDepartment) {
-    inferredDepartment = resolveDepartmentFromAi(parsed.inferredDepartment, departmentChoices);
+    inferredDepartment = resolveDepartmentFromAi(
+      parsed.inferredDepartment,
+      departmentChoices
+    );
   }
 
   // eslint-disable-next-line no-console
-  console.log("[groq] analysis complete", {
+  console.log("[openrouter] analysis complete", {
     feedbackId,
     sentiment: result.sentiment,
     urgency: result.urgency,
@@ -327,17 +352,20 @@ Do not include any text outside the JSON object.`;
  * @param {{ name: string; description?: string }[]} departmentChoices
  * @returns {Promise<string | null>}
  */
-export async function resolveDepartmentHintWithGroq(userHint, departmentChoices) {
-  const apiKey = process.env.GROQ_API_KEY;
+export async function resolveDepartmentHintWithOpenRouter(
+  userHint,
+  departmentChoices
+) {
+  const apiKey = getApiKey();
   const hint = String(userHint ?? "").trim();
-  if (!apiKey || !String(apiKey).trim() || !hint) return null;
+  if (!apiKey || !hint) return null;
 
   const choices = Array.isArray(departmentChoices)
     ? departmentChoices.filter((c) => c && String(c.name || "").trim())
     : [];
   if (!choices.length) return null;
 
-  const model = process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+  const model = getModel();
   const listBlock = choices
     .map(
       (c) =>
@@ -359,18 +387,15 @@ Rules:
 Respond with ONLY valid JSON (no markdown): {"matchedDepartment": "<exact Name from list>" | null}`;
 
   // eslint-disable-next-line no-console
-  console.log("[groq] department-hint resolve", {
+  console.log("[openrouter] department-hint resolve", {
     hintPreview: hint.slice(0, 80),
     model,
     choices: choices.length,
   });
 
-  const response = await fetch(GROQ_URL, {
+  const response = await fetch(OPENROUTER_URL, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: openRouterHeaders(apiKey),
     body: JSON.stringify({
       model,
       messages: [
@@ -389,7 +414,7 @@ Respond with ONLY valid JSON (no markdown): {"matchedDepartment": "<exact Name f
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
     // eslint-disable-next-line no-console
-    console.error("[groq] department-hint HTTP error", {
+    console.error("[openrouter] department-hint HTTP error", {
       status: response.status,
       bodyPreview: errText.slice(0, 400),
     });
@@ -405,13 +430,15 @@ Respond with ONLY valid JSON (no markdown): {"matchedDepartment": "<exact Name f
     parsed = JSON.parse(stripJsonFence(raw));
   } catch {
     // eslint-disable-next-line no-console
-    console.error("[groq] department-hint parse failed", { rawPreview: raw.slice(0, 200) });
+    console.error("[openrouter] department-hint parse failed", {
+      rawPreview: raw.slice(0, 200),
+    });
     return null;
   }
 
   const resolved = resolveDepartmentFromAi(parsed.matchedDepartment, choices);
   // eslint-disable-next-line no-console
-  console.log("[groq] department-hint result", {
+  console.log("[openrouter] department-hint result", {
     matchedDepartment: resolved,
   });
   return resolved;

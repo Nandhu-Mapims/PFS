@@ -37,7 +37,7 @@ services:
       TMS_FEEDBACK_SUBCATEGORY_ID: ${TMS_FEEDBACK_SUBCATEGORY_ID:-}
       TMS_FEEDBACK_PRIORITY: ${TMS_FEEDBACK_PRIORITY:-}
       TMS_CLIENT_URL: ${TMS_CLIENT_URL:-}
-    # Create backend/.env on the server from backend/.env.example (secrets, GROQ_API_KEY, TMS_*, etc.)
+    # Create backend/.env on the server from backend/.env.example (secrets, OPENROUTER_API_KEY, TMS_*, etc.)
     env_file:
       - ./backend/.env
     depends_on:

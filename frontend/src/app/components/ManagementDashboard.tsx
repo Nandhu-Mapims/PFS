@@ -163,13 +163,13 @@ export function ManagementDashboard() {
           Management Dashboard
         </h2>
         <p className="text-muted-foreground text-sm md:text-base">
-          Sentiment breakdown uses Groq AI on comment text, not star ratings
+          Sentiment breakdown uses AI on comment text (OpenRouter), not star ratings
         </p>
       </div>
 
       {pendingAiSentimentCount > 0 && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-          {pendingAiSentimentCount} submission(s) have no AI sentiment yet (Groq disabled or not run).
+          {pendingAiSentimentCount} submission(s) have no AI sentiment yet (OpenRouter disabled or not run).
         </p>
       )}
 

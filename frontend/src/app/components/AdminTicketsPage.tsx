@@ -178,7 +178,7 @@ export function AdminTicketsPage() {
           <h2 className="text-3xl md:text-4xl font-bold text-gray-800">Ticket Management</h2>
           <p className="text-base md:text-lg text-gray-600 mt-2">
             Tickets include critical star ratings and AI-negative sentiment. Use “Open tickets for AI-negative”
-            if older feedback already has Groq sentiment but no ticket ID yet.
+            if older feedback already has AI sentiment but no ticket ID yet.
           </p>
         </div>
         <div className="text-sm text-gray-600 flex flex-wrap items-center gap-2 justify-end">
@@ -196,7 +196,7 @@ export function AdminTicketsPage() {
             onClick={() => void handleOpenNegativeTickets()}
             disabled={isLoading || isSyncing}
             className="px-3 py-1 rounded-lg border border-[#2A6FDB] text-xs font-semibold text-[#2A6FDB] hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Assign ticket IDs to feedback where AI sentiment is negative (requires Groq analysis on those rows)"
+            title="Assign ticket IDs to feedback where AI sentiment is negative (requires OpenRouter analysis on those rows)"
           >
             {isSyncing ? "Syncing…" : "Open tickets for AI-negative"}
           </button>
