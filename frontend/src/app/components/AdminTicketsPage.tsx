@@ -1,14 +1,39 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { TicketFiltersPanel } from "./TicketFiltersPanel";
+import { filterBySubmittedDate } from "./SubmittedDateFilterBar";
+import {
+  bucketKeyForPeriod,
+  endOfToday,
+  enumerateBucketKeys,
+  formatBucketLabel,
+  periodWindowStart,
+  resolveFilterWindow,
+  thisWeekRange,
+  type PeriodGranularity,
+} from "../lib/insightsFilters";
+import {
+  filterTicketsByDimensions,
+  ticketDepartment,
+  ticketService,
+  uniqueSorted,
+  type TicketSentimentFilter,
+  type TicketStatusFilter,
+} from "../lib/ticketFilters";
+import { buildPatientFeedbackGroups } from "../lib/patientFeedbackGroups";
+import { PatientGroupedFeedbackTable } from "./PatientGroupedFeedbackTable";
 import {
   deleteFeedback,
   getFeedback,
-  getTmsHealth,
+  getHospitalDepartments,
+  getServices,
   seedOpenNegativeTickets,
-  syncFeedbackToTms,
   type FeedbackItem,
-  type TmsHealth,
 } from "../lib/api";
+
+function isOpenTicket(item: FeedbackItem): boolean {
+  return Boolean(item.ticketId) && item.status !== "Resolved";
+}
 
 const ratingLabel: Record<number, string> = {
   1: "Very Poor",
@@ -27,9 +52,17 @@ export function AdminTicketsPage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const [tmsHealth, setTmsHealth] = useState<TmsHealth | null>(null);
-  const [tmsRowSyncing, setTmsRowSyncing] = useState<string | null>(null);
-  const [autoSyncingIds, setAutoSyncingIds] = useState<Record<string, boolean>>({});
+  const [periodFilter, setPeriodFilter] = useState<PeriodGranularity>("weekly");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [dateFilterActive, setDateFilterActive] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>("all");
+  const [departmentFilter, setDepartmentFilter] = useState("all");
+  const [serviceFilter, setServiceFilter] = useState("all");
+  const [sentimentFilter, setSentimentFilter] = useState<TicketSentimentFilter>("all");
+  const [catalogDepartments, setCatalogDepartments] = useState<string[]>([]);
+  const [catalogServices, setCatalogServices] = useState<string[]>([]);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
 
   const loadTickets = useCallback(async (opts?: { silent?: boolean }) => {
     try {
@@ -74,18 +107,18 @@ export function AdminTicketsPage() {
   }, [loadTickets]);
 
   useEffect(() => {
-    let cancelled = false;
     (async () => {
       try {
-        const h = await getTmsHealth();
-        if (!cancelled) setTmsHealth(h);
+        const [depts, services] = await Promise.all([
+          getHospitalDepartments(),
+          getServices(),
+        ]);
+        setCatalogDepartments(depts.map((d) => d.name).filter(Boolean));
+        setCatalogServices(services.map((s) => s.name).filter(Boolean));
       } catch {
-        if (!cancelled) setTmsHealth({ configured: false, message: "TMS check failed" });
+        /* dropdowns still built from ticket rows */
       }
     })();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => {
@@ -95,63 +128,152 @@ export function AdminTicketsPage() {
     return () => window.clearInterval(interval);
   }, [loadTickets]);
 
-  const handleSyncRowToTms = useCallback(
-    async (item: FeedbackItem) => {
-      const key = item._id;
-      try {
-        setTmsRowSyncing(key);
-        setError(null);
-        const result = await syncFeedbackToTms(item._id);
-        setItems((current) =>
-          current.map((row) => (row._id === key ? { ...row, ...result.feedback } : row))
-        );
-        if (!result.ok) {
-          setError(
-            result.feedback?.tmsSyncError ||
-              "TMS rejected the ticket. Check service-account access in backend logs."
-          );
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "TMS sync failed");
-      } finally {
-        setTmsRowSyncing(null);
-      }
-    },
-    []
+  const ticketRows = useMemo(
+    () => items.filter((item) => Boolean(item.ticketId)),
+    [items]
   );
 
-  useEffect(() => {
-    if (!tmsHealth?.configured || !tmsHealth?.reachable) return;
-    const pending = items.filter(
-      (item) => Boolean(item.ticketId) && !item.tmsTicketId && !autoSyncingIds[item._id]
-    );
-    if (!pending.length) return;
+  const departmentOptions = useMemo(
+    () =>
+      uniqueSorted([
+        ...catalogDepartments,
+        ...ticketRows.map(ticketDepartment),
+      ]),
+    [catalogDepartments, ticketRows]
+  );
 
-    pending.slice(0, 5).forEach((item) => {
-      setAutoSyncingIds((prev) => ({ ...prev, [item._id]: true }));
-      void syncFeedbackToTms(item._id)
-        .then((result) => {
-          setItems((current) =>
-            current.map((row) => (row._id === item._id ? { ...row, ...result.feedback } : row))
-          );
-        })
-        .catch((err) => {
-          setError(err instanceof Error ? err.message : "TMS auto-sync failed");
-        })
-        .finally(() => {
-          setAutoSyncingIds((prev) => {
-            const next = { ...prev };
-            delete next[item._id];
-            return next;
-          });
-        });
-    });
-  }, [autoSyncingIds, items, tmsHealth]);
+  const serviceOptions = useMemo(
+    () =>
+      uniqueSorted([
+        ...catalogServices,
+        ...ticketRows.map(ticketService),
+      ]),
+    [catalogServices, ticketRows]
+  );
+
+  const hasDimensionFilters =
+    statusFilter !== "all" ||
+    departmentFilter !== "all" ||
+    serviceFilter !== "all" ||
+    sentimentFilter !== "all" ||
+    dateFilterActive;
 
   const sortedItems = useMemo(() => {
-    const ticketRows = items.filter((item) => Boolean(item.ticketId));
-    return [...ticketRows].sort((a, b) => b._id.localeCompare(a._id));
-  }, [items]);
+    const byDate = filterBySubmittedDate(ticketRows, {
+      dateFilterActive,
+      periodFilter,
+      customFrom,
+      customTo,
+    });
+    const filtered = filterTicketsByDimensions(byDate, {
+      status: statusFilter,
+      department: departmentFilter,
+      service: serviceFilter,
+      sentiment: sentimentFilter,
+    });
+    return [...filtered].sort((a, b) => b._id.localeCompare(a._id));
+  }, [
+    ticketRows,
+    dateFilterActive,
+    periodFilter,
+    customFrom,
+    customTo,
+    statusFilter,
+    departmentFilter,
+    serviceFilter,
+    sentimentFilter,
+  ]);
+
+  const patientGroups = useMemo(
+    () => buildPatientFeedbackGroups(sortedItems),
+    [sortedItems]
+  );
+
+  const activeFilterChips = useMemo(() => {
+    const chips: Array<{ key: string; label: string }> = [];
+    if (statusFilter === "pending") chips.push({ key: "status", label: "Pending" });
+    else if (statusFilter !== "all") chips.push({ key: "status", label: statusFilter });
+    if (departmentFilter !== "all") chips.push({ key: "dept", label: departmentFilter });
+    if (serviceFilter !== "all") chips.push({ key: "svc", label: serviceFilter });
+    if (sentimentFilter !== "all") chips.push({ key: "sent", label: sentimentFilter });
+    if (dateFilterActive) chips.push({ key: "date", label: "Date range" });
+    return chips;
+  }, [statusFilter, departmentFilter, serviceFilter, sentimentFilter, dateFilterActive]);
+
+  const clearAllFilters = () => {
+    setStatusFilter("all");
+    setDepartmentFilter("all");
+    setServiceFilter("all");
+    setSentimentFilter("all");
+    setCustomFrom("");
+    setCustomTo("");
+    setDateFilterActive(false);
+    setFiltersExpanded(false);
+  };
+
+  const clearDateFilter = () => {
+    setCustomFrom("");
+    setCustomTo("");
+    setDateFilterActive(true);
+  };
+
+  const showAllTickets = () => {
+    setCustomFrom("");
+    setCustomTo("");
+    setDateFilterActive(false);
+  };
+
+  const applyCustomFrom = (value: string) => {
+    setCustomFrom(value);
+    setDateFilterActive(true);
+  };
+
+  const applyCustomTo = (value: string) => {
+    setCustomTo(value);
+    setDateFilterActive(true);
+  };
+
+  const ticketStats = useMemo(() => {
+    const openTickets = ticketRows.filter(isOpenTicket);
+    const thisWeekWindow = resolveFilterWindow("weekly", thisWeekRange());
+    const pendingThisWeek = openTickets.filter((item) => {
+      const d = new Date(item.createdAt);
+      return d >= thisWeekWindow.start && d <= thisWeekWindow.end;
+    }).length;
+
+    const newCount = openTickets.filter((item) => item.status === "New").length;
+    const inProgressCount = openTickets.filter((item) => item.status === "In Progress").length;
+
+    const last12WeeksWindow = {
+      start: periodWindowStart("weekly"),
+      end: endOfToday(),
+    };
+    const pendingByWeekKey = new Map<string, number>();
+    for (const item of openTickets) {
+      const key = bucketKeyForPeriod(new Date(item.createdAt), "weekly");
+      pendingByWeekKey.set(key, (pendingByWeekKey.get(key) || 0) + 1);
+    }
+    const weekKeys = enumerateBucketKeys("weekly", last12WeeksWindow);
+    const pendingByWeek = weekKeys.slice(-8).map((key) => ({
+      key,
+      label: formatBucketLabel(key, "weekly"),
+      count: pendingByWeekKey.get(key) || 0,
+      isCurrentWeek: key === bucketKeyForPeriod(new Date(), "weekly"),
+    }));
+
+    const pendingInView = sortedItems.filter(isOpenTicket).length;
+
+    return {
+      totalTickets: ticketRows.length,
+      pendingOverall: openTickets.length,
+      pendingThisWeek,
+      newCount,
+      inProgressCount,
+      pendingInView,
+      pendingByWeek,
+    };
+  }, [ticketRows, sortedItems]);
+
   const showDeleteActions = location.pathname.includes("/delete");
 
   const handleDelete = useCallback(
@@ -171,23 +293,24 @@ export function AdminTicketsPage() {
     []
   );
 
+  const resolvedCount = ticketRows.length - ticketStats.pendingOverall;
+  const maxWeekCount = Math.max(1, ...ticketStats.pendingByWeek.map((w) => w.count));
+
   return (
-    <div className="w-full">
-      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+    <div className="w-full max-w-[1400px] mx-auto space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-3xl md:text-4xl font-bold text-gray-800">Ticket Management</h2>
-          <p className="text-base md:text-lg text-gray-600 mt-2">
-            Tickets include critical star ratings and AI-negative sentiment. Use “Open tickets for AI-negative”
-            if older feedback already has AI sentiment but no ticket ID yet.
+          <h2 className="text-2xl font-bold text-gray-900">Ticket Management</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Filter by status, department, service, and date — then open a ticket to update progress.
           </p>
         </div>
-        <div className="text-sm text-gray-600 flex flex-wrap items-center gap-2 justify-end">
-          Total tickets: <span className="font-bold text-gray-800">{sortedItems.length}</span>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => void loadTickets({ silent: true })}
             disabled={isLoading || isRefreshing}
-            className="px-3 py-1 rounded-lg border border-gray-300 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="h-9 px-3 rounded-lg border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             {isRefreshing ? "Refreshing…" : "Refresh"}
           </button>
@@ -195,154 +318,135 @@ export function AdminTicketsPage() {
             type="button"
             onClick={() => void handleOpenNegativeTickets()}
             disabled={isLoading || isSyncing}
-            className="px-3 py-1 rounded-lg border border-[#2A6FDB] text-xs font-semibold text-[#2A6FDB] hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Assign ticket IDs to feedback where AI sentiment is negative (requires OpenRouter analysis on those rows)"
+            className="h-9 px-3 rounded-lg bg-[#2A6FDB] text-sm font-medium text-white hover:bg-[#1e5bbd] disabled:opacity-50"
+            title="Assign ticket IDs where AI sentiment is negative"
           >
-            {isSyncing ? "Syncing…" : "Open tickets for AI-negative"}
+            {isSyncing ? "Syncing…" : "Open AI-negative"}
           </button>
         </div>
       </div>
 
-      {syncMessage && (
-        <p className="text-sm text-[#2FBF71] mb-4" role="status">
+      {syncMessage ? (
+        <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2" role="status">
           {syncMessage}
         </p>
-      )}
+      ) : null}
 
-      {tmsHealth && (
-        <div
-          className={`mb-4 px-4 py-2 rounded-lg text-sm border ${
-            tmsHealth.configured && tmsHealth.reachable
-              ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-              : tmsHealth.configured
-                ? "bg-amber-50 border-amber-200 text-amber-800"
-                : "bg-gray-50 border-gray-200 text-gray-700"
-          }`}
-        >
-          <strong>TMS:</strong>{" "}
-          {tmsHealth.configured
-            ? tmsHealth.reachable
-              ? "Connected. New negative-feedback tickets will be created in TMS automatically."
-              : "Configured but unreachable. Check TMS_API_BASE_URL and that the TMS server is running."
-            : tmsHealth.message ||
-              "Not configured. Set TMS_API_BASE_URL in Feedback backend/.env (e.g. https://tms.mapims.edu.in/api)."}
+      <div className="flex flex-wrap gap-2">
+        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 min-w-[88px]">
+          <p className="text-[10px] font-medium text-gray-500">Total</p>
+          <p className="text-lg font-bold tabular-nums">{ticketStats.totalTickets}</p>
         </div>
-      )}
+        <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 min-w-[88px]">
+          <p className="text-[10px] font-medium text-amber-800">Pending</p>
+          <p className="text-lg font-bold tabular-nums text-amber-900">{ticketStats.pendingOverall}</p>
+          <p className="text-[10px] text-amber-700/80">
+            {ticketStats.newCount} new · {ticketStats.inProgressCount} active
+          </p>
+        </div>
+        <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2 min-w-[88px]">
+          <p className="text-[10px] font-medium text-[#1e5bbd]">This week</p>
+          <p className="text-lg font-bold tabular-nums text-[#2A6FDB]">{ticketStats.pendingThisWeek}</p>
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 min-w-[88px]">
+          <p className="text-[10px] font-medium text-gray-500">Resolved</p>
+          <p className="text-lg font-bold tabular-nums text-emerald-700">{resolvedCount}</p>
+        </div>
+        {hasDimensionFilters ? (
+          <div className="rounded-lg border border-[#2A6FDB]/30 bg-blue-50/40 px-3 py-2 min-w-[88px]">
+            <p className="text-[10px] font-medium text-[#1e5bbd]">In view</p>
+            <p className="text-lg font-bold tabular-nums text-[#2A6FDB]">{sortedItems.length}</p>
+          </div>
+        ) : null}
+      </div>
 
-      <div className="bg-white rounded-xl shadow-md overflow-hidden">
+      <details className="group rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+        <summary className="cursor-pointer text-xs font-medium text-gray-600 list-none flex items-center gap-1.5 select-none">
+          <span className="inline-block transition-transform group-open:rotate-90">▸</span>
+          Pending trend by week
+        </summary>
+        <div className="mt-3 flex items-end gap-1 h-14">
+          {ticketStats.pendingByWeek.map((week) => (
+            <div
+              key={week.key}
+              className="flex-1 flex flex-col items-center justify-end gap-1 min-w-0"
+              title={`${week.label}: ${week.count} open`}
+            >
+              <div
+                className={`w-full max-w-[32px] rounded-t transition-all ${
+                  week.isCurrentWeek ? "bg-[#2A6FDB]" : "bg-amber-400/80"
+                }`}
+                style={{ height: `${Math.max(week.count > 0 ? 8 : 2, (week.count / maxWeekCount) * 48)}px` }}
+              />
+              <span
+                className={`text-[9px] truncate w-full text-center ${
+                  week.isCurrentWeek ? "text-[#2A6FDB] font-semibold" : "text-gray-500"
+                }`}
+              >
+                {week.label.replace(/^Wk /, "")}
+              </span>
+            </div>
+          ))}
+        </div>
+      </details>
+
+      <TicketFiltersPanel
+        expanded={filtersExpanded}
+        onExpandedChange={setFiltersExpanded}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        departmentFilter={departmentFilter}
+        onDepartmentFilterChange={setDepartmentFilter}
+        serviceFilter={serviceFilter}
+        onServiceFilterChange={setServiceFilter}
+        sentimentFilter={sentimentFilter}
+        onSentimentFilterChange={setSentimentFilter}
+        departmentOptions={departmentOptions}
+        serviceOptions={serviceOptions}
+        periodFilter={periodFilter}
+        onPeriodFilterChange={(id) => {
+          setPeriodFilter(id);
+          setDateFilterActive(true);
+        }}
+        customFrom={customFrom}
+        customTo={customTo}
+        onCustomFromChange={applyCustomFrom}
+        onCustomToChange={applyCustomTo}
+        dateFilterActive={dateFilterActive}
+        onShowAllDates={showAllTickets}
+        onClearDatePreset={clearDateFilter}
+        activeChips={activeFilterChips}
+        hasActiveFilters={hasDimensionFilters}
+        onClearAll={clearAllFilters}
+        resultCount={patientGroups.length}
+        totalCount={ticketRows.length}
+        resultUnit="patients"
+      />
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         {isLoading ? (
           <p className="p-6 text-gray-600">Loading tickets...</p>
         ) : error ? (
           <p className="p-6 text-red-600">{error}</p>
-        ) : !sortedItems.length ? (
-          <p className="p-6 text-gray-600">No tickets available yet.</p>
+        ) : !patientGroups.length ? (
+          <p className="p-6 text-gray-600">
+            {ticketRows.length && hasDimensionFilters
+              ? "No tickets match the selected filters."
+              : "No tickets available yet."}
+          </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-[#F5F7FA]">
-                <tr>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Ticket ID</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Patient</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Department</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">AI sentiment</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Rating</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Status</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">TMS</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Submitted</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {sortedItems.map((item) => (
-                  <tr key={item._id} className="hover:bg-[#F5F7FA] transition-colors">
-                    <td className="px-6 py-4 font-mono text-sm text-gray-800">
-                      {item.ticketId ?? item._id}
-                    </td>
-                    <td className="px-6 py-4 font-medium text-gray-800">
-                      <div>{item.patientName}</div>
-                      {item.patientRegNo?.trim() ? (
-                        <div className="text-xs text-gray-500 font-normal mt-0.5 font-mono">
-                          UHID {item.patientRegNo.trim()}
-                          {item.patientEncounterType === "op" || item.patientEncounterType === "ip"
-                            ? ` · ${item.patientEncounterType.toUpperCase()}`
-                            : ""}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">{item.department?.trim() || "—"}</td>
-                    <td className="px-6 py-4 text-gray-600 capitalize">
-                      {item.aiSentiment ?? "—"}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {item.rating} - {ratingLabel[item.rating] ?? "N/A"}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">{item.status}</td>
-                    <td className="px-6 py-4 text-sm">
-                      {item.tmsTicketNumber || item.tmsTicketId ? (
-                        <div className="flex flex-col">
-                          {item.tmsTicketUrl ? (
-                            <a
-                              href={item.tmsTicketUrl}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              className="font-mono text-[#2A6FDB] hover:underline"
-                            >
-                              {item.tmsTicketNumber || item.tmsTicketId}
-                            </a>
-                          ) : (
-                            <span className="font-mono text-emerald-700">
-                              {item.tmsTicketNumber || item.tmsTicketId}
-                            </span>
-                          )}
-                          <span className="text-[11px] text-gray-500">
-                            {item.tmsSyncedAt
-                              ? `synced ${new Date(item.tmsSyncedAt).toLocaleString()}`
-                              : "synced"}
-                          </span>
-                        </div>
-                      ) : tmsHealth?.configured ? (
-                        <span
-                          className="inline-flex px-2 py-1 rounded border border-amber-300 text-amber-800 text-xs font-semibold"
-                          title={item.tmsSyncError || "Auto-syncing to TMS"}
-                        >
-                          {autoSyncingIds[item._id] || tmsRowSyncing === item._id
-                            ? "Auto-syncing…"
-                            : item.tmsSyncError
-                              ? "Auto-sync failed"
-                              : "Pending auto-sync"}
-                        </span>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {new Date(item.createdAt).toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/ticket/${item._id}`)}
-                          className="px-3 py-2 rounded-lg bg-[#2A6FDB] text-white text-sm font-semibold hover:bg-[#1e5bbd] transition-colors"
-                        >
-                          View Ticket
-                        </button>
-                        {showDeleteActions && (
-                          <button
-                            type="button"
-                            onClick={() => void handleDelete(item)}
-                            className="px-3 py-2 rounded-lg bg-[#E5533D] text-white text-sm font-semibold hover:bg-[#d43e29] transition-colors"
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <p className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100 bg-gray-50/80">
+              Grouped by patient · click ▶ to see each service ticket (split issues)
+            </p>
+            <PatientGroupedFeedbackTable
+              groups={patientGroups}
+              variant="tickets"
+              onViewItem={(item) => navigate(`/ticket/${item._id}`)}
+              onDeleteItem={showDeleteActions ? (item) => void handleDelete(item) : undefined}
+              emptyMessage="No tickets to show."
+            />
+          </>
         )}
       </div>
     </div>

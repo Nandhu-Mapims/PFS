@@ -1,20 +1,30 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import mongoose from "mongoose";
 import multer from "multer";
 import bcrypt from "bcryptjs";
 import path from "path";
 import fs from "fs/promises";
 import {
   analyzePatientFeedback,
-  resolveDepartmentHintWithOpenRouter,
+  resolveServiceFromAi,
+  resolveServiceHintWithOpenRouter,
   inferRatingFromVoiceTranscript,
 } from "./openRouterAnalysis.js";
 import { extractSarvamTranscript, stringifySarvamError } from "./sarvamSpeech.js";
-import { resolveDepartmentHeuristic } from "./departmentNormalize.js";
+import {
+  buildComplaintSignature,
+  evaluateTicketForFeedback,
+  ensureIssuesList,
+  newSubmissionGroupId,
+  resolveServiceHeuristic,
+} from "./feedbackIssueProcessing.js";
+import { sanitizeOptionalLabel } from "./fieldSanitize.js";
+import { filterAiTopicsForTranscript } from "./aiTopicsFilter.js";
 import {
   isTmsConfigured,
+  isTmsCatalogEnabled,
+  isTmsOutboundEnabled,
   createTicketForFeedback,
   patchTmsTicketFeedbackVoice,
   getTmsHealth,
@@ -26,6 +36,21 @@ import {
   logTmsFailure,
 } from "./tmsClient.js";
 import { lookupPatientRecords, isEmrPatientLookupEnabled } from "./emrPatientLookup.js";
+import {
+  Branding,
+  Department,
+  Feedback,
+  RoutingService,
+  User,
+  mongoose,
+} from "./models.js";
+import {
+  attachBotAnswerPlaybackUrls,
+  buildBotCommentsFromAnswers,
+  ensureBotConversationConfig,
+  registerBotConversationRoutes,
+  saveBotAnswerRecording,
+} from "./botConversation.js";
 
 dotenv.config();
 
@@ -42,9 +67,17 @@ const speechUpload = multer({
   limits: { fileSize: 12 * 1024 * 1024 },
 });
 
-const feedbackVoiceUpload = multer({
+const feedbackSubmitUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
+}).fields([
+  { name: "voiceRecording", maxCount: 1 },
+  { name: "answerAudio", maxCount: 12 },
+]);
+
+const botAudioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 40 * 1024 * 1024 },
 });
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
@@ -73,79 +106,140 @@ function uploadsCorsAndOptions(req, res, next) {
 
 app.use("/uploads", uploadsCorsAndOptions, express.static(UPLOADS_ROOT));
 
-const departmentSchema = new mongoose.Schema(
-  {
-    name: { type: String, required: true, trim: true, unique: true },
-    description: { type: String, default: "", trim: true },
-  },
-  { timestamps: true }
-);
-
-const userSchema = new mongoose.Schema(
-  {
-    username: { type: String, required: true, trim: true, unique: true, lowercase: true },
-    passwordHash: { type: String, required: true },
-    role: { type: String, enum: ["admin", "staff"], required: true },
-    departmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Department", default: null },
-  },
-  { timestamps: true }
-);
-
-const feedbackSchema = new mongoose.Schema(
-  {
-    patientName: { type: String, required: true, trim: true },
-    /** Hospital registration / UHID when the patient used EMR lookup */
-    patientRegNo: { type: String, default: "", trim: true },
-    /** Last matched encounter from EMR: outpatient vs inpatient */
-    patientEncounterType: { type: String, enum: ["", "op", "ip"], default: "" },
-    ward: { type: String, default: "", trim: true },
-    ipNo: { type: String, default: "", trim: true },
-    visitOrAdmissionDate: { type: String, default: "", trim: true },
-    department: { type: String, default: "", trim: true },
-    rating: { type: Number, required: true, min: 1, max: 5 },
-    comments: { type: String, default: "", trim: true },
-    status: {
-      type: String,
-      enum: ["New", "In Progress", "Resolved"],
-      default: "New",
-    },
-    source: {
-      type: String,
-      enum: ["patient", "staff", "ai"],
-      default: "patient",
-    },
-    complaintSignature: { type: String, default: "", index: true },
-    ticketId: { type: String, default: null, index: true },
-    aiSentiment: {
-      type: String,
-      enum: ["positive", "neutral", "negative"],
-      default: null,
-    },
-    aiUrgency: {
-      type: String,
-      enum: ["low", "medium", "high"],
-      default: null,
-    },
-    aiTopics: { type: [String], default: [] },
-    aiSummary: { type: String, default: "" },
-    aiAnalyzedAt: { type: Date, default: null },
-    tmsTicketId: { type: String, default: null, index: true },
-    tmsTicketNumber: { type: String, default: null, index: true },
-    tmsTicketUrl: { type: String, default: null },
-    tmsSyncedAt: { type: Date, default: null },
-    tmsSyncError: { type: String, default: null },
-    voiceRecordingRelPath: { type: String, default: null, index: false },
-  },
-  { timestamps: true }
-);
-
 function attachVoicePlaybackUrl(doc) {
   if (!doc) return doc;
-  const plain = typeof doc.toObject === "function" ? doc.toObject() : { ...doc };
+  let plain = typeof doc.toObject === "function" ? doc.toObject() : { ...doc };
   if (plain.voiceRecordingRelPath) {
     plain.voiceRecordingUrl = `/uploads/${String(plain.voiceRecordingRelPath).replace(/^\/+/, "")}`;
   }
+  plain = attachBotAnswerPlaybackUrls(plain);
   return plain;
+}
+
+const DEFAULT_VOICE_RECORDING_MAX_SECONDS = 120;
+const DEFAULT_BOT_THINK_SECONDS = 3;
+
+function normalizeVoiceRecordingMaxSeconds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_VOICE_RECORDING_MAX_SECONDS;
+  return Math.min(600, Math.max(15, Math.round(n)));
+}
+
+function normalizeBotThinkSeconds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_BOT_THINK_SECONDS;
+  return Math.min(30, Math.max(1, Math.round(n)));
+}
+
+function serializeBrandingSettings(doc) {
+  if (!doc) {
+    return {
+      primaryColor: "#2A6FDB",
+      accentColor: "#2FBF71",
+      pageBackgroundColor: "#F5F7FA",
+      logoDataUrl: null,
+      voiceRecordingMaxSeconds: DEFAULT_VOICE_RECORDING_MAX_SECONDS,
+      botThinkSeconds: DEFAULT_BOT_THINK_SECONDS,
+    };
+  }
+  return {
+    primaryColor: doc.primaryColor,
+    accentColor: doc.accentColor || "#2FBF71",
+    pageBackgroundColor: doc.pageBackgroundColor,
+    logoDataUrl: doc.logoDataUrl ?? null,
+    voiceRecordingMaxSeconds: normalizeVoiceRecordingMaxSeconds(doc.voiceRecordingMaxSeconds),
+    botThinkSeconds: normalizeBotThinkSeconds(doc.botThinkSeconds),
+  };
+}
+
+function mergeRowWithGroupDonor(plain, donorPlain) {
+  if (!donorPlain) return plain;
+  const donorComments = String(donorPlain.comments || "").trim();
+  const rowComments = String(plain.comments || "").trim();
+  const useDonorTranscript =
+    donorComments.length > 0 &&
+    (rowComments.length < 40 ||
+      (plain.isSplitChild && donorComments.length > rowComments.length + 20));
+
+  return {
+    ...plain,
+    submissionMode: plain.submissionMode || donorPlain.submissionMode || "bot",
+    botConversationAnswers: donorPlain.botConversationAnswers?.length
+      ? donorPlain.botConversationAnswers
+      : plain.botConversationAnswers,
+    voiceRecordingRelPath: plain.voiceRecordingRelPath || donorPlain.voiceRecordingRelPath,
+    voiceRecordingUrl: plain.voiceRecordingUrl || donorPlain.voiceRecordingUrl,
+    botVoiceSourceFeedbackId: donorPlain.botConversationAnswers?.length
+      ? String(donorPlain._id)
+      : plain.botVoiceSourceFeedbackId,
+    ...(useDonorTranscript ? { comments: donorComments } : {}),
+  };
+}
+
+/** Split tickets: attach parent voice recording, bot Q&A, and full STT from same submission group. */
+async function enrichFeedbackWithGroupDonor(row) {
+  const plain = attachVoicePlaybackUrl(row);
+  if (!plain.submissionGroupId) {
+    return plain;
+  }
+
+  const needsVoice = !plain.voiceRecordingRelPath;
+  const needsBot =
+    !Array.isArray(plain.botConversationAnswers) || plain.botConversationAnswers.length === 0;
+  const needsTranscript =
+    plain.isSplitChild &&
+    String(plain.comments || "").length < 80;
+
+  if (!needsVoice && !needsBot && !needsTranscript) {
+    return plain;
+  }
+
+  const donor = await Feedback.findOne({
+    submissionGroupId: plain.submissionGroupId,
+    isSplitChild: { $ne: true },
+  })
+    .sort({ _id: 1 })
+    .lean();
+
+  if (!donor) {
+    return plain;
+  }
+
+  return mergeRowWithGroupDonor(plain, attachVoicePlaybackUrl(donor));
+}
+
+async function enrichFeedbackListWithGroupDonor(rows) {
+  const plainRows = rows.map((row) => attachVoicePlaybackUrl(row));
+  const groupIds = new Set();
+  for (const row of plainRows) {
+    if (row.submissionGroupId) {
+      groupIds.add(row.submissionGroupId);
+    }
+  }
+  if (groupIds.size === 0) {
+    return plainRows;
+  }
+
+  const donors = await Feedback.find({
+    submissionGroupId: { $in: [...groupIds] },
+    isSplitChild: { $ne: true },
+  })
+    .sort({ _id: 1 })
+    .lean();
+
+  const donorByGroup = new Map();
+  for (const donor of donors) {
+    const key = donor.submissionGroupId;
+    if (!key || donorByGroup.has(key)) continue;
+    donorByGroup.set(key, attachVoicePlaybackUrl(donor));
+  }
+
+  return plainRows.map((row) => {
+    if (!row.submissionGroupId) {
+      return row;
+    }
+    return mergeRowWithGroupDonor(row, donorByGroup.get(row.submissionGroupId));
+  });
 }
 
 async function saveFeedbackVoiceRecording(feedbackId, fileBuffer, mimeHint = "") {
@@ -157,21 +251,6 @@ async function saveFeedbackVoiceRecording(feedbackId, fileBuffer, mimeHint = "")
   return rel;
 }
 
-const brandingSchema = new mongoose.Schema(
-  {
-    key: { type: String, required: true, unique: true, default: "global" },
-    primaryColor: { type: String, required: true, default: "#2A6FDB" },
-    pageBackgroundColor: { type: String, required: true, default: "#F5F7FA" },
-    logoDataUrl: { type: String, default: null },
-  },
-  { timestamps: true }
-);
-
-const Department = mongoose.model("Department", departmentSchema);
-const User = mongoose.model("User", userSchema);
-const Feedback = mongoose.model("Feedback", feedbackSchema);
-const Branding = mongoose.model("Branding", brandingSchema);
-
 function newTicketId() {
   return `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 }
@@ -182,11 +261,13 @@ function newTicketId() {
  * stash the error on the feedback row for diagnostics. Returns the patched doc.
  */
 async function syncFeedbackToTms(feedback, { reason } = {}) {
-  if (!isTmsConfigured()) {
+  if (!isTmsOutboundEnabled()) {
     // eslint-disable-next-line no-console
     console.log("[feedback] tms sync skipped", {
       feedbackId: String(feedback?._id || ""),
-      reason: "TMS_API_BASE_URL not set",
+      reason: isTmsConfigured()
+        ? "TMS_OUTBOUND_ENABLED is not set"
+        : "TMS_API_BASE_URL not set",
     });
     return feedback;
   }
@@ -242,14 +323,10 @@ async function syncFeedbackToTms(feedback, { reason } = {}) {
 async function ensureDefaults() {
   const deptCount = await Department.countDocuments();
   if (deptCount === 0) {
-    await Department.insertMany([
-      { name: "Cardiology", description: "Heart care" },
-      { name: "Neurology", description: "Brain & spine" },
-      { name: "Emergency", description: "24/7 emergency" },
-      { name: "Orthopedics", description: "Bones & joints" },
-      { name: "Pediatrics", description: "Children" },
-      { name: "General Medicine", description: "OPD" },
-    ]);
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[feedback] No departments in DB. Run: npm run seed-mock -- --yes"
+    );
   }
 
   const brandingCount = await Branding.countDocuments();
@@ -257,10 +334,15 @@ async function ensureDefaults() {
     await Branding.create({
       key: "global",
       primaryColor: "#2A6FDB",
+      accentColor: "#2FBF71",
       pageBackgroundColor: "#F5F7FA",
       logoDataUrl: null,
+      voiceRecordingMaxSeconds: DEFAULT_VOICE_RECORDING_MAX_SECONDS,
+      botThinkSeconds: DEFAULT_BOT_THINK_SECONDS,
     });
   }
+
+  await ensureBotConversationConfig();
 }
 
 /**
@@ -268,9 +350,11 @@ async function ensureDefaults() {
  * unreachable (common on production when the Feedback server cannot call tms.mapims.edu.in).
  */
 async function loadTmsDepartmentDocsOrEmpty() {
-  if (!isTmsConfigured()) {
+  if (!isTmsCatalogEnabled()) {
     // eslint-disable-next-line no-console
-    console.warn("[feedback] TMS_API_BASE_URL not set — department list disabled");
+    console.warn(
+      "[feedback] TMS catalog disabled — use local routing services only (set TMS_CATALOG_ENABLED=true to pull from TMS)"
+    );
     return [];
   }
   try {
@@ -396,26 +480,232 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-app.get("/api/departments", async (_req, res) => {
-  const list = await loadTmsDepartmentDocsOrEmpty();
-  return res.json(
-    list.map((row) => ({
+function serviceNameKey(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+async function loadLocalRoutingServicesFromDb() {
+  const rows = await RoutingService.find().sort({ name: 1 }).lean();
+  return rows.map((row) => ({
+    _id: String(row._id),
+    name: row.name,
+    description: row.description || "",
+  }));
+}
+
+/** TMS + local MongoDB services for AI routing (TMS name wins on duplicate). */
+async function loadServiceCatalogForAi() {
+  const tms = await loadTmsDepartmentDocsOrEmpty();
+  const local = await loadLocalRoutingServicesFromDb();
+  const seen = new Set(tms.map((row) => serviceNameKey(row.name)));
+  const extra = local.filter((row) => {
+    const key = serviceNameKey(row.name);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return [...tms, ...extra].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function listServiceCatalogForUi() {
+  const tms = await loadTmsDepartmentDocsOrEmpty();
+  const local = await loadLocalRoutingServicesFromDb();
+  const tmsKeys = new Set(tms.map((row) => serviceNameKey(row.name)));
+  const items = [
+    ...tms.map((row) => ({
       _id: row._id,
       name: row.name,
       description: row.description || "",
-    }))
-  );
+      source: "tms",
+      readOnly: true,
+    })),
+    ...local
+      .filter((row) => !tmsKeys.has(serviceNameKey(row.name)))
+      .map((row) => ({
+        _id: row._id,
+        name: row.name,
+        description: row.description || "",
+        source: "local",
+        readOnly: false,
+      })),
+  ];
+  return items.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function tmsServiceNameKeys() {
+  const tms = await loadTmsDepartmentDocsOrEmpty();
+  return new Set(tms.map((row) => serviceNameKey(row.name)));
+}
+
+function normalizeServicesPayload(services) {
+  if (!Array.isArray(services)) return [];
+  return services
+    .filter((s) => s && String(s.name || "").trim())
+    .map((s) => ({
+      name: String(s.name).trim(),
+      description: String(s.description || "").trim(),
+    }));
+}
+
+/** Hospital departments in MongoDB (staff assignment, EMR analytics labels). */
+async function listHospitalDepartmentsFromDb() {
+  const rows = await Department.find().sort({ name: 1 }).lean();
+  return rows.map((row) => ({
+    _id: String(row._id),
+    name: row.name,
+    description: row.description || "",
+    services: Array.isArray(row.services) ? row.services : [],
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+app.get("/api/departments", async (_req, res) => {
+  try {
+    return res.json(await listHospitalDepartmentsFromDb());
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to list departments" });
+  }
+});
+
+app.get("/api/hospital-departments", async (_req, res) => {
+  try {
+    return res.json(await listHospitalDepartmentsFromDb());
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to list departments" });
+  }
+});
+
+/** Routing catalog for AI / ticket routing (TMS + locally managed services). */
+app.get("/api/services", async (_req, res) => {
+  try {
+    return res.json(await listServiceCatalogForUi());
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to list services" });
+  }
+});
+
+app.post("/api/services", async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ message: "name is required" });
+    }
+    const trimmedName = String(name).trim();
+    const tmsKeys = await tmsServiceNameKeys();
+    if (tmsKeys.has(serviceNameKey(trimmedName))) {
+      return res.status(409).json({
+        message: "A service with this name already exists in TMS — edit it in TMS instead.",
+      });
+    }
+    const doc = await RoutingService.create({
+      name: trimmedName,
+      description: String(description || "").trim(),
+    });
+    return res.status(201).json({
+      _id: String(doc._id),
+      name: doc.name,
+      description: doc.description || "",
+      source: "local",
+      readOnly: false,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "Service name already exists" });
+    }
+    return res.status(500).json({ message: "Failed to create service" });
+  }
+});
+
+app.patch("/api/services/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({ message: "Service not found" });
+    }
+    const existing = await RoutingService.findById(id);
+    if (!existing) {
+      return res.status(404).json({ message: "Service not found or managed in TMS" });
+    }
+    const { name, description } = req.body;
+    if (name !== undefined) {
+      const trimmedName = String(name).trim();
+      if (!trimmedName) {
+        return res.status(400).json({ message: "name cannot be empty" });
+      }
+      const tmsKeys = await tmsServiceNameKeys();
+      if (tmsKeys.has(serviceNameKey(trimmedName)) && serviceNameKey(trimmedName) !== serviceNameKey(existing.name)) {
+        return res.status(409).json({
+          message: "A service with this name already exists in TMS.",
+        });
+      }
+      existing.name = trimmedName;
+    }
+    if (description !== undefined) {
+      existing.description = String(description || "").trim();
+    }
+    await existing.save();
+    return res.json({
+      _id: String(existing._id),
+      name: existing.name,
+      description: existing.description || "",
+      source: "local",
+      readOnly: false,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "Service name already exists" });
+    }
+    return res.status(500).json({ message: "Failed to update service" });
+  }
+});
+
+app.delete("/api/services/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({ message: "Service not found" });
+    }
+    const deleted = await RoutingService.findByIdAndDelete(id);
+    if (!deleted) {
+      return res.status(404).json({ message: "Service not found or managed in TMS" });
+    }
+    return res.status(204).send();
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to delete service" });
+  }
 });
 
 app.post("/api/departments", async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, services } = req.body;
     if (!name || !String(name).trim()) {
       return res.status(400).json({ message: "name is required" });
     }
     const doc = await Department.create({
       name: String(name).trim(),
       description: String(description || "").trim(),
+      services: normalizeServicesPayload(services),
+    });
+    return res.status(201).json(doc);
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "Department name already exists" });
+    }
+    return res.status(500).json({ message: "Failed to create department" });
+  }
+});
+
+app.post("/api/hospital-departments", async (req, res) => {
+  try {
+    const { name, description, services } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ message: "name is required" });
+    }
+    const doc = await Department.create({
+      name: String(name).trim(),
+      description: String(description || "").trim(),
+      services: normalizeServicesPayload(services),
     });
     return res.status(201).json(doc);
   } catch (error) {
@@ -436,20 +726,60 @@ app.delete("/api/departments/:id", async (req, res) => {
   }
 });
 
+app.delete("/api/hospital-departments/:id", async (req, res) => {
+  try {
+    const deleted = await Department.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: "Not found" });
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to delete department" });
+  }
+});
+
 app.patch("/api/departments/:id", async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, services } = req.body;
     if (!name || !String(name).trim()) {
       return res.status(400).json({ message: "name is required" });
     }
-    const updated = await Department.findByIdAndUpdate(
-      req.params.id,
-      {
-        name: String(name).trim(),
-        description: String(description || "").trim(),
-      },
-      { new: true, runValidators: true }
-    ).lean();
+    const update = {
+      name: String(name).trim(),
+      description: String(description || "").trim(),
+    };
+    if (Array.isArray(services)) {
+      update.services = normalizeServicesPayload(services);
+    }
+    const updated = await Department.findByIdAndUpdate(req.params.id, update, {
+      new: true,
+      runValidators: true,
+    }).lean();
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    return res.json(updated);
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "Department name already exists" });
+    }
+    return res.status(500).json({ message: "Failed to update department" });
+  }
+});
+
+app.patch("/api/hospital-departments/:id", async (req, res) => {
+  try {
+    const { name, description, services } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ message: "name is required" });
+    }
+    const update = {
+      name: String(name).trim(),
+      description: String(description || "").trim(),
+    };
+    if (Array.isArray(services)) {
+      update.services = normalizeServicesPayload(services);
+    }
+    const updated = await Department.findByIdAndUpdate(req.params.id, update, {
+      new: true,
+      runValidators: true,
+    }).lean();
     if (!updated) return res.status(404).json({ message: "Not found" });
     return res.json(updated);
   } catch (error) {
@@ -588,7 +918,7 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
         await Feedback.updateOne({ _id: row._id }, { $set: set });
         updated += 1;
       }
-      if (opened && isTmsConfigured() && !row.tmsTicketId) {
+      if (opened && isTmsOutboundEnabled() && !row.tmsTicketId) {
         const fresh = await Feedback.findById(row._id).lean();
         const after = await syncFeedbackToTms(fresh, { reason: "seed_open_negative" });
         if (after?.tmsTicketId) tmsSynced += 1;
@@ -605,6 +935,7 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
       tmsSynced,
       tmsFailed,
       tmsConfigured: isTmsConfigured(),
+      tmsOutboundEnabled: isTmsOutboundEnabled(),
     });
   } catch (error) {
     return res.status(500).json({ message: "Failed to open negative tickets" });
@@ -662,13 +993,148 @@ app.post("/api/feedback/infer-voice-rating", async (req, res) => {
   }
 });
 
-app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (req, res) => {
+async function applyIssueTicketsAndTms({
+  feedbackId,
+  patientName,
+  rating,
+  issueRows,
+  emrDepartment,
+  fullComments,
+  existingTicketId,
+  existingTicketRule,
+  existingTicketIsFresh,
+}) {
+  const submissionGroupId = newSubmissionGroupId();
+  const normalizedFullComments = String(fullComments || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  const issues = ensureIssuesList(issueRows, {
+    department: emrDepartment,
+    recommendedService: "",
+    issueSummary: String(fullComments || "").trim().slice(0, 500),
+    suggestedAction: "Review feedback and assign appropriate service owner.",
+  });
+
+  let primaryTicketId = existingTicketId;
+  let primaryTicketRule = existingTicketRule;
+  let primaryTicketIsFresh = existingTicketIsFresh;
+
+  const issuesWithTickets = [];
+  for (let i = 0; i < issues.length; i++) {
+    const issue = issues[i];
+    const sig = buildComplaintSignature(
+      issue.department || emrDepartment,
+      issue.recommendedService,
+      issue.issueSummary || normalizedFullComments
+    );
+    let ticketId = null;
+    let ticketRule = "none";
+    let ticketIsFresh = false;
+
+    if (i === 0 && primaryTicketId) {
+      ticketId = primaryTicketId;
+      ticketRule = primaryTicketRule;
+      ticketIsFresh = primaryTicketIsFresh;
+    } else {
+      const evalResult = await evaluateTicketForFeedback(Feedback, {
+        patientName,
+        rating,
+        complaintSignature: sig,
+      });
+      ticketId = evalResult.ticketId;
+      ticketRule = evalResult.ticketRule;
+      ticketIsFresh = evalResult.ticketIsFresh;
+    }
+
+    issuesWithTickets.push({
+      ...issue,
+      ticketId: ticketId || null,
+    });
+
+    if (i === 0) {
+      primaryTicketId = ticketId;
+      primaryTicketRule = ticketRule;
+      primaryTicketIsFresh = ticketIsFresh;
+    }
+  }
+
+  return {
+    submissionGroupId,
+    issues: issuesWithTickets,
+    primaryTicketId,
+    primaryTicketRule,
+    primaryTicketIsFresh,
+  };
+}
+
+registerBotConversationRoutes(app, { uploadsRoot: UPLOADS_ROOT, botAudioUpload });
+
+app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
   try {
     const patientName = req.body.patientName;
-    const department = req.body.department;
-    const comments = req.body.comments;
+    let comments = req.body.comments;
     const source = req.body.source;
-    const rating = Number(req.body.rating);
+    let rating = Number(req.body.rating);
+    const rawSubmissionMode = String(req.body.submissionMode || "").toLowerCase().trim();
+    const voiceFile = req.files?.voiceRecording?.[0];
+    const answerAudioFiles = Array.isArray(req.files?.answerAudio)
+      ? req.files.answerAudio
+      : [];
+    let submissionMode = ["standard", "voice", "bot"].includes(rawSubmissionMode)
+      ? rawSubmissionMode
+      : voiceFile?.buffer?.length
+        ? "voice"
+        : answerAudioFiles.length
+          ? "bot"
+          : "standard";
+
+    let botConversationAnswers = [];
+    if (submissionMode === "bot") {
+      try {
+        const parsed = JSON.parse(req.body.conversationAnswers || "[]");
+        if (Array.isArray(parsed)) {
+          botConversationAnswers = parsed.map((row, idx) => ({
+            questionOrder: Number.isFinite(Number(row.questionOrder))
+              ? Number(row.questionOrder)
+              : idx,
+            questionText: String(row.questionText || "").trim().slice(0, 500),
+            transcript: String(row.transcript || "").trim().slice(0, 4000),
+            audioRelPath: null,
+          }));
+        }
+      } catch {
+        botConversationAnswers = [];
+      }
+      if (botConversationAnswers.length) {
+        comments = buildBotCommentsFromAnswers(botConversationAnswers);
+        if (process.env.OPENROUTER_API_KEY) {
+          botConversationAnswers = await Promise.all(
+            botConversationAnswers.map(async (row) => {
+              try {
+                const inferred = await inferRatingFromVoiceTranscript(row.transcript);
+                return { ...row, answerSentiment: inferred.sentiment };
+              } catch {
+                return row;
+              }
+            })
+          );
+        }
+      }
+      if (!rating || rating < 1 || rating > 5) {
+        try {
+          const inferred = await inferRatingFromVoiceTranscript(comments || "");
+          if (inferred?.rating >= 1 && inferred.rating <= 5) {
+            rating = inferred.rating;
+          }
+        } catch {
+          /* keep rating as-is */
+        }
+      }
+      if (!rating || rating < 1 || rating > 5) {
+        rating = 3;
+      }
+    }
     const rawEncounter = String(req.body.patientEncounterType || "").toLowerCase().trim();
     const patientEncounterType = ["op", "ip"].includes(rawEncounter) ? rawEncounter : "";
     const patientRegNo = String(req.body.patientRegNo || "").trim().slice(0, 80);
@@ -682,91 +1148,53 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
         .json({ message: "patientName and rating are required" });
     }
 
-    const departmentDocs = await loadTmsDepartmentDocsOrEmpty();
-
+    const serviceCatalog = await loadServiceCatalogForAi();
     const numericRating = Number(rating);
-    const deptHeuristic = resolveDepartmentHeuristic(department, departmentDocs);
-    let normalizedDepartment = deptHeuristic.name;
-    let departmentHintFromAi = false;
+
+    /** Visit department: UHID/EMR first; name-only flow uses saved hospital department from form */
+    const visitDepartment = patientRegNo
+      ? sanitizeOptionalLabel(req.body.lookupDepartment || req.body.department)
+      : sanitizeOptionalLabel(req.body.department);
+    /** Optional service hint; AI picks recommended service from routing catalog */
+    const serviceHint = sanitizeOptionalLabel(req.body.service);
+
+    const svcHeuristic = resolveServiceHeuristic(serviceHint, serviceCatalog);
+    let normalizedService = svcHeuristic.name;
+    let serviceHintFromAi = false;
     if (
-      deptHeuristic.method === "unmatched" &&
+      svcHeuristic.method === "unmatched" &&
       process.env.OPENROUTER_API_KEY &&
-      departmentDocs.length > 0
+      serviceCatalog.length > 0 &&
+      serviceHint
     ) {
       try {
-        const fromAi = await resolveDepartmentHintWithOpenRouter(
-          department,
-          departmentDocs
-        );
+        const fromAi = await resolveServiceHintWithOpenRouter(serviceHint, serviceCatalog);
         if (fromAi) {
-          normalizedDepartment = fromAi;
-          departmentHintFromAi = true;
+          normalizedService = fromAi;
+          serviceHintFromAi = true;
         }
-      } catch (deptAiErr) {
+      } catch (svcAiErr) {
         // eslint-disable-next-line no-console
-        console.error("[feedback] department hint OpenRouter failed", {
-          message: deptAiErr?.message || String(deptAiErr),
+        console.error("[feedback] service hint OpenRouter failed", {
+          message: svcAiErr?.message || String(svcAiErr),
         });
       }
     }
-    const departmentProvided = Boolean(normalizedDepartment);
-    const normalizedComments = String(comments || "")
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, " ");
-    const complaintSignature = `${normalizedDepartment.toLowerCase()}|${normalizedComments}`;
-    let ticketId = null;
-    let ticketRule = "none";
-    let ticketIsFresh = false;
 
-    // Critical feedback (rating 1) raises an immediate ticket.
-    if (numericRating === 1) {
-      ticketId = newTicketId();
-      ticketIsFresh = true;
-      ticketRule = "critical_immediate";
-    }
+    const complaintSignature = buildComplaintSignature(
+      visitDepartment,
+      normalizedService,
+      comments || ""
+    );
 
-    // Normal negative feedback (rating 2) raises ticket only:
-    // - same issue is reported by multiple patients, and
-    // - first similar report is at least 24 hours old.
-    if (!ticketId && numericRating === 2 && normalizedComments) {
-      const similarRows = await Feedback.find({
-        rating: 2,
-        complaintSignature,
-      })
-        .sort({ createdAt: 1 })
-        .lean();
-
-      const existingTicketId = similarRows.find((row) => row.ticketId)?.ticketId;
-      if (existingTicketId) {
-        ticketId = existingTicketId;
-        ticketIsFresh = false;
-        ticketRule = "normal_reuse_existing";
-      } else {
-        const distinctUsers = new Set(
-          similarRows.map((row) => String(row.patientName || "").trim().toLowerCase())
-        );
-        distinctUsers.add(String(patientName).trim().toLowerCase());
-
-        const firstSeenAt = similarRows[0] ? new Date(similarRows[0].createdAt).getTime() : Date.now();
-        const ageHours = (Date.now() - firstSeenAt) / (1000 * 60 * 60);
-        const shouldRaise = distinctUsers.size >= 2 && ageHours >= 24;
-
-        if (shouldRaise) {
-          ticketId = newTicketId();
-          ticketIsFresh = true;
-          ticketRule = "normal_after_24h_multi_patient";
-          if (similarRows.length > 0) {
-            await Feedback.updateMany(
-              { _id: { $in: similarRows.map((row) => row._id) }, ticketId: null },
-              { $set: { ticketId } }
-            );
-          }
-        } else {
-          ticketRule = "normal_waiting_window_or_duplicates";
-        }
-      }
-    }
+    const initialTicket = await evaluateTicketForFeedback(Feedback, {
+      patientName,
+      rating: numericRating,
+      complaintSignature,
+    });
+    let ticketId = initialTicket.ticketId;
+    let ticketRule = initialTicket.ticketRule;
+    let ticketIsFresh = initialTicket.ticketIsFresh;
 
     const feedback = await Feedback.create({
       patientName,
@@ -775,15 +1203,20 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       ward,
       ipNo,
       visitOrAdmissionDate,
-      department: normalizedDepartment,
+      department: visitDepartment,
+      lookupDepartment: patientRegNo ? visitDepartment : "",
+      service: normalizedService,
       rating: numericRating,
       comments: comments || "",
       source: ["patient", "staff", "ai"].includes(source) ? source : "patient",
       complaintSignature,
       ticketId,
+      submissionMode,
+      botConversationAnswers,
     });
 
     let outDoc = feedback.toObject();
+    let splitChildDocs = [];
 
     // eslint-disable-next-line no-console
     console.log("[feedback] created", {
@@ -793,8 +1226,9 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       ticketId: ticketId || null,
       complaintTicketRaised: Boolean(ticketId),
       ticketRule,
-      departmentHeuristic: deptHeuristic.method,
-      departmentResolvedByAiHint: departmentHintFromAi,
+      visitDepartment: visitDepartment || "(none)",
+      serviceHeuristic: svcHeuristic.method,
+      serviceResolvedByAiHint: serviceHintFromAi,
     });
 
     if (process.env.OPENROUTER_API_KEY) {
@@ -806,36 +1240,86 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
         const ai = await analyzePatientFeedback(
           {
             patientName,
-            department: normalizedDepartment,
+            patientDepartment: visitDepartment,
+            department: visitDepartment,
+            service: normalizedService,
             rating: numericRating,
             comments: comments || "",
           },
           {
             feedbackId: String(feedback._id),
-            departmentChoices: departmentDocs.map((d) => ({
+            serviceChoices: serviceCatalog.map((d) => ({
               name: d.name,
               description: d.description || "",
             })),
           }
         );
         if (ai) {
+          const issueBundle = await applyIssueTicketsAndTms({
+            feedbackId: String(feedback._id),
+            patientName,
+            rating: numericRating,
+            issueRows: ai.issues,
+            emrDepartment: visitDepartment,
+            fullComments: comments || "",
+            existingTicketId: ticketId,
+            existingTicketRule: ticketRule,
+            existingTicketIsFresh: ticketIsFresh,
+          });
+
+          ticketId = issueBundle.primaryTicketId;
+          ticketRule = issueBundle.primaryTicketRule;
+          ticketIsFresh = issueBundle.primaryTicketIsFresh;
+
+          const primaryIssue = issueBundle.issues[0];
+          const pickCatalogService = (name) => {
+            const n = sanitizeOptionalLabel(name);
+            if (!n || !serviceCatalog.length) return "";
+            return resolveServiceFromAi(n, serviceCatalog) ? n : "";
+          };
+          const recommendedService =
+            pickCatalogService(primaryIssue?.recommendedService) ||
+            pickCatalogService(ai.recommendedService) ||
+            pickCatalogService(normalizedService);
+          const primarySentiment =
+            primaryIssue?.sentiment && ["positive", "neutral", "negative"].includes(primaryIssue.sentiment)
+              ? primaryIssue.sentiment
+              : ai.sentiment;
+
           const setFields = {
-            aiSentiment: ai.sentiment,
+            aiSentiment: primarySentiment,
             aiUrgency: ai.urgency,
-            aiTopics: ai.topics.length ? ai.topics : [],
+            aiTopics: filterAiTopicsForTranscript(
+              ai.topics.length ? ai.topics : [],
+              comments || ""
+            ),
             aiSummary: ai.summary,
             aiAnalyzedAt: new Date(),
+            service: recommendedService || normalizedService,
+            department: visitDepartment || sanitizeOptionalLabel(primaryIssue?.department),
+            lookupDepartment: patientRegNo ? visitDepartment : feedback.lookupDepartment || "",
+            suggestedAction: primaryIssue?.suggestedAction || "",
+            feedbackIssues: issueBundle.issues,
+            submissionGroupId: issueBundle.submissionGroupId,
+            complaintSignature: buildComplaintSignature(
+              primaryIssue?.department || visitDepartment,
+              recommendedService,
+              comments || ""
+            ),
+            ticketId: ticketId || null,
           };
-          if (!departmentProvided && ai.inferredDepartment) {
-            setFields.department = ai.inferredDepartment;
-            setFields.complaintSignature = `${String(ai.inferredDepartment).toLowerCase()}|${normalizedComments}`;
-          }
-          if (ai.sentiment === "negative" && !feedback.ticketId) {
+
+          if (primarySentiment === "negative" && !ticketId) {
             setFields.ticketId = newTicketId();
             setFields.status = "New";
+            ticketId = setFields.ticketId;
             ticketIsFresh = true;
             ticketRule = ticketRule === "none" ? "ai_negative_sentiment" : ticketRule;
+            if (setFields.feedbackIssues?.[0]) {
+              setFields.feedbackIssues[0].ticketId = setFields.ticketId;
+            }
           }
+
           const updated = await Feedback.findByIdAndUpdate(
             feedback._id,
             { $set: setFields },
@@ -844,13 +1328,89 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
           if (updated) {
             outDoc = updated;
           }
+
+          if (issueBundle.issues.length > 1) {
+            const base = {
+              patientName,
+              patientRegNo,
+              patientEncounterType,
+              ward,
+              ipNo,
+              visitOrAdmissionDate,
+              lookupDepartment: patientRegNo ? visitDepartment : "",
+              rating: numericRating,
+              source: outDoc.source,
+              submissionMode,
+              botConversationAnswers: outDoc.botConversationAnswers || [],
+              submissionGroupId: issueBundle.submissionGroupId,
+              isSplitChild: true,
+              aiUrgency: ai.urgency,
+              aiTopics: filterAiTopicsForTranscript(ai.topics, comments || ""),
+              aiSummary: ai.summary,
+              aiAnalyzedAt: new Date(),
+              feedbackIssues: issueBundle.issues,
+            };
+
+            for (let i = 1; i < issueBundle.issues.length; i++) {
+              const issue = issueBundle.issues[i];
+              const issueSentiment =
+                issue?.sentiment && ["positive", "neutral", "negative"].includes(issue.sentiment)
+                  ? issue.sentiment
+                  : ai.sentiment;
+              const childSig = buildComplaintSignature(
+                issue.department || visitDepartment,
+                issue.recommendedService,
+                issue.issueSummary
+              );
+              let childTicketId = issue.ticketId;
+              let childTicketIsFresh = false;
+              if (!childTicketId) {
+                const childEval = await evaluateTicketForFeedback(Feedback, {
+                  patientName,
+                  rating: numericRating,
+                  complaintSignature: childSig,
+                });
+                childTicketId = childEval.ticketId;
+                childTicketIsFresh = childEval.ticketIsFresh;
+              } else {
+                childTicketIsFresh = true;
+              }
+
+              if (issueSentiment === "negative" && !childTicketId) {
+                childTicketId = newTicketId();
+                childTicketIsFresh = true;
+              }
+
+              const childTopics = filterAiTopicsForTranscript(ai.topics, comments || "");
+              const child = await Feedback.create({
+                ...base,
+                aiSentiment: issueSentiment,
+                department: issue.department || visitDepartment,
+                service: issue.recommendedService || recommendedService,
+                comments: String(comments || "").trim(),
+                aiSummary: issue.issueSummary,
+                aiTopics: childTopics,
+                suggestedAction: issue.suggestedAction,
+                complaintSignature: childSig,
+                ticketId: childTicketId,
+              });
+              let childDoc = child.toObject();
+              if (childTicketId && childTicketIsFresh && isTmsOutboundEnabled()) {
+                childDoc = await syncFeedbackToTms(childDoc, {
+                  reason: `split_issue_${i + 1}`,
+                });
+              }
+              splitChildDocs.push(childDoc);
+            }
+          }
+
           // eslint-disable-next-line no-console
           console.log("[feedback] AI fields saved to DB", {
             feedbackId: String(feedback._id),
             aiSentiment: ai.sentiment,
-            aiUrgency: ai.urgency,
+            issueCount: issueBundle.issues.length,
+            splitChildren: splitChildDocs.length,
             ticketOpenedForNegative: Boolean(setFields.ticketId),
-            departmentInferred: Boolean(!departmentProvided && ai.inferredDepartment),
           });
         }
       } catch (aiErr) {
@@ -867,7 +1427,7 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       );
     }
 
-    const tmsReady = isTmsConfigured();
+    const tmsReady = isTmsOutboundEnabled();
     const willSyncTms = Boolean(
       outDoc.ticketId && ticketIsFresh && !outDoc.tmsTicketId && tmsReady
     );
@@ -875,7 +1435,9 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       // eslint-disable-next-line no-console
       console.log("[feedback] tms push skipped", {
         feedbackId: String(feedback._id),
-        why: "TMS_API_BASE_URL not set",
+        why: isTmsConfigured()
+          ? "TMS_OUTBOUND_ENABLED not set"
+          : "TMS_API_BASE_URL not set",
         ticketId: outDoc.ticketId || null,
         ticketIsFresh,
         ticketRule,
@@ -916,7 +1478,7 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       });
     }
 
-    if (outDoc.ticketId && ticketIsFresh && !outDoc.tmsTicketId && isTmsConfigured()) {
+    if (outDoc.ticketId && ticketIsFresh && !outDoc.tmsTicketId && isTmsOutboundEnabled()) {
       outDoc = await syncFeedbackToTms(outDoc, { reason: ticketRule });
       // eslint-disable-next-line no-console
       console.log("[feedback] tms push finished", {
@@ -927,17 +1489,64 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       });
     }
 
-    if (req.file?.buffer?.length) {
+    if (submissionMode === "bot" && answerAudioFiles.length && botConversationAnswers.length) {
+      try {
+        const savedAnswers = [...botConversationAnswers];
+        for (let i = 0; i < Math.min(answerAudioFiles.length, savedAnswers.length); i++) {
+          const file = answerAudioFiles[i];
+          if (!file?.buffer?.length) continue;
+          const order = savedAnswers[i].questionOrder;
+          const rel = await saveBotAnswerRecording(
+            UPLOADS_ROOT,
+            feedback._id,
+            order,
+            file.buffer,
+            file.mimetype || ""
+          );
+          savedAnswers[i] = { ...savedAnswers[i], audioRelPath: rel };
+        }
+        const lastWithAudio = [...savedAnswers].reverse().find((a) => a.audioRelPath);
+        const primaryRel = lastWithAudio?.audioRelPath || savedAnswers[0]?.audioRelPath;
+        await Feedback.updateOne(
+          { _id: feedback._id },
+          {
+            $set: {
+              botConversationAnswers: savedAnswers,
+              ...(primaryRel ? { voiceRecordingRelPath: primaryRel } : {}),
+            },
+          }
+        );
+        outDoc = {
+          ...outDoc,
+          botConversationAnswers: savedAnswers,
+          ...(primaryRel ? { voiceRecordingRelPath: primaryRel } : {}),
+        };
+      } catch (botAudioErr) {
+        // eslint-disable-next-line no-console
+        console.error("[feedback] failed to persist bot answer recordings", {
+          feedbackId: String(feedback._id),
+          message: botAudioErr?.message || String(botAudioErr),
+        });
+      }
+    }
+
+    if (voiceFile?.buffer?.length) {
       try {
         const rel = await saveFeedbackVoiceRecording(
           feedback._id,
-          req.file.buffer,
-          req.file.mimetype || ""
+          voiceFile.buffer,
+          voiceFile.mimetype || ""
         );
         await Feedback.updateOne({ _id: feedback._id }, { $set: { voiceRecordingRelPath: rel } });
+        if (outDoc.submissionGroupId) {
+          await Feedback.updateMany(
+            { submissionGroupId: outDoc.submissionGroupId, isSplitChild: true },
+            { $set: { voiceRecordingRelPath: rel } }
+          );
+        }
         outDoc = { ...outDoc, voiceRecordingRelPath: rel };
         const tmsId = outDoc.tmsTicketId;
-        if (tmsId && isTmsConfigured()) {
+        if (tmsId && isTmsOutboundEnabled()) {
           try {
             await patchTmsTicketFeedbackVoice(String(tmsId), {
               feedbackVoiceRecordingRelPath: rel,
@@ -965,13 +1574,15 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
 
     const payload = attachVoicePlaybackUrl(outDoc);
     const tmsConfigured = isTmsConfigured();
+    const tmsOutboundEnabled = isTmsOutboundEnabled();
     let tmsSyncHint = null;
-    if (outDoc.ticketId && !tmsConfigured) {
-      tmsSyncHint =
-        "TMS sync skipped: set TMS_API_BASE_URL (and optional TMS_INGEST_TOKEN) on the Feedback API server, then restart the process.";
-    } else if (outDoc.ticketId && tmsConfigured && !outDoc.tmsTicketId && outDoc.tmsSyncError) {
+    if (outDoc.ticketId && !tmsOutboundEnabled) {
+      tmsSyncHint = isTmsConfigured()
+        ? "Local ticket only — TMS outbound sync is disabled (TMS_OUTBOUND_ENABLED is not set)."
+        : "Local ticket only — TMS is not configured on this server.";
+    } else if (outDoc.ticketId && tmsOutboundEnabled && !outDoc.tmsTicketId && outDoc.tmsSyncError) {
       tmsSyncHint = `TMS sync failed: ${String(outDoc.tmsSyncError).slice(0, 300)}`;
-    } else if (outDoc.ticketId && tmsConfigured && !outDoc.tmsTicketId) {
+    } else if (outDoc.ticketId && tmsOutboundEnabled && !outDoc.tmsTicketId) {
       tmsSyncHint =
         "Feedback ticket was opened locally but no TMS row was created (check server logs for [feedback] tms push skipped / FAILED).";
     }
@@ -980,7 +1591,16 @@ app.post("/api/feedback", feedbackVoiceUpload.single("voiceRecording"), async (r
       ...payload,
       ticketRaised: Boolean(outDoc.ticketId),
       tmsConfigured,
+      tmsOutboundEnabled,
       tmsSyncHint,
+      splitTickets: splitChildDocs.map((row) => ({
+        _id: row._id,
+        ticketId: row.ticketId,
+        department: row.department,
+        service: row.service,
+        suggestedAction: row.suggestedAction,
+      })),
+      feedbackIssues: outDoc.feedbackIssues || [],
     });
   } catch (error) {
     return res.status(500).json({ message: "Failed to create feedback" });
@@ -991,11 +1611,63 @@ app.get("/api/feedback", async (_req, res) => {
   try {
     // Sort by insertion time from ObjectId to avoid skew from synthetic createdAt values.
     const feedback = await Feedback.find().sort({ _id: -1 }).lean();
-    return res.json(feedback.map((row) => attachVoicePlaybackUrl(row)));
+    return res.json(await enrichFeedbackListWithGroupDonor(feedback));
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch feedback" });
   }
 });
+
+app.get("/api/feedback/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const query = mongoose.Types.ObjectId.isValid(id)
+      ? { _id: id }
+      : { ticketId: id };
+    const row = await Feedback.findOne(query).lean();
+    if (!row) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+    return res.json(await enrichFeedbackWithGroupDonor(row));
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to fetch feedback" });
+  }
+});
+
+/** EMR/UHID department for analytics — prefer frozen lookup value. */
+function analyticsDepartmentFromFeedback(item, issue) {
+  return sanitizeOptionalLabel(
+    item.lookupDepartment || issue?.department || item.department
+  );
+}
+
+function analyticsSlicesFromFeedback(item) {
+  const sentiment = item.aiSentiment;
+  if (!["positive", "neutral", "negative"].includes(sentiment)) return [];
+
+  const lookupDept = analyticsDepartmentFromFeedback(item);
+  const issueRows =
+    Array.isArray(item.feedbackIssues) && item.feedbackIssues.length > 0
+      ? item.feedbackIssues
+      : [{ department: lookupDept, recommendedService: item.service }];
+
+  return issueRows.map((issue) => ({
+    department: analyticsDepartmentFromFeedback(item, issue),
+    service: sanitizeOptionalLabel(issue.recommendedService || item.service),
+    sentiment,
+  }));
+}
+
+function bumpCount(counter, key) {
+  const k = sanitizeOptionalLabel(key);
+  if (!k) return;
+  counter[k] = (counter[k] || 0) + 1;
+}
+
+function counterToSortedList(counter, keyName) {
+  return Object.entries(counter)
+    .map(([name, count]) => ({ [keyName]: name, count }))
+    .sort((a, b) => b.count - a.count);
+}
 
 app.get("/api/analytics", async (_req, res) => {
   try {
@@ -1003,7 +1675,8 @@ app.get("/api/analytics", async (_req, res) => {
 
     const totals = {
       all: rows.length,
-      // Sentiment is AI-derived (OpenRouter), not inferred from numeric rating
+      positive: rows.filter((item) => item.aiSentiment === "positive").length,
+      neutral: rows.filter((item) => item.aiSentiment === "neutral").length,
       negative: rows.filter((item) => item.aiSentiment === "negative").length,
       aiTickets: rows.filter((item) => item.source === "ai").length,
       averageRating: rows.length
@@ -1018,7 +1691,11 @@ app.get("/api/analytics", async (_req, res) => {
       "In Progress": 0,
       Resolved: 0,
     };
-    const departmentNegativeCounter = {};
+    const positiveByDepartment = {};
+    const negativeByDepartment = {};
+    const positiveByService = {};
+    const negativeByService = {};
+    const submissionsByDepartment = {};
     const dailyCounter = {};
 
     for (const item of rows) {
@@ -1027,10 +1704,19 @@ app.get("/api/analytics", async (_req, res) => {
         : "New";
       statusCounter[st] = (statusCounter[st] || 0) + 1;
 
-      if (item.aiSentiment === "negative") {
-        const department = item.department || "Unknown";
-        departmentNegativeCounter[department] =
-          (departmentNegativeCounter[department] || 0) + 1;
+      const lookupDept = analyticsDepartmentFromFeedback(item);
+      if (lookupDept) {
+        submissionsByDepartment[lookupDept] = (submissionsByDepartment[lookupDept] || 0) + 1;
+      }
+
+      for (const slice of analyticsSlicesFromFeedback(item)) {
+        if (slice.sentiment === "positive") {
+          bumpCount(positiveByDepartment, slice.department);
+          bumpCount(positiveByService, slice.service);
+        } else if (slice.sentiment === "negative") {
+          bumpCount(negativeByDepartment, slice.department);
+          bumpCount(negativeByService, slice.service);
+        }
       }
 
       const day = new Date(item.createdAt).toISOString().slice(0, 10);
@@ -1042,10 +1728,6 @@ app.get("/api/analytics", async (_req, res) => {
       count,
     }));
 
-    const negativeByDepartment = Object.entries(departmentNegativeCounter)
-      .map(([department, count]) => ({ department, count }))
-      .sort((a, b) => b.count - a.count);
-
     const submissionsByDay = Object.entries(dailyCounter)
       .map(([day, count]) => ({ day, count }))
       .sort((a, b) => a.day.localeCompare(b.day))
@@ -1054,7 +1736,11 @@ app.get("/api/analytics", async (_req, res) => {
     return res.json({
       totals,
       byStatus,
-      negativeByDepartment,
+      negativeByDepartment: counterToSortedList(negativeByDepartment, "department"),
+      positiveByDepartment: counterToSortedList(positiveByDepartment, "department"),
+      submissionsByDepartment: counterToSortedList(submissionsByDepartment, "department"),
+      negativeByService: counterToSortedList(negativeByService, "service"),
+      positiveByService: counterToSortedList(positiveByService, "service"),
       submissionsByDay,
     });
   } catch (error) {
@@ -1107,20 +1793,15 @@ app.get("/api/branding", async (_req, res) => {
       branding = await Branding.create({
         key: "global",
         primaryColor: "#2A6FDB",
+        accentColor: "#2FBF71",
         pageBackgroundColor: "#F5F7FA",
         logoDataUrl: null,
+        voiceRecordingMaxSeconds: DEFAULT_VOICE_RECORDING_MAX_SECONDS,
+        botThinkSeconds: DEFAULT_BOT_THINK_SECONDS,
       });
-      return res.json({
-        primaryColor: branding.primaryColor,
-        pageBackgroundColor: branding.pageBackgroundColor,
-        logoDataUrl: branding.logoDataUrl,
-      });
+      return res.json(serializeBrandingSettings(branding));
     }
-    return res.json({
-      primaryColor: branding.primaryColor,
-      pageBackgroundColor: branding.pageBackgroundColor,
-      logoDataUrl: branding.logoDataUrl,
-    });
+    return res.json(serializeBrandingSettings(branding));
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch branding" });
   }
@@ -1128,7 +1809,14 @@ app.get("/api/branding", async (_req, res) => {
 
 app.put("/api/branding", async (req, res) => {
   try {
-    const { primaryColor, pageBackgroundColor, logoDataUrl } = req.body;
+    const {
+      primaryColor,
+      accentColor,
+      pageBackgroundColor,
+      logoDataUrl,
+      voiceRecordingMaxSeconds,
+      botThinkSeconds,
+    } = req.body;
     if (!primaryColor || !pageBackgroundColor) {
       return res
         .status(400)
@@ -1139,16 +1827,15 @@ app.put("/api/branding", async (req, res) => {
       {
         key: "global",
         primaryColor: String(primaryColor).trim(),
+        accentColor: String(accentColor || "#2FBF71").trim(),
         pageBackgroundColor: String(pageBackgroundColor).trim(),
         logoDataUrl: typeof logoDataUrl === "string" ? logoDataUrl : null,
+        voiceRecordingMaxSeconds: normalizeVoiceRecordingMaxSeconds(voiceRecordingMaxSeconds),
+        botThinkSeconds: normalizeBotThinkSeconds(botThinkSeconds),
       },
       { upsert: true, new: true, runValidators: true }
     ).lean();
-    return res.json({
-      primaryColor: updated.primaryColor,
-      pageBackgroundColor: updated.pageBackgroundColor,
-      logoDataUrl: updated.logoDataUrl,
-    });
+    return res.json(serializeBrandingSettings(updated));
   } catch (error) {
     return res.status(500).json({ message: "Failed to save branding" });
   }
@@ -1161,16 +1848,15 @@ app.delete("/api/branding", async (_req, res) => {
       {
         key: "global",
         primaryColor: "#2A6FDB",
+        accentColor: "#2FBF71",
         pageBackgroundColor: "#F5F7FA",
         logoDataUrl: null,
+        voiceRecordingMaxSeconds: DEFAULT_VOICE_RECORDING_MAX_SECONDS,
+        botThinkSeconds: DEFAULT_BOT_THINK_SECONDS,
       },
       { upsert: true, new: true, runValidators: true }
     ).lean();
-    return res.json({
-      primaryColor: reset.primaryColor,
-      pageBackgroundColor: reset.pageBackgroundColor,
-      logoDataUrl: reset.logoDataUrl,
-    });
+    return res.json(serializeBrandingSettings(reset));
   } catch (error) {
     return res.status(500).json({ message: "Failed to reset branding" });
   }
@@ -1184,27 +1870,47 @@ app.get("/api/tms/health", async (_req, res) => {
   if (!isTmsConfigured()) {
     return res.status(200).json({
       configured: false,
+      outboundEnabled: false,
+      catalogEnabled: false,
       message:
         "TMS integration is not configured. Set TMS_API_BASE_URL to the TMS API root (e.g. https://tms.mapims.edu.in/api).",
+    });
+  }
+  if (!isTmsOutboundEnabled() && !isTmsCatalogEnabled()) {
+    return res.status(200).json({
+      configured: true,
+      outboundEnabled: false,
+      catalogEnabled: false,
+      reachable: false,
+      message:
+        "TMS URL is set but send/receive is disabled. Tickets stay in Feedback only unless you set TMS_OUTBOUND_ENABLED or TMS_CATALOG_ENABLED.",
     });
   }
   try {
     const result = await getTmsHealth();
     return res.status(result.ok ? 200 : 502).json({
       configured: true,
+      outboundEnabled: isTmsOutboundEnabled(),
+      catalogEnabled: isTmsCatalogEnabled(),
       reachable: result.ok,
       status: result.status,
       tms: result.body,
     });
   } catch (error) {
     const { status, body } = tmsErrorToHttp(error);
-    return res.status(status).json({ configured: true, reachable: false, ...body });
+    return res.status(status).json({
+      configured: true,
+      outboundEnabled: isTmsOutboundEnabled(),
+      catalogEnabled: isTmsCatalogEnabled(),
+      reachable: false,
+      ...body,
+    });
   }
 });
 
 app.get("/api/tms/departments", async (_req, res) => {
-  if (!isTmsConfigured()) {
-    return res.status(503).json({ message: "TMS integration is not configured" });
+  if (!isTmsCatalogEnabled()) {
+    return res.status(503).json({ message: "TMS catalog pull is disabled on this server" });
   }
   try {
     const result = await listTmsDepartments();
@@ -1246,8 +1952,11 @@ app.get("/api/tms/tickets/:id", async (req, res) => {
  * Accepts either the Feedback _id or the local ticketId.
  */
 app.post("/api/tms/tickets/sync/:feedbackId", async (req, res) => {
-  if (!isTmsConfigured()) {
-    return res.status(503).json({ message: "TMS integration is not configured" });
+  if (!isTmsOutboundEnabled()) {
+    return res.status(403).json({
+      message:
+        "TMS outbound sync is disabled. Tickets are kept in the Feedback system only.",
+    });
   }
   try {
     const { feedbackId } = req.params;
@@ -1277,6 +1986,8 @@ app.post("/api/tms/tickets/sync/:feedbackId", async (req, res) => {
 async function startServer() {
   try {
     await mongoose.connect(MONGODB_URI);
+    // eslint-disable-next-line no-console
+    console.log(`[feedback] MongoDB connected: ${mongoose.connection.db.databaseName}`);
     await ensureDefaults();
     app.listen(PORT, () => {
       // eslint-disable-next-line no-console

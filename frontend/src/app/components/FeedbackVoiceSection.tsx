@@ -6,11 +6,23 @@ import {
   type SpeechLanguageCode,
   transcribeVoiceRecording,
 } from "../lib/api";
+import {
+  getBrandingSettings,
+  loadBrandingSettings,
+  onBrandingSettingsChange,
+} from "../lib/branding";
 
 type RecordingState = "idle" | "recording" | "processing" | "completed";
 
 /** Sarvam REST works best ~30s per clip — auto-rotate recorder and merge transcripts for longer speech */
 const SEGMENT_MS = 26000;
+
+function formatCountdown(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
 function pickRecorderMime(): string | undefined {
   const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
@@ -52,12 +64,16 @@ export function FeedbackVoiceSection({
   const [localTranscript, setLocalTranscript] = useState("");
   /** Shown during recording — how many parts have finished uploading (not guaranteed order) */
   const [segmentsDoneUi, setSegmentsDoneUi] = useState(0);
+  const [maxRecordingSeconds, setMaxRecordingSeconds] = useState(120);
+  const [secondsRemaining, setSecondsRemaining] = useState(120);
 
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const mimeRef = useRef<string>("audio/webm");
   const segmentTimerRef = useRef(0);
+  const countdownIntervalRef = useRef(0);
+  const finishRecordingPipelineRef = useRef<() => void>(() => {});
 
   /** Monotonic segment index assigned when a clip is closed */
   const nextSegmentIdxRef = useRef(0);
@@ -120,12 +136,50 @@ export function FeedbackVoiceSection({
     streamRef.current = null;
   }, []);
 
+  useEffect(() => {
+    void loadBrandingSettings().then((b) => {
+      setMaxRecordingSeconds(b.voiceRecordingMaxSeconds);
+      setSecondsRemaining(b.voiceRecordingMaxSeconds);
+    });
+    return onBrandingSettingsChange(() => {
+      const b = getBrandingSettings();
+      setMaxRecordingSeconds(b.voiceRecordingMaxSeconds);
+      if (recordingStateRef.current !== "recording") {
+        setSecondsRemaining(b.voiceRecordingMaxSeconds);
+      }
+    });
+  }, []);
+
   const clearSegmentTimer = useCallback(() => {
     if (segmentTimerRef.current) {
       window.clearTimeout(segmentTimerRef.current);
       segmentTimerRef.current = 0;
     }
   }, []);
+
+  const clearCountdownTimer = useCallback(() => {
+    if (countdownIntervalRef.current) {
+      window.clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = 0;
+    }
+  }, []);
+
+  const startCountdown = useCallback(() => {
+    clearCountdownTimer();
+    setSecondsRemaining(maxRecordingSeconds);
+    countdownIntervalRef.current = window.setInterval(() => {
+      setSecondsRemaining((prev) => {
+        if (prev <= 1) {
+          clearCountdownTimer();
+          window.setTimeout(() => {
+            void finishRecordingPipelineRef.current();
+          }, 0);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, [clearCountdownTimer, maxRecordingSeconds]);
 
   function scheduleSegmentRotate() {
     clearSegmentTimer();
@@ -275,6 +329,7 @@ export function FeedbackVoiceSection({
 
   useEffect(() => {
     return () => {
+      clearCountdownTimer();
       clearSegmentTimer();
       mediaRecorderRef.current?.stop();
       try {
@@ -288,9 +343,10 @@ export function FeedbackVoiceSection({
       archiveChunksRef.current = [];
       stopTracks();
     };
-  }, [clearSegmentTimer, stopTracks]);
+  }, [clearCountdownTimer, clearSegmentTimer, stopTracks]);
 
   useEffect(() => {
+    clearCountdownTimer();
     clearSegmentTimer();
     mediaRecorderRef.current?.stop();
     stopTracks();
@@ -304,9 +360,10 @@ export function FeedbackVoiceSection({
     finishingSessionRef.current = false;
     onVoiceError(null);
     onVoiceRecordingReady?.(null);
-  }, [resetRevision, stopTracks, onVoiceError, clearSegmentTimer, onVoiceRecordingReady]);
+  }, [resetRevision, stopTracks, onVoiceError, clearCountdownTimer, clearSegmentTimer, onVoiceRecordingReady]);
 
   const finishRecordingPipeline = useCallback(async () => {
+    if (finishingSessionRef.current) return;
     for (let i = 0; i < 50 && rotateBusyRef.current; i += 1) {
       await new Promise((r) => setTimeout(r, 60));
     }
@@ -314,6 +371,7 @@ export function FeedbackVoiceSection({
     finishingSessionRef.current = true;
     setRecordingState("processing");
 
+    clearCountdownTimer();
     clearSegmentTimer();
     rotateBusyRef.current = true;
     try {
@@ -361,7 +419,11 @@ export function FeedbackVoiceSection({
     setRecordingState("completed");
     setSegmentsDoneUi(0);
     finishingSessionRef.current = false;
-  }, [finalizeCurrentSegment, clearSegmentTimer, onVoiceError, onVoiceSuccess, stopArchiveRecorderAsync, stopTracks]);
+  }, [finalizeCurrentSegment, clearCountdownTimer, clearSegmentTimer, onVoiceError, onVoiceSuccess, stopArchiveRecorderAsync, stopTracks]);
+
+  finishRecordingPipelineRef.current = () => {
+    void finishRecordingPipeline();
+  };
 
   const startRecording = async () => {
     if (!nameReady) {
@@ -412,6 +474,7 @@ export function FeedbackVoiceSection({
     }
 
     setRecordingState("recording");
+    startCountdown();
     scheduleSegmentRotate();
   };
 
@@ -432,7 +495,9 @@ export function FeedbackVoiceSection({
   const micIsPrimary = recordingState === "idle" && !nameMissing;
 
   const recordAgain = () => {
+    clearCountdownTimer();
     clearSegmentTimer();
+    setSecondsRemaining(maxRecordingSeconds);
     setRecordingState("idle");
     setLocalTranscript("");
     setSegmentsDoneUi(0);
@@ -473,13 +538,14 @@ export function FeedbackVoiceSection({
             {recordingState === "processing" && "Transcribing & rating…"}
             {recordingState === "completed" && "Recording complete"}
           </p>
+          {recordingState === "idle" && !nameMissing && (
+            <p className="text-sm text-gray-500 mt-1">
+              Up to {formatCountdown(maxRecordingSeconds)} per recording
+            </p>
+          )}
           {recordingState === "recording" && (
             <>
-              <p className="text-sm text-gray-600">Tap stop when finished</p>
-              <p className="mt-2 text-xs text-gray-500 max-w-sm mx-auto leading-relaxed">
-                Long replies are captured in segments (about{" "}
-                {Math.round(SEGMENT_MS / 1000)}&nbsp;s each), transcribed, then merged into one text.
-              </p>
+              <p className="text-sm text-gray-600">Tap stop when finished, or wait for the timer</p>
               {segmentsDoneUi > 0 && (
                 <p className="mt-2 text-xs font-medium" style={{ color: primaryColor }}>
                   {segmentsDoneUi} segment{segmentsDoneUi === 1 ? "" : "s"} sent for transcription…
@@ -488,6 +554,31 @@ export function FeedbackVoiceSection({
             </>
           )}
         </div>
+
+        {recordingState === "recording" && (
+          <div
+            className="w-full max-w-xs rounded-2xl border-2 px-6 py-4 text-center shadow-inner"
+            style={{
+              borderColor: secondsRemaining <= 10 ? "#E5533D" : `${primaryColor}55`,
+              backgroundColor: secondsRemaining <= 10 ? "#FEF2F2" : `${primaryColor}0D`,
+            }}
+          >
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
+              Time remaining
+            </p>
+            <p
+              className={`text-5xl md:text-6xl font-bold tabular-nums leading-none ${
+                secondsRemaining <= 10 ? "text-[#E5533D]" : ""
+              }`}
+              style={secondsRemaining > 10 ? { color: primaryColor } : undefined}
+            >
+              {formatCountdown(secondsRemaining)}
+            </p>
+            <p className="text-xs text-gray-500 mt-2">
+              Max {formatCountdown(maxRecordingSeconds)} · auto-stops at 0:00
+            </p>
+          </div>
+        )}
 
         <div className="relative">
           <button
@@ -526,7 +617,7 @@ export function FeedbackVoiceSection({
         </div>
 
         {recordingState === "recording" && (
-          <div className="flex items-end justify-center gap-1 h-16">
+          <div className="flex items-end justify-center gap-1 h-16 w-full max-w-xs" aria-hidden>
             {Array.from({ length: 24 }, (_, i) => (
               <div
                 key={i}

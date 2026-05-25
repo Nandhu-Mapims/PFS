@@ -7,6 +7,7 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "seed": "node scripts/seedUsers.js",
+    "seed-mock": "node scripts/seedMockData.js",
     "clean-mock": "node scripts/removeMockFeedback.js",
     "reset-db": "node scripts/resetDatabase.js --yes",
     "test-emr-lookup": "node scripts/testEmrLookup.js"

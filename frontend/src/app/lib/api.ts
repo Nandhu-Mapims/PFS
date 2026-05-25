@@ -1,11 +1,56 @@
+export interface FeedbackIssue {
+  department: string;
+  recommendedService: string;
+  issueSummary: string;
+  suggestedAction: string;
+  sentiment?: "positive" | "neutral" | "negative" | null;
+  ticketId?: string | null;
+}
+
+export interface BotConversationAnswer {
+  questionOrder: number;
+  questionText: string;
+  transcript: string;
+  audioRelPath?: string | null;
+  audioUrl?: string | null;
+  /** Per-question AI sentiment from voice transcript */
+  answerSentiment?: "positive" | "neutral" | "negative" | null;
+}
+
+export interface BotConversationQuestion {
+  order: number;
+  textTa: string;
+  audioUrl: string | null;
+  /** @deprecated use audioUrl */
+  videoUrl?: string | null;
+}
+
+export interface BotConversationConfig {
+  key: string;
+  introText: string;
+  introAudioUrl: string | null;
+  /** @deprecated use introAudioUrl */
+  introVideoUrl?: string | null;
+  questions: BotConversationQuestion[];
+  updatedAt?: string;
+}
+
 export interface FeedbackPayload {
   patientName: string;
+  /** Visit department: from UHID/EMR or selected hospital department (name-only) */
   department?: string;
+  /** Stored for analytics — same as department when known at submit */
+  lookupDepartment?: string;
+  /** Optional service hint; AI normally picks service from routing catalog */
+  service?: string;
   rating: number;
   comments: string;
   source?: "patient" | "staff" | "ai";
   /** When set, multipart upload stores audio under this feedback (voice flow). */
   voiceRecording?: Blob | null;
+  submissionMode?: "standard" | "voice" | "bot";
+  conversationAnswers?: BotConversationAnswer[];
+  answerAudioBlobs?: Blob[];
   /** Hospital registration number / UHID when supplied or resolved via EMR lookup */
   patientRegNo?: string;
   patientEncounterType?: "op" | "ip" | "";
@@ -32,8 +77,13 @@ export interface PatientLookupMatch {
 
 export interface BrandingSettings {
   primaryColor: string;
+  accentColor: string;
   pageBackgroundColor: string;
   logoDataUrl: string | null;
+  /** Max seconds for voice feedback recording (15–600). */
+  voiceRecordingMaxSeconds: number;
+  /** Seconds to think after each bot question before recording (1–30). */
+  botThinkSeconds: number;
 }
 
 export interface CreateFeedbackResponse extends FeedbackItem {
@@ -42,6 +92,14 @@ export interface CreateFeedbackResponse extends FeedbackItem {
   tmsConfigured?: boolean;
   /** Human-readable reason when a ticket was opened but TMS did not get a row. */
   tmsSyncHint?: string | null;
+  splitTickets?: Array<{
+    _id: string;
+    ticketId?: string | null;
+    department?: string;
+    service?: string;
+    suggestedAction?: string;
+  }>;
+  feedbackIssues?: FeedbackIssue[];
 }
 
 export interface FeedbackItem extends Omit<FeedbackPayload, "voiceRecording"> {
@@ -63,21 +121,60 @@ export interface FeedbackItem extends Omit<FeedbackPayload, "voiceRecording"> {
   tmsSyncError?: string | null;
   voiceRecordingRelPath?: string | null;
   voiceRecordingUrl?: string | null;
+  submissionMode?: "standard" | "voice" | "bot";
+  botConversationAnswers?: BotConversationAnswer[];
+  service?: string;
+  /** Department from EMR at submit time (analytics source of truth) */
+  lookupDepartment?: string;
+  suggestedAction?: string;
+  feedbackIssues?: FeedbackIssue[];
+  submissionGroupId?: string | null;
+  isSplitChild?: boolean;
+  /** Set when split ticket borrows bot Q&A from parent submission */
+  botVoiceSourceFeedbackId?: string | null;
+}
+
+export interface SentimentCountRow {
+  count: number;
+}
+
+export interface DepartmentCountRow extends SentimentCountRow {
+  department: string;
+}
+
+export interface ServiceCountRow extends SentimentCountRow {
+  service: string;
 }
 
 export interface FeedbackAnalytics {
   totals: {
     all: number;
+    positive: number;
+    neutral: number;
     negative: number;
     aiTickets: number;
     averageRating: number;
   };
   byStatus: Array<{ status: FeedbackItem["status"]; count: number }>;
-  negativeByDepartment: Array<{ department: string; count: number }>;
+  negativeByDepartment: DepartmentCountRow[];
+  positiveByDepartment: DepartmentCountRow[];
+  /** All submissions with a known EMR lookup department */
+  submissionsByDepartment: DepartmentCountRow[];
+  negativeByService: ServiceCountRow[];
+  positiveByService: ServiceCountRow[];
   submissionsByDay: Array<{ day: string; count: number }>;
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+
+/** Resolve /uploads/... paths — same origin in dev (Vite proxies /uploads to API). */
+export function resolveUploadUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  if (path.startsWith("http")) return path;
+  const base = API_BASE_URL.replace(/\/$/, "");
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${normalized}`;
+}
 
 export async function createFeedback(payload: FeedbackPayload): Promise<CreateFeedbackResponse> {
   const { voiceRecording, ...fields } = payload;
@@ -86,6 +183,9 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
   const appendEmrFields = (fd: FormData) => {
     if (fields.patientRegNo != null && fields.patientRegNo !== "") {
       fd.append("patientRegNo", fields.patientRegNo);
+    }
+    if (fields.lookupDepartment != null && fields.lookupDepartment !== "") {
+      fd.append("lookupDepartment", fields.lookupDepartment);
     }
     if (fields.patientEncounterType != null && fields.patientEncounterType !== "") {
       fd.append("patientEncounterType", fields.patientEncounterType);
@@ -103,9 +203,17 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
     if (fields.department != null && fields.department !== "") {
       fd.append("department", fields.department);
     }
+    if (fields.service != null && fields.service !== "") {
+      fd.append("service", fields.service);
+    }
     fd.append("rating", String(fields.rating));
     fd.append("comments", fields.comments ?? "");
     if (fields.source) fd.append("source", fields.source);
+    if (!fields.submissionMode) {
+      fd.append("submissionMode", "voice");
+    } else {
+      fd.append("submissionMode", fields.submissionMode);
+    }
     appendEmrFields(fd);
     const mime = voiceRecording.type || "audio/webm";
     const ext = mime.includes("mp4") ? "m4a" : "webm";
@@ -132,6 +240,116 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
     throw new Error(msg);
   }
 
+  return body as CreateFeedbackResponse;
+}
+
+export async function getBotConversationConfig(): Promise<BotConversationConfig> {
+  const response = await fetch(`${API_BASE_URL}/api/bot-conversation`, { cache: "no-store" });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not load bot conversation");
+  }
+  return body as BotConversationConfig;
+}
+
+export async function getAdminBotConversationConfig(): Promise<BotConversationConfig> {
+  const response = await fetch(`${API_BASE_URL}/api/admin/bot-conversation`, { cache: "no-store" });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not load bot conversation");
+  }
+  return body as BotConversationConfig;
+}
+
+export async function saveAdminBotConversationConfig(payload: {
+  introText?: string;
+  questions?: Array<{
+    order: number;
+    textTa: string;
+    audioRelPath?: string | null;
+    audioUrl?: string | null;
+  }>;
+}): Promise<BotConversationConfig> {
+  const response = await fetch(`${API_BASE_URL}/api/admin/bot-conversation`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not save bot conversation");
+  }
+  return body as BotConversationConfig;
+}
+
+export async function uploadBotIntroAudio(file: File): Promise<BotConversationConfig> {
+  const fd = new FormData();
+  fd.append("audio", file, file.name);
+  const response = await fetch(`${API_BASE_URL}/api/admin/bot-conversation/intro-audio`, {
+    method: "POST",
+    body: fd,
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not upload intro audio");
+  }
+  return body as BotConversationConfig;
+}
+
+export async function uploadBotQuestionAudio(
+  order: number,
+  file: File
+): Promise<BotConversationConfig> {
+  const fd = new FormData();
+  fd.append("audio", file, file.name);
+  const response = await fetch(
+    `${API_BASE_URL}/api/admin/bot-conversation/questions/${order}/audio`,
+    { method: "POST", body: fd }
+  );
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not upload question audio");
+  }
+  return body as BotConversationConfig;
+}
+
+/** Bot conversation submit — one audio blob per answer, in question order. */
+export async function createBotFeedback(
+  payload: FeedbackPayload & {
+    conversationAnswers: BotConversationAnswer[];
+    answerAudioBlobs: Blob[];
+  }
+): Promise<CreateFeedbackResponse> {
+  const { answerAudioBlobs, conversationAnswers, voiceRecording: _v, ...fields } = payload;
+  const fd = new FormData();
+  fd.append("patientName", fields.patientName);
+  if (fields.department) fd.append("department", fields.department);
+  if (fields.lookupDepartment) fd.append("lookupDepartment", fields.lookupDepartment);
+  if (fields.service) fd.append("service", fields.service);
+  fd.append("rating", String(fields.rating));
+  fd.append("comments", fields.comments ?? "");
+  if (fields.source) fd.append("source", fields.source);
+  fd.append("submissionMode", "bot");
+  fd.append("conversationAnswers", JSON.stringify(conversationAnswers));
+  if (fields.patientRegNo) fd.append("patientRegNo", fields.patientRegNo);
+  if (fields.patientEncounterType) fd.append("patientEncounterType", fields.patientEncounterType);
+  if (fields.ward) fd.append("ward", fields.ward);
+  if (fields.ipNo) fd.append("ipNo", fields.ipNo);
+  if (fields.visitOrAdmissionDate) fd.append("visitOrAdmissionDate", fields.visitOrAdmissionDate);
+
+  for (let i = 0; i < answerAudioBlobs.length; i++) {
+    const blob = answerAudioBlobs[i];
+    if (!blob?.size) continue;
+    const mime = blob.type || "audio/webm";
+    const ext = mime.includes("mp4") ? "m4a" : "webm";
+    fd.append("answerAudio", blob, `answer-${i}.${ext}`);
+  }
+
+  const response = await fetch(`${API_BASE_URL}/api/feedback`, { method: "POST", body: fd });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not save feedback");
+  }
   return body as CreateFeedbackResponse;
 }
 
@@ -170,12 +388,14 @@ export async function getFeedback(): Promise<FeedbackItem[]> {
 }
 
 export async function getFeedbackById(id: string): Promise<FeedbackItem> {
-  const rows = await getFeedback();
-  const item = rows.find((row) => row._id === id || row.ticketId === id);
-  if (!item) {
-    throw new Error("Ticket not found");
+  const response = await fetch(`${API_BASE_URL}/api/feedback/${encodeURIComponent(id)}`, {
+    cache: "no-store",
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Ticket not found");
   }
-  return item;
+  return body as FeedbackItem;
 }
 
 export async function updateFeedbackStatus(
@@ -230,17 +450,132 @@ export async function seedOpenNegativeTickets(): Promise<{
   return response.json();
 }
 
+export interface DepartmentService {
+  _id?: string;
+  name: string;
+  description?: string;
+}
+
 export interface Department {
   _id: string;
   name: string;
   description?: string;
+  services?: DepartmentService[];
   createdAt: string;
 }
 
-export async function getDepartments(): Promise<Department[]> {
-  const response = await fetch(`${API_BASE_URL}/api/departments`);
+/** Hospital departments stored in MongoDB (staff assignment, local catalog). */
+export async function getHospitalDepartments(): Promise<Department[]> {
+  const response = await fetch(`${API_BASE_URL}/api/hospital-departments`, {
+    cache: "no-store",
+  });
   if (!response.ok) throw new Error("Could not load departments");
   return response.json();
+}
+
+/** @deprecated alias — use getHospitalDepartments */
+export async function getDepartments(): Promise<Department[]> {
+  const response = await fetch(`${API_BASE_URL}/api/departments`, { cache: "no-store" });
+  if (!response.ok) throw new Error("Could not load departments");
+  return response.json();
+}
+
+export interface ServiceCatalogItem {
+  _id: string;
+  name: string;
+  description?: string;
+  source: "tms" | "local";
+  readOnly: boolean;
+}
+
+/** Routing catalog for AI / tickets (TMS + local services). */
+export async function getServices(): Promise<ServiceCatalogItem[]> {
+  const response = await fetch(`${API_BASE_URL}/api/services`, { cache: "no-store" });
+  if (!response.ok) throw new Error("Could not load services");
+  return response.json();
+}
+
+export async function createService(payload: {
+  name: string;
+  description?: string;
+}): Promise<ServiceCatalogItem> {
+  const response = await fetch(`${API_BASE_URL}/api/services`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Create failed");
+  }
+  return response.json();
+}
+
+export async function updateService(
+  id: string,
+  payload: { name: string; description?: string }
+): Promise<ServiceCatalogItem> {
+  const response = await fetch(`${API_BASE_URL}/api/services/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Update failed");
+  }
+  return response.json();
+}
+
+export async function deleteService(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/services/${id}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw new Error("Delete failed");
+}
+
+export async function createHospitalDepartment(payload: {
+  name: string;
+  description?: string;
+  services?: DepartmentService[];
+}): Promise<Department> {
+  const response = await fetch(`${API_BASE_URL}/api/hospital-departments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Create failed");
+  }
+  return response.json();
+}
+
+export async function updateHospitalDepartment(
+  id: string,
+  payload: {
+    name: string;
+    description?: string;
+    services?: DepartmentService[];
+  }
+): Promise<Department> {
+  const response = await fetch(`${API_BASE_URL}/api/hospital-departments/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || "Update failed");
+  }
+  return response.json();
+}
+
+export async function deleteHospitalDepartment(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/hospital-departments/${id}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw new Error("Delete failed");
 }
 
 export async function createDepartment(payload: {
@@ -450,6 +785,8 @@ export async function inferVoiceRatingFromTranscript(
 
 export interface TmsHealth {
   configured: boolean;
+  outboundEnabled?: boolean;
+  catalogEnabled?: boolean;
   reachable?: boolean;
   status?: number;
   message?: string;

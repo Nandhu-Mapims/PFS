@@ -37,6 +37,21 @@ export function isTmsConfigured() {
   return Boolean(getTmsApiBase());
 }
 
+function envFlagEnabled(name) {
+  const v = String(process.env[name] || "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+/** Push tickets / voice metadata to TMS. Off by default — set TMS_OUTBOUND_ENABLED=true to enable. */
+export function isTmsOutboundEnabled() {
+  return isTmsConfigured() && envFlagEnabled("TMS_OUTBOUND_ENABLED");
+}
+
+/** Pull service catalog from TMS. Off by default — set TMS_CATALOG_ENABLED=true to enable. */
+export function isTmsCatalogEnabled() {
+  return isTmsConfigured() && envFlagEnabled("TMS_CATALOG_ENABLED");
+}
+
 function ingestHeaders({ jsonBody } = {}) {
   const headers = { Accept: "application/json" };
   if (jsonBody) headers["Content-Type"] = "application/json";

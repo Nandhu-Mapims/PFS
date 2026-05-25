@@ -1,14 +1,29 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { ArrowLeft, User, Calendar, Building2, AlertCircle, Save, MessageSquare, CheckCircle } from "lucide-react";
+import {
+  ArrowLeft,
+  User,
+  Building2,
+  AlertCircle,
+  Save,
+  MessageSquare,
+  CheckCircle,
+  Mic,
+} from "lucide-react";
 import {
   deleteFeedback,
   getFeedbackById,
+  resolveUploadUrl,
   type FeedbackItem,
   updateFeedbackStatus,
 } from "../lib/api";
-
-const FEEDBACK_API_ORIGIN = import.meta.env.VITE_API_URL || "";
+import { BotConversationFeedbackSection } from "./BotConversationFeedbackSection";
+import { displayOptionalLabel } from "../lib/fieldSanitize";
+import {
+  displaySentimentForItem,
+  effectiveFeedbackMode,
+  feedbackModeLabel,
+} from "../lib/feedbackDisplay";
 import { getSession } from "../lib/auth";
 
 export function TicketDetail() {
@@ -76,9 +91,10 @@ export function TicketDetail() {
   }
 
   const createdAt = ticket ? new Date(ticket.createdAt) : null;
-  const sentimentNegative = ticket?.aiSentiment === "negative";
-  const sentimentPositive = ticket?.aiSentiment === "positive";
-  const sentimentNeutral = ticket?.aiSentiment === "neutral";
+  const rowSentiment = ticket ? displaySentimentForItem(ticket) : null;
+  const sentimentNegative = rowSentiment === "negative";
+  const sentimentPositive = rowSentiment === "positive";
+  const sentimentNeutral = rowSentiment === "neutral";
   const noAiSentiment = ticket && !ticket.aiSentiment;
   const fallbackAiSummary = ticket
     ? noAiSentiment
@@ -89,15 +105,19 @@ export function TicketDetail() {
     : "";
   const aiSummary = ticket?.aiSummary?.trim() || fallbackAiSummary;
 
-  const voiceAudioSrc = ticket?.voiceRecordingUrl
-    ? ticket.voiceRecordingUrl.startsWith("http")
-      ? ticket.voiceRecordingUrl
-      : FEEDBACK_API_ORIGIN
-        ? `${FEEDBACK_API_ORIGIN.replace(/\/$/, "")}${
-            ticket.voiceRecordingUrl.startsWith("/") ? ticket.voiceRecordingUrl : `/${ticket.voiceRecordingUrl}`
-          }`
-        : ticket.voiceRecordingUrl
-    : null;
+  const voiceAudioSrc = resolveUploadUrl(ticket?.voiceRecordingUrl ?? null);
+  const displayMode = ticket ? effectiveFeedbackMode(ticket) : "standard";
+  const botAnswers = ticket?.botConversationAnswers ?? [];
+  const hasBotConversation =
+    (displayMode === "bot" || botAnswers.length > 0) && botAnswers.length > 0;
+  const hasVoiceCapture = Boolean(voiceAudioSrc);
+  const speechToTextText = ticket?.comments?.trim() || "";
+  const botGroupNote =
+    ticket?.isSplitChild && hasBotConversation
+      ? "Full bot conversation for this patient (all questions). This ticket covers one service from that session."
+      : ticket?.botVoiceSourceFeedbackId && hasBotConversation
+        ? "Voice Q&A loaded from the linked bot submission for this patient."
+        : null;
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -144,9 +164,7 @@ export function TicketDetail() {
                         : "bg-gray-500"
                 }`}
               >
-                {ticket.aiSentiment
-                  ? `AI sentiment: ${ticket.aiSentiment}`
-                  : "AI sentiment: pending"}
+                {rowSentiment ? `AI sentiment: ${rowSentiment}` : "AI sentiment: pending"}
               </span>
               <span className="px-4 py-2 rounded-full text-sm font-bold bg-[#94a3b8] text-white">
                 Rating: {ticket.rating}/5
@@ -184,6 +202,10 @@ export function TicketDetail() {
                 <p className="text-base font-semibold text-gray-800 capitalize">{ticket.source}</p>
               </div>
               <div>
+                <p className="text-sm text-gray-600 mb-1">Feedback type</p>
+                <p className="text-base font-semibold text-gray-800">{feedbackModeLabel[displayMode]}</p>
+              </div>
+              <div>
                 <p className="text-sm text-gray-600 mb-1">UHID / Reg. no.</p>
                 <p className="text-base font-semibold text-gray-800">{ticket.patientRegNo?.trim() || "—"}</p>
               </div>
@@ -198,9 +220,23 @@ export function TicketDetail() {
                 </p>
               </div>
               <div>
-                <p className="text-sm text-gray-600 mb-1">Department</p>
-                <p className="text-base font-semibold text-gray-800">{ticket.department || "N/A"}</p>
+                <p className="text-sm text-gray-600 mb-1">Department (UHID / EMR)</p>
+                <p className="text-base font-semibold text-gray-800">
+                  {displayOptionalLabel(ticket.lookupDepartment || ticket.department)}
+                </p>
               </div>
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Recommended service</p>
+                <p className="text-base font-semibold text-gray-800">
+                  {displayOptionalLabel(ticket.service)}
+                </p>
+              </div>
+              {ticket.suggestedAction?.trim() ? (
+                <div className="col-span-2">
+                  <p className="text-sm text-gray-600 mb-1">Suggested action</p>
+                  <p className="text-base font-semibold text-gray-800">{ticket.suggestedAction}</p>
+                </div>
+              ) : null}
               <div>
                 <p className="text-sm text-gray-600 mb-1">Ward</p>
                 <p className="text-base font-semibold text-gray-800">{ticket.ward?.trim() || "—"}</p>
@@ -220,23 +256,55 @@ export function TicketDetail() {
             </div>
           </div>
 
-          {/* Feedback */}
+          {/* Feedback — speech-to-text + voice audio */}
           <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
             <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
               <MessageSquare size={24} className="text-green-600" />
               Patient Feedback
             </h3>
-            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-              <p className="text-gray-700 leading-relaxed">{ticket.comments || "No comment provided."}</p>
-              {voiceAudioSrc ? (
-                <div className="mt-5 pt-4 border-t border-gray-200">
-                  <p className="text-sm font-semibold text-gray-700 mb-2">Voice recording</p>
-                  <audio controls className="w-full max-w-xl" preload="metadata" src={voiceAudioSrc}>
-                    Your browser does not support audio playback.
-                  </audio>
-                </div>
-              ) : null}
-            </div>
+
+            {hasBotConversation ? (
+              <BotConversationFeedbackSection
+                answers={botAnswers}
+                combinedSessionUrl={ticket.voiceRecordingUrl}
+                fullTranscript={speechToTextText}
+                groupNote={botGroupNote}
+              />
+            ) : (
+              <div className="space-y-5">
+                {(displayMode === "voice" || speechToTextText) && (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <p className="text-xs font-semibold text-[#2A6FDB] uppercase tracking-wide mb-2">
+                      Speech-to-text {displayMode === "voice" ? "(Sarvam — converted from voice)" : ""}
+                    </p>
+                    <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">
+                      {speechToTextText || "No transcript stored."}
+                    </p>
+                  </div>
+                )}
+
+                {hasVoiceCapture ? (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2 flex items-center gap-1">
+                      <Mic size={14} />
+                      Voice recording (what the patient spoke)
+                    </p>
+                    <audio controls className="w-full max-w-xl" preload="metadata" src={voiceAudioSrc!}>
+                      Your browser does not support audio playback.
+                    </audio>
+                  </div>
+                ) : displayMode === "voice" ? (
+                  <p className="text-sm text-amber-700 rounded-lg border border-amber-100 bg-amber-50 p-3">
+                    Voice feedback was submitted but no audio file is stored on the server for this ticket.
+                  </p>
+                ) : null}
+
+                {!speechToTextText && !hasVoiceCapture ? (
+                  <p className="text-gray-700 leading-relaxed">No comment provided.</p>
+                ) : null}
+              </div>
+            )}
+
           </div>
 
           {/* AI Analysis (OpenRouter when configured on API) */}
@@ -247,9 +315,9 @@ export function TicketDetail() {
             </h3>
             {(ticket.aiSentiment || ticket.aiUrgency) && (
               <div className="flex flex-wrap gap-2 mb-4">
-                {ticket.aiSentiment && (
+                {rowSentiment && (
                   <span className="px-3 py-1 rounded-full text-xs font-bold bg-white border border-[#2A6FDB] text-[#2A6FDB] capitalize">
-                    {ticket.aiSentiment}
+                    {rowSentiment}
                   </span>
                 )}
                 {ticket.aiUrgency && (
@@ -273,6 +341,57 @@ export function TicketDetail() {
               </div>
             )}
           </div>
+
+          {ticket.feedbackIssues && ticket.feedbackIssues.length > 0 && (
+            <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+              <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <Building2 size={24} className="text-blue-600" />
+                Categorized issues
+                {ticket.feedbackIssues.length > 1 ? (
+                  <span className="text-sm font-normal text-gray-500">
+                    ({ticket.feedbackIssues.length} departments / services)
+                  </span>
+                ) : null}
+              </h3>
+              <div className="space-y-4">
+                {ticket.feedbackIssues.map((issue, idx) => (
+                  <div
+                    key={`${issue.department}-${issue.recommendedService}-${idx}`}
+                    className="rounded-lg border border-gray-200 bg-gray-50 p-4"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-gray-500 mb-0.5">Department</p>
+                        <p className="font-semibold text-gray-800">
+                          {displayOptionalLabel(issue.department)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 mb-0.5">Recommended service</p>
+                        <p className="font-semibold text-gray-800">
+                          {displayOptionalLabel(issue.recommendedService)}
+                        </p>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <p className="text-gray-500 mb-0.5">Issue summary</p>
+                        <p className="text-gray-800">{issue.issueSummary || "—"}</p>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <p className="text-gray-500 mb-0.5">Suggested action</p>
+                        <p className="text-gray-800">{issue.suggestedAction || "—"}</p>
+                      </div>
+                      {issue.ticketId ? (
+                        <div>
+                          <p className="text-gray-500 mb-0.5">Ticket</p>
+                          <p className="font-mono font-semibold text-gray-800">{issue.ticketId}</p>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Timeline */}
           <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">

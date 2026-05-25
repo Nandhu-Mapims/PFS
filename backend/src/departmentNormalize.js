@@ -1,3 +1,5 @@
+import { sanitizeOptionalLabel } from "./fieldSanitize.js";
+
 /**
  * Map free-text department input to a canonical Department.name from the DB when possible.
  * - Case-insensitive exact match to a department name
@@ -18,7 +20,7 @@ function initialsFromName(name) {
  * @returns {{ name: string, method: "empty" | "exact" | "initials" | "unmatched" }}
  */
 export function resolveDepartmentHeuristic(raw, departments) {
-  const s = String(raw ?? "").trim();
+  const s = sanitizeOptionalLabel(raw);
   if (!s) return { name: "", method: "empty" };
 
   const list = Array.isArray(departments) ? departments : [];
@@ -46,7 +48,7 @@ export function resolveDepartmentHeuristic(raw, departments) {
     return { name: String(matches[0].name).trim(), method: "initials" };
   }
 
-  return { name: s, method: "unmatched" };
+  return { name: sanitizeOptionalLabel(s), method: "unmatched" };
 }
 
 /**

@@ -65,7 +65,7 @@ export function ThankYou() {
           Thank you for helping us improve our care
         </p>
 
-        {aiSummary.trim() && (
+        {isStaffSession && aiSummary.trim() && (
           <div
             className="mb-8 rounded-2xl px-5 py-4 text-left border-2"
             style={{ backgroundColor: aiPanelBg, borderColor: hexWithAlpha(primaryColor, 0.28) }}
@@ -104,7 +104,7 @@ export function ThankYou() {
 
         <button
           type="button"
-          onClick={() => navigate("/feedback")}
+          onClick={() => navigate(isStaffSession ? "/feedback" : "/welcome")}
           className="w-full text-white text-xl md:text-2xl py-5 md:py-6 rounded-2xl font-bold shadow-lg hover:shadow-xl hover:scale-[1.01] transition-all duration-200 flex items-center justify-center gap-3"
           style={{ backgroundColor: primaryColor }}
           onMouseLeave={(e) => {

@@ -1,3 +1,12 @@
+import { sanitizeOptionalLabel } from "./fieldSanitize.js";
+import { filterAiTopicsForTranscript } from "./aiTopicsFilter.js";
+import {
+  SYSTEM_JSON_ONLY,
+  buildFeedbackAnalysisUserPrompt,
+  buildServiceHintResolveUserPrompt,
+  buildVoiceRatingUserPrompt,
+} from "./openRouterPrompts.js";
+
 /**
  * OpenRouter OpenAI-compatible chat completions for patient-feedback analysis.
  * Requires OPENROUTER_API_KEY in environment.
@@ -5,7 +14,7 @@
  */
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MODEL = "meta-llama/llama-3.1-8b-instruct";
+const DEFAULT_MODEL = "google/gemini-2.5-flash-lite";
 
 function openRouterHeaders(apiKey) {
   const headers = {
@@ -63,6 +72,9 @@ export function resolveDepartmentFromAi(raw, choices) {
   return exact ? exact.name : null;
 }
 
+/** Alias — TMS catalog entries are exposed as hospital "services" in the feedback UI. */
+export const resolveServiceFromAi = resolveDepartmentFromAi;
+
 /**
  * @param {{ patientName: string; department: string; rating: number; comments: string }} input (rating is not sent to the model; sentiment uses comments only)
  * @param {{ feedbackId?: string; departmentChoices?: { name: string; description?: string }[] }} [options]
@@ -99,34 +111,7 @@ export async function inferRatingFromVoiceTranscript(transcript) {
   const truncated =
     textRaw.length > 4000 ? `${textRaw.slice(0, 4000)}…` : textRaw;
 
-  const userContent = `You classify a single hospital patient's SPOKEN feedback (shown below as transcription text).
-
-The transcript may be English, Tamil, or mixed — infer satisfaction only from wording and tone in the transcript.
-
-Rating scale (exactly ONE integer):
-- 5 = Excellent — strong praise, gratitude, "very happy", exceeded expectations.
-- 4 = Good — generally positive experience, minor nuisances acceptable.
-- 3 = Okay / neutral — mixed, vague, mostly factual without strong emotion, or ambiguous.
-- 2 = Poor — clear complaints, frustration, disappointment, problems with care/service.
-- 1 = Very Poor — rage, trauma, outrage, accusations of negligence/safety failures, vows to escalate.
-
-sentiment MUST align coarsely:
-- ratings 5–4 → sentiment "positive"
-- rating 3 → sentiment "neutral"
-- ratings 2–1 → sentiment "negative"
-
-Rules:
-- Do not consider anything outside this transcript.
-- If text is meaningless noise or shorter than three meaningful words → use rating 3 and sentiment neutral.
-
-Transcript:
-"""
-
-${truncated}
-
-"""
-
-Respond with ONLY valid JSON (no markdown): {"rating": <integer 1-5>, "sentiment": "positive"|"neutral"|"negative"}`;
+  const userContent = buildVoiceRatingUserPrompt(truncated);
 
   const response = await fetch(OPENROUTER_URL, {
     method: "POST",
@@ -134,14 +119,10 @@ Respond with ONLY valid JSON (no markdown): {"rating": <integer 1-5>, "sentiment
     body: JSON.stringify({
       model,
       messages: [
-        {
-          role: "system",
-          content:
-            "You reply only with a single JSON object. No markdown, no explanation.",
-        },
+        { role: "system", content: SYSTEM_JSON_ONLY },
         { role: "user", content: userContent },
       ],
-      temperature: 0.2,
+      temperature: 0.15,
       max_tokens: 128,
     }),
   });
@@ -186,6 +167,21 @@ Respond with ONLY valid JSON (no markdown): {"rating": <integer 1-5>, "sentiment
   return { rating: bounded, sentiment };
 }
 
+function normalizeIssueFromAi(raw, serviceChoices, emrDepartment) {
+  const emrDept = sanitizeOptionalLabel(emrDepartment);
+  const inferredDept = sanitizeOptionalLabel(raw?.department);
+  const dept = (inferredDept || emrDept).slice(0, 120);
+  const svcRaw = sanitizeOptionalLabel(raw?.recommendedService);
+  const svc = resolveServiceFromAi(svcRaw, serviceChoices) || "";
+  return {
+    department: dept,
+    recommendedService: svc,
+    issueSummary: String(raw?.issueSummary || "").trim().slice(0, 500),
+    suggestedAction: String(raw?.suggestedAction || "").trim().slice(0, 500),
+    sentiment: normalizeSentiment(raw?.sentiment),
+  };
+}
+
 export async function analyzePatientFeedback(input, options = {}) {
   const feedbackId = options.feedbackId ?? "unknown";
 
@@ -202,60 +198,33 @@ export async function analyzePatientFeedback(input, options = {}) {
   const truncatedComments =
     comments.length > 4000 ? `${comments.slice(0, 4000)}…` : comments;
 
-  const departmentChoices = Array.isArray(options.departmentChoices)
-    ? options.departmentChoices.filter((c) => c && String(c.name || "").trim())
+  const emrDepartment = sanitizeOptionalLabel(
+    input.patientDepartment || input.department
+  );
+  const serviceHint = sanitizeOptionalLabel(input.service);
+  const serviceChoices = Array.isArray(options.serviceChoices || options.departmentChoices)
+    ? (options.serviceChoices || options.departmentChoices).filter(
+        (c) => c && String(c.name || "").trim()
+      )
     : [];
-  const deptProvided = Boolean(String(input.department || "").trim());
-  const inferDepartment = !deptProvided && departmentChoices.length > 0;
 
-  const departmentListBlock = inferDepartment
-    ? `
-
-Official departments (choose at most one for routing). Each line is "Name — description":
-${departmentChoices
-  .map(
-    (c) =>
-      `- ${String(c.name).trim()} — ${String(c.description || "").trim() || "general services"}`
-  )
-  .join("\n")}
-
-Rules for "inferredDepartment":
-- The patient did NOT specify a department. Infer the single best department from their comments (symptoms, procedures, staff roles, location clues).
-- Set "inferredDepartment" to EXACTLY one "Name" string from the list above (character-for-character match to the name before " — "), or null if the text does not clearly fit any department.
-- Do not invent department names.`
-    : "";
-
-  const sentimentDeptLine = deptProvided
-    ? `Department (as entered by patient/staff): ${String(input.department || "").slice(0, 120)}`
-    : `Department: not specified — use inferredDepartment field below only.`;
-
-  const userContent = `You are a healthcare feedback analyst. Analyze this hospital patient feedback.
-
-Patient name: ${String(input.patientName || "").slice(0, 120)}
-${sentimentDeptLine}
-Patient written comments (may be empty): ${truncatedComments || "(none)"}
-${departmentListBlock}
-
-Rules for the "sentiment" field:
-- Infer sentiment ONLY from the wording and tone of the patient written comments (praise, complaints, frustration, gratitude).
-- Do NOT infer sentiment from any numeric rating or score — you are not given one on purpose.
-- If comments are empty or too vague to judge emotional tone, use "neutral".
-
-Rules for "urgency": judge follow-up priority from the issues described in the comments (safety, repeated failures, severe distress), not from a star rating.
-
-Respond with ONLY a valid JSON object (no markdown fences) using exactly these keys:
-- "sentiment": one of "positive", "neutral", "negative" — from comment text only, as above.
-- "urgency": one of "low", "medium", "high" — service/safety follow-up urgency for staff.
-- "topics": array of 1 to 5 short English strings (e.g. "wait time", "nursing care").
-- "summary": one concise sentence for staff (max 220 characters).${inferDepartment ? `\n- "inferredDepartment": either null or EXACTLY one department Name from the official list above.` : ""}
-
-Do not include any text outside the JSON object.`;
+  const userContent = buildFeedbackAnalysisUserPrompt({
+    patientName: String(input.patientName || "").slice(0, 120),
+    emrDepartment: emrDepartment.slice(0, 120),
+    serviceHint: serviceHint.slice(0, 120),
+    comments: truncatedComments,
+    serviceChoices: serviceChoices.map((c) => ({
+      name: String(c.name).trim(),
+      description: String(c.description || "").trim(),
+    })),
+  });
 
   // eslint-disable-next-line no-console
   console.log("[openrouter] request", {
     feedbackId,
     model,
-    department: String(input.department || "").slice(0, 80) || "(none)",
+    patientDepartment: emrDepartment.slice(0, 80) || "(none)",
+    serviceHint: serviceHint.slice(0, 80) || "(none)",
     commentChars: comments.length,
   });
 
@@ -265,14 +234,10 @@ Do not include any text outside the JSON object.`;
     body: JSON.stringify({
       model,
       messages: [
-        {
-          role: "system",
-          content:
-            "You reply only with a single JSON object. No markdown, no explanation.",
-        },
+        { role: "system", content: SYSTEM_JSON_ONLY },
         { role: "user", content: userContent },
       ],
-      temperature: 0.25,
+      temperature: 0.2,
       max_tokens: 512,
     }),
   });
@@ -314,22 +279,48 @@ Do not include any text outside the JSON object.`;
     ? parsed.topics.map((t) => String(t).trim()).filter(Boolean).slice(0, 5)
     : [];
 
+  const primaryService =
+    resolveServiceFromAi(parsed.recommendedService, serviceChoices) ||
+    (serviceHint ? resolveServiceFromAi(serviceHint, serviceChoices) : null) ||
+    "";
+
+  let issues = Array.isArray(parsed.issues)
+    ? parsed.issues
+        .map((row) => normalizeIssueFromAi(row, serviceChoices, emrDepartment))
+        .filter((row) => row.issueSummary || row.department || row.recommendedService)
+    : [];
+
+  if (issues.length === 0) {
+    issues = [
+      normalizeIssueFromAi(
+        {
+          department: emrDepartment,
+          recommendedService: primaryService,
+          issueSummary: String(parsed.summary || "").trim(),
+          suggestedAction:
+            parsed.suggestedAction ||
+            "Review feedback and assign appropriate service owner.",
+        },
+        serviceChoices,
+        emrDepartment
+      ),
+    ];
+  }
+
+  const filteredTopics = filterAiTopicsForTranscript(topics, comments);
+
   const result = {
     sentiment: normalizeSentiment(parsed.sentiment),
     urgency: normalizeUrgency(parsed.urgency),
-    topics,
+    topics: filteredTopics,
     summary: String(parsed.summary || "")
       .trim()
       .slice(0, 300),
+    recommendedService: primaryService || issues[0]?.recommendedService || "",
+    issues,
+    /** @deprecated use recommendedService — kept for callers not yet migrated */
+    inferredDepartment: primaryService || null,
   };
-
-  let inferredDepartment = null;
-  if (inferDepartment) {
-    inferredDepartment = resolveDepartmentFromAi(
-      parsed.inferredDepartment,
-      departmentChoices
-    );
-  }
 
   // eslint-disable-next-line no-console
   console.log("[openrouter] analysis complete", {
@@ -338,10 +329,11 @@ Do not include any text outside the JSON object.`;
     urgency: result.urgency,
     topics: result.topics,
     summary: result.summary,
-    inferredDepartment: inferDepartment ? inferredDepartment : undefined,
+    recommendedService: result.recommendedService,
+    issueCount: issues.length,
   });
 
-  return inferDepartment ? { ...result, inferredDepartment } : result;
+  return result;
 }
 
 /**
@@ -352,6 +344,10 @@ Do not include any text outside the JSON object.`;
  * @param {{ name: string; description?: string }[]} departmentChoices
  * @returns {Promise<string | null>}
  */
+export async function resolveServiceHintWithOpenRouter(userHint, serviceChoices) {
+  return resolveDepartmentHintWithOpenRouter(userHint, serviceChoices);
+}
+
 export async function resolveDepartmentHintWithOpenRouter(
   userHint,
   departmentChoices
@@ -366,25 +362,13 @@ export async function resolveDepartmentHintWithOpenRouter(
   if (!choices.length) return null;
 
   const model = getModel();
-  const listBlock = choices
-    .map(
-      (c) =>
-        `- ${String(c.name).trim()} — ${String(c.description || "").trim() || "general services"}`
-    )
-    .join("\n");
-
-  const userContent = `A staff member or patient typed this optional "department" field on a hospital feedback form:
-"${hint.slice(0, 200)}"
-
-Official departments (you may pick at most one EXACT Name from the list — the part before " — " on each line):
-${listBlock}
-
-Rules:
-- Choose the single Name that best matches their hint (synonyms, informal names, common typos, local abbreviations).
-- If the hint does not clearly correspond to any one department, use null.
-- Never invent a department name that is not in the list.
-
-Respond with ONLY valid JSON (no markdown): {"matchedDepartment": "<exact Name from list>" | null}`;
+  const userContent = buildServiceHintResolveUserPrompt(
+    hint.slice(0, 200),
+    choices.map((c) => ({
+      name: String(c.name).trim(),
+      description: String(c.description || "").trim(),
+    }))
+  );
 
   // eslint-disable-next-line no-console
   console.log("[openrouter] department-hint resolve", {
@@ -399,14 +383,10 @@ Respond with ONLY valid JSON (no markdown): {"matchedDepartment": "<exact Name f
     body: JSON.stringify({
       model,
       messages: [
-        {
-          role: "system",
-          content:
-            "You reply only with a single JSON object. No markdown, no explanation.",
-        },
+        { role: "system", content: SYSTEM_JSON_ONLY },
         { role: "user", content: userContent },
       ],
-      temperature: 0.15,
+      temperature: 0.1,
       max_tokens: 128,
     }),
   });

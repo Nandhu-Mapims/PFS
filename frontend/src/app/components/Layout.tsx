@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
-import { Home, BarChart3, ClipboardList, Settings, UserRound } from "lucide-react";
+import { Home, BarChart3, Building2, ClipboardList, Settings, UserRound } from "lucide-react";
 import { getSession, logout } from "../lib/auth";
 import feedbackLogo from "./image/feedback_logo.png";
 import {
@@ -19,10 +19,13 @@ export function Layout() {
   const isAdmin = session?.role === "admin";
   const path = location.pathname;
   const isPatientFeedbackArea = path === "/feedback" || path.startsWith("/feedback/");
+  const isPatientKioskScreen =
+    path === "/welcome" || path === "/thank-you" || isPatientFeedbackArea;
   const isStaffRoute =
     path.includes("staff") ||
     path.includes("dashboard") ||
     path.includes("management") ||
+    path.includes("analytics") ||
     path.includes("ticket") ||
     path.includes("admin");
   const showHeaderActions = Boolean(session) && isStaffRoute;
@@ -32,12 +35,18 @@ export function Layout() {
       "/dashboard",
       "/staff",
       "/management",
+      "/analytics",
+      "/insights",
       "/admin",
+      "/admin/analytics",
+      "/admin/insights",
       "/admin/management-overview",
       "/admin/departments",
+      "/admin/services",
       "/admin/tickets",
       "/admin/users",
       "/admin/settings",
+      "/admin/bot-conversation",
     ].includes(path);
 
   const isAdminShell = isAdmin && path.startsWith("/admin");
@@ -77,7 +86,7 @@ export function Layout() {
                 <p className="text-sm text-gray-500">Patient Feedback System</p>
               </div>
             </div>
-            {(showHeaderActions || session) && (
+            {(showHeaderActions || (session && !isPatientKioskScreen)) && (
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {showHeaderActions && (
                   <>
@@ -90,6 +99,32 @@ export function Layout() {
                     <button
                       type="button"
                       role="tab"
+                      aria-selected={
+                        path === "/admin/management-overview" ||
+                        path === "/admin/insights" ||
+                        path === "/admin/analytics"
+                      }
+                      onClick={() => navigate("/admin/management-overview")}
+                      className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
+                        path === "/admin/management-overview" ||
+                        path === "/admin/insights" ||
+                        path === "/admin/analytics"
+                          ? "bg-white shadow-sm"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                      style={
+                        path === "/admin/management-overview" ||
+                        path === "/admin/insights" ||
+                        path === "/admin/analytics"
+                          ? activePrimaryStyle
+                          : undefined
+                      }
+                    >
+                      Insights
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
                       aria-selected={path === "/admin"}
                       onClick={() => navigate("/admin")}
                       className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
@@ -99,21 +134,7 @@ export function Layout() {
                       }`}
                       style={path === "/admin" ? activePrimaryStyle : undefined}
                     >
-                      Analytics
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={path === "/admin/management-overview"}
-                      onClick={() => navigate("/admin/management-overview")}
-                      className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
-                        path === "/admin/management-overview"
-                          ? "bg-white shadow-sm"
-                          : "text-gray-600 hover:text-gray-900"
-                      }`}
-                      style={path === "/admin/management-overview" ? activePrimaryStyle : undefined}
-                    >
-                      Management
+                      Overview
                     </button>
                     <button
                       type="button"
@@ -128,6 +149,20 @@ export function Layout() {
                       style={path === "/admin/departments" ? activePrimaryStyle : undefined}
                     >
                       Departments
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={path === "/admin/services"}
+                      onClick={() => navigate("/admin/services")}
+                      className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
+                        path === "/admin/services"
+                          ? "bg-white shadow-sm"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                      style={path === "/admin/services" ? activePrimaryStyle : undefined}
+                    >
+                      Services
                     </button>
                     <button
                       type="button"
@@ -160,6 +195,20 @@ export function Layout() {
                     <button
                       type="button"
                       role="tab"
+                      aria-selected={path === "/admin/bot-conversation"}
+                      onClick={() => navigate("/admin/bot-conversation")}
+                      className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
+                        path === "/admin/bot-conversation"
+                          ? "bg-white shadow-sm"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                      style={path === "/admin/bot-conversation" ? activePrimaryStyle : undefined}
+                    >
+                      Bot Q&amp;A
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
                       aria-selected={path === "/admin/settings"}
                       onClick={() => navigate("/admin/settings")}
                       className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
@@ -176,22 +225,11 @@ export function Layout() {
                   <>
                     <button
                       type="button"
-                      onClick={() => navigate("/admin")}
+                      onClick={() => navigate("/admin/management-overview")}
                       className="px-4 py-2 text-white rounded-lg transition-all duration-200"
                       style={activePrimaryBackgroundStyle}
                     >
-                      Analytics
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => navigate("/admin/management-overview")}
-                      className={`px-4 py-2 rounded-lg border transition-all duration-200 ${
-                        path === "/admin/management-overview"
-                          ? "border-[#2A6FDB] text-[#2A6FDB] bg-blue-50"
-                          : "border-gray-300 text-gray-700 hover:bg-gray-100"
-                      }`}
-                    >
-                      Management overview
+                      Insights
                     </button>
                     <button
                       type="button"
@@ -219,12 +257,12 @@ export function Layout() {
                       type="button"
                       onClick={() => navigate("/management")}
                       className={`px-4 py-2 rounded-lg border transition-all duration-200 ${
-                        path === "/management"
+                        path === "/management" || path === "/analytics" || path === "/insights"
                           ? "border-[#2A6FDB] text-[#2A6FDB] bg-blue-50"
                           : "border-gray-300 text-gray-700 hover:bg-gray-100"
                       }`}
                     >
-                      Management
+                      Insights
                     </button>
                   </>
                 )}
@@ -270,25 +308,24 @@ export function Layout() {
               <div className="flex w-full justify-around overflow-x-auto">
                 <button
                   type="button"
-                  onClick={() => navigate("/admin")}
-                  className={`flex flex-col items-center gap-1 px-2 py-2 shrink-0 ${
-                    path === "/admin" ? "" : "text-gray-500"
-                  }`}
-                  style={path === "/admin" ? activePrimaryStyle : undefined}
-                >
-                  <Home size={22} />
-                  <span className="text-[10px] sm:text-xs">Analytics</span>
-                </button>
-                <button
-                  type="button"
                   onClick={() => navigate("/admin/management-overview")}
                   className={`flex flex-col items-center gap-1 px-2 py-2 shrink-0 ${
-                    path === "/admin/management-overview" ? "" : "text-gray-500"
+                    path === "/admin/management-overview" ||
+                    path === "/admin/analytics" ||
+                    path === "/admin/insights"
+                      ? ""
+                      : "text-gray-500"
                   }`}
-                  style={path === "/admin/management-overview" ? activePrimaryStyle : undefined}
+                  style={
+                    path === "/admin/management-overview" ||
+                    path === "/admin/analytics" ||
+                    path === "/admin/insights"
+                      ? activePrimaryStyle
+                      : undefined
+                  }
                 >
                   <BarChart3 size={22} />
-                  <span className="text-[10px] sm:text-xs">Mgmt</span>
+                  <span className="text-[10px] sm:text-xs">Insights</span>
                 </button>
                 <button
                   type="button"
@@ -298,7 +335,7 @@ export function Layout() {
                   }`}
                   style={path === "/admin/departments" ? activePrimaryStyle : undefined}
                 >
-                  <ClipboardList size={22} />
+                  <Building2 size={22} />
                   <span className="text-[10px] sm:text-xs">Depts</span>
                 </button>
                 <button
@@ -341,18 +378,26 @@ export function Layout() {
                   type="button"
                   onClick={() => navigate("/management")}
                   className={`flex flex-col items-center gap-1 px-4 py-2 ${
-                    path === "/management" || path === "/staff" || path === "/dashboard"
+                    path === "/management" ||
+                    path === "/analytics" ||
+                    path === "/insights" ||
+                    path === "/staff" ||
+                    path === "/dashboard"
                       ? ""
                       : "text-gray-500"
                   }`}
                   style={
-                    path === "/management" || path === "/staff" || path === "/dashboard"
+                    path === "/management" ||
+                    path === "/analytics" ||
+                    path === "/insights" ||
+                    path === "/staff" ||
+                    path === "/dashboard"
                       ? activePrimaryStyle
                       : undefined
                   }
                 >
-                  <Home size={24} />
-                  <span className="text-xs">Management</span>
+                  <BarChart3 size={24} />
+                  <span className="text-xs">Insights</span>
                 </button>
                 <button
                   type="button"

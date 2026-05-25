@@ -28,6 +28,7 @@ import {
   YAxis,
 } from "recharts";
 import { useNavigate } from "react-router";
+import { RecentFeedbackBySentiment } from "./RecentFeedbackBySentiment";
 
 const ratingLabel: Record<number, string> = {
   1: "Very Poor",
@@ -59,8 +60,6 @@ export function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [downloadBusy, setDownloadBusy] = useState(false);
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
   const [brandLogoDataUrl, setBrandLogoDataUrl] = useState<string | null>(null);
 
   const loadData = useCallback(async (opts?: { silent?: boolean }) => {
@@ -310,14 +309,6 @@ export function AdminPage() {
   );
   const negativeDepartmentData = analytics?.negativeByDepartment ?? [];
   const trendData = analytics?.submissionsByDay ?? [];
-  const recentItems = useMemo(
-    () =>
-      [...items]
-        .sort((a, b) => b._id.localeCompare(a._id))
-        .slice(0, 10),
-    [items]
-  );
-
   function escapeCsv(value: string): string {
     const normalized = value.replace(/"/g, '""');
     return `"${normalized}"`;
@@ -329,6 +320,7 @@ export function AdminPage() {
       "department",
       "rating",
       "status",
+      "aiSentiment",
       "source",
       "comments",
       "createdAt",
@@ -339,6 +331,7 @@ export function AdminPage() {
         escapeCsv(item.department || ""),
         String(item.rating),
         escapeCsv(item.status),
+        escapeCsv(item.aiSentiment || ""),
         escapeCsv(item.source),
         escapeCsv(item.comments || ""),
         escapeCsv(new Date(item.createdAt).toISOString()),
@@ -359,16 +352,10 @@ export function AdminPage() {
     downloadCsv(items, "feedback-all-data.csv");
   }
 
-  function downloadRangeFeedbackCsv() {
-    if (!fromDate || !toDate) return;
-    const start = new Date(`${fromDate}T00:00:00`);
-    const end = new Date(`${toDate}T23:59:59.999`);
-    const rows = items.filter((item) => {
-      const created = new Date(item.createdAt);
-      return created >= start && created <= end;
-    });
+  function downloadFilteredFeedbackCsv(rows: FeedbackItem[]) {
     if (!rows.length) return;
-    downloadCsv(rows, `feedback-${fromDate}-to-${toDate}.csv`);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv(rows, `feedback-filtered-${stamp}.csv`);
   }
 
   return (
@@ -380,7 +367,14 @@ export function AdminPage() {
             SaaS-level analytics for patient feedback performance
           </p>
         </div>
-        <div className="flex flex-col items-stretch sm:items-end gap-2">
+        <div className="flex flex-col items-stretch sm:items-end gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={() => navigate("/admin/settings")}
+            className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50"
+          >
+            Settings
+          </button>
           <button
             type="button"
             onClick={() => navigate("/admin/tickets")}
@@ -532,99 +526,15 @@ export function AdminPage() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-md overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 flex flex-col gap-3">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-semibold text-gray-800">Recent feedback (latest 10 rows)</h3>
-              <button
-                type="button"
-                disabled={isLoading || isRefreshing}
-                onClick={() => void loadData({ silent: true })}
-                className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isRefreshing ? "Refreshing…" : "Refresh"}
-              </button>
-            </div>
-            <button
-              type="button"
-              disabled={!items.length}
-              onClick={downloadAllFeedbackCsv}
-              className="px-4 py-2 rounded-lg bg-[#2A6FDB] text-white text-sm font-semibold hover:bg-[#1e5bbd] disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Download all data (CSV)
-            </button>
-          </div>
-          <div className="flex flex-col sm:flex-row sm:items-end gap-3">
-            <div className="flex flex-col">
-              <label className="text-xs text-gray-600 mb-1">From</label>
-              <input
-                type="date"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-              />
-            </div>
-            <div className="flex flex-col">
-              <label className="text-xs text-gray-600 mb-1">To</label>
-              <input
-                type="date"
-                value={toDate}
-                onChange={(e) => setToDate(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-              />
-            </div>
-            <button
-              type="button"
-              disabled={!fromDate || !toDate || !items.length}
-              onClick={downloadRangeFeedbackCsv}
-              className="px-4 py-2 rounded-lg bg-gray-900 text-white text-sm font-semibold hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Download by range (CSV)
-            </button>
-          </div>
-        </div>
-        {isLoading ? (
-          <p className="p-6 text-gray-600">Loading feedback...</p>
-        ) : error ? (
-          <p className="p-6 text-red-600">{error}</p>
-        ) : !items.length ? (
-          <p className="p-6 text-gray-600">No feedback submitted yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-[#F5F7FA]">
-                <tr>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Name</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Department</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Rating</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Status</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Comments</th>
-                  <th className="px-6 py-4 text-left text-sm font-bold text-gray-700">Submitted</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {recentItems.map((item) => (
-                  <tr key={item._id} className="hover:bg-[#F5F7FA] transition-colors">
-                    <td className="px-6 py-4 font-medium text-gray-800">{item.patientName}</td>
-                    <td className="px-6 py-4 text-gray-600">{item.department?.trim() || "—"}</td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {item.rating} - {ratingLabel[item.rating] ?? "N/A"}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">{item.status}</td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {item.comments || "No comment"}
-                    </td>
-                    <td className="px-6 py-4 text-gray-600">
-                      {new Date(item.createdAt).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      <RecentFeedbackBySentiment
+        items={items}
+        isLoading={isLoading}
+        isRefreshing={isRefreshing}
+        error={error}
+        onRefresh={() => void loadData({ silent: true })}
+        onDownloadAll={downloadAllFeedbackCsv}
+        onDownloadRange={downloadFilteredFeedbackCsv}
+      />
     </div>
   );
 }

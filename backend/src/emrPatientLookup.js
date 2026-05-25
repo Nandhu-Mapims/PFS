@@ -1,4 +1,5 @@
 import { extractObjectRows } from "./csvExcel.js";
+import { sanitizeOptionalLabel } from "./fieldSanitize.js";
 
 const DEFAULT_EMR_URL =
   "http://emr.mapims.edu.in/BB15SE/QueryBuilder/wsQueryBuilder.asmx/Getdataset1";
@@ -130,7 +131,7 @@ function parseLooseDate(s) {
 function mapOpRow(row, frmDate, toDate) {
   const regNo = getFromRow(row, "REG NO", "REGNO", "REG_NO");
   const patientName = getFromRow(row, "NAME", "PATIENT NAME");
-  const department = getFromRow(row, "DEPARTMENT");
+  const department = sanitizeOptionalLabel(getFromRow(row, "DEPARTMENT"));
   const ward = getFromRow(row, "WARD");
   const patientType = getFromRow(row, "PATIENT TYPE");
   const tokenNo = getFromRow(row, "TOKEN NO");
@@ -158,7 +159,7 @@ function mapOpRow(row, frmDate, toDate) {
 function mapIpRow(row, frmDate, toDate) {
   const regNo = getFromRow(row, "REG NO", "REGNO", "REG_NO");
   const patientName = getFromRow(row, "PATIENT NAME", "NAME");
-  const department = getFromRow(row, "DEPARTMENT");
+  const department = sanitizeOptionalLabel(getFromRow(row, "DEPARTMENT"));
   const ward = getFromRow(row, "WARD");
   const patientType = getFromRow(row, "PATIENT TYPE");
   const ipNo = getFromRow(row, "IP NO");
