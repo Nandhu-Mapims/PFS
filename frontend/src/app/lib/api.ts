@@ -88,9 +88,9 @@ export interface BrandingSettings {
 
 export interface CreateFeedbackResponse extends FeedbackItem {
   ticketRaised?: boolean;
-  /** True when Feedback API has TMS_API_BASE_URL set. */
+  /** TMS integration removed (kept for backward compatibility). */
   tmsConfigured?: boolean;
-  /** Human-readable reason when a ticket was opened but TMS did not get a row. */
+  /** TMS integration removed (kept for backward compatibility). */
   tmsSyncHint?: string | null;
   splitTickets?: Array<{
     _id: string;
@@ -114,11 +114,6 @@ export interface FeedbackItem extends Omit<FeedbackPayload, "voiceRecording"> {
   aiTopics?: string[];
   aiSummary?: string;
   aiAnalyzedAt?: string | null;
-  tmsTicketId?: string | null;
-  tmsTicketNumber?: string | null;
-  tmsTicketUrl?: string | null;
-  tmsSyncedAt?: string | null;
-  tmsSyncError?: string | null;
   voiceRecordingRelPath?: string | null;
   voiceRecordingUrl?: string | null;
   submissionMode?: "standard" | "voice" | "bot";
@@ -776,83 +771,6 @@ export async function inferVoiceRatingFromTranscript(
     throw new Error(readApiErrorMessage(body) || "Could not infer rating from voice");
   }
   return body as { rating: number; sentiment: string };
-}
-
-// ---------------------------------------------------------------------------
-// TMS (Ticket Management System) integration — proxied via this backend so the
-// browser never sees TMS service-account credentials.
-// ---------------------------------------------------------------------------
-
-export interface TmsHealth {
-  configured: boolean;
-  outboundEnabled?: boolean;
-  catalogEnabled?: boolean;
-  reachable?: boolean;
-  status?: number;
-  message?: string;
-  tms?: unknown;
-}
-
-export interface TmsDepartment {
-  _id?: string;
-  id?: string;
-  name?: string;
-  code?: string;
-  isActive?: boolean;
-}
-
-export interface TmsTicket {
-  _id?: string;
-  id?: string;
-  ticketNumber?: string;
-  title?: string;
-  description?: string;
-  status?: string;
-  priority?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  [k: string]: unknown;
-}
-
-export async function getTmsHealth(): Promise<TmsHealth> {
-  const response = await fetch(`${API_BASE_URL}/api/tms/health`, { cache: "no-store" });
-  const body = await response.json().catch(() => ({}));
-  return body as TmsHealth;
-}
-
-export async function getTmsDepartments(): Promise<{ data: TmsDepartment[]; meta?: unknown }> {
-  const response = await fetch(`${API_BASE_URL}/api/tms/departments`, { cache: "no-store" });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(readApiErrorMessage(body) || "Could not load TMS departments");
-  }
-  return body as { data: TmsDepartment[]; meta?: unknown };
-}
-
-export async function getTmsTicket(idOrNumber: string): Promise<TmsTicket> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/tms/tickets/${encodeURIComponent(idOrNumber)}`,
-    { cache: "no-store" }
-  );
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(readApiErrorMessage(body) || "Could not load TMS ticket");
-  }
-  return body as TmsTicket;
-}
-
-export async function syncFeedbackToTms(
-  feedbackIdOrTicketId: string
-): Promise<{ ok: boolean; feedback: FeedbackItem }> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/tms/tickets/sync/${encodeURIComponent(feedbackIdOrTicketId)}`,
-    { method: "POST" }
-  );
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(readApiErrorMessage(body) || "Could not sync ticket to TMS");
-  }
-  return body as { ok: boolean; feedback: FeedbackItem };
 }
 
 export async function transcribeVoiceRecording(

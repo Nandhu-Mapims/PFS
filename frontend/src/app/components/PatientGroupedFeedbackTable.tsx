@@ -2,10 +2,14 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight, Mic } from "lucide-react";
 import type { FeedbackItem } from "../lib/api";
 import type { PatientFeedbackGroup } from "../lib/patientFeedbackGroups";
+import type { BotConversationAnswer } from "../lib/api";
 import {
+  botSessionParent,
   childModeShortLabel,
   effectiveFeedbackMode,
   feedbackModeLabel,
+  ticketAiSummaryForItem,
+  ticketSummariesForDisplay,
 } from "../lib/feedbackDisplay";
 import { getAiSentimentBucket } from "../lib/sentiment";
 import { ticketDepartment, ticketService } from "../lib/ticketFilters";
@@ -26,10 +30,11 @@ type PatientGroupedFeedbackTableProps = {
   emptyMessage?: string;
 };
 
-function sentimentClass(sentiment: ReturnType<typeof getAiSentimentBucket>): string {
+function sentimentClass(sentiment: ReturnType<typeof getAiSentimentBucket> | "mixed"): string {
   if (sentiment === "negative") return "bg-red-50 text-red-700";
   if (sentiment === "positive") return "bg-emerald-50 text-emerald-700";
   if (sentiment === "neutral") return "bg-amber-50 text-amber-800";
+  if (sentiment === "mixed") return "bg-violet-50 text-violet-800";
   return "bg-gray-100 text-gray-600";
 }
 
@@ -147,6 +152,8 @@ function GroupRows({
   onDeleteItem?: (item: FeedbackItem) => void;
 }) {
   const rep = group.representative;
+  const botParentRow = botSessionParent(group.items);
+  const botAnswerCount = botParentRow?.botConversationAnswers?.length ?? 0;
   const servicesLine =
     group.services.length > 0
       ? group.services.slice(0, 4).join(", ") + (group.services.length > 4 ? "…" : "")
@@ -155,6 +162,11 @@ function GroupRows({
     group.departments.length > 0
       ? group.departments.slice(0, 3).join(", ") + (group.departments.length > 3 ? "…" : "")
       : "—";
+  const summaryLines = ticketSummariesForDisplay(group.items);
+  const parentSummaryLine =
+    summaryLines.length > 1
+      ? summaryLines.slice(0, 3).join(" · ") + (summaryLines.length > 3 ? "…" : "")
+      : summaryLines[0] || rep.aiSummary?.trim() || rep.comments?.trim() || "—";
 
   const parentRow = (
     <tr className={`${multi ? "bg-blue-50/40" : ""} hover:bg-gray-50/80`}>
@@ -216,8 +228,11 @@ function GroupRows({
             <div>{group.patientName}</div>
             {multi ? (
               <div className="text-xs text-[#2A6FDB] font-semibold mt-0.5">
-                {group.items.length} submission{group.items.length !== 1 ? "s" : ""}
+                {botAnswerCount > 0
+                  ? `${botAnswerCount} bot answer${botAnswerCount !== 1 ? "s" : ""}`
+                  : `${group.items.length} submission${group.items.length !== 1 ? "s" : ""}`}
                 {group.ticketCount > 0 ? ` · ${group.ticketCount} ticket${group.ticketCount !== 1 ? "s" : ""}` : ""}
+                {botAnswerCount > 0 ? " · expand to see each answer" : ""}
               </div>
             ) : null}
           </td>
@@ -240,7 +255,7 @@ function GroupRows({
           </td>
           <td className="px-4 py-3 text-sm text-gray-600">{group.statusLabel}</td>
           <td className="px-4 py-3 text-sm text-gray-600 max-w-[200px]">
-            <span className="line-clamp-2">{rep.aiSummary?.trim() || rep.comments?.trim() || "—"}</span>
+            <span className="line-clamp-2">{parentSummaryLine}</span>
           </td>
           <td className="px-4 py-3 text-xs text-gray-500 hidden lg:table-cell whitespace-nowrap">
             {new Date(group.latestCreatedAt).toLocaleString()}
@@ -261,25 +276,105 @@ function GroupRows({
     </tr>
   );
 
+  const botParent = botSessionParent(group.items);
+  const botAnswers = [...(botParent?.botConversationAnswers ?? [])].sort(
+    (a, b) => a.questionOrder - b.questionOrder
+  );
+
   const childRows =
-    multi && isOpen
-      ? group.items.map((item) => (
-          <ChildRow
-            key={item._id}
-            item={item}
+    multi && isOpen ? (
+      <>
+        {botAnswers.map((answer) => (
+          <BotAnswerRow
+            key={`${group.groupKey}-q-${answer.questionOrder}`}
+            answer={answer}
             variant={variant}
-            onViewItem={onViewItem}
-            onDeleteItem={onDeleteItem}
-            groupItems={group.items}
+            onView={() => botParent && onViewItem(botParent)}
           />
-        ))
-      : null;
+        ))}
+        {group.items
+          .filter((item) => item.isSplitChild)
+          .map((item) => (
+            <ChildRow
+              key={item._id}
+              item={item}
+              variant={variant}
+              onViewItem={onViewItem}
+              onDeleteItem={onDeleteItem}
+              groupItems={group.items}
+            />
+          ))}
+      </>
+    ) : null;
 
   return (
     <>
       {parentRow}
       {childRows}
     </>
+  );
+}
+
+function BotAnswerRow({
+  answer,
+  variant,
+  onView,
+}: {
+  answer: BotConversationAnswer;
+  variant: "overview" | "tickets";
+  onView: () => void;
+}) {
+  const sentiment =
+    answer.answerSentiment === "positive" ||
+    answer.answerSentiment === "neutral" ||
+    answer.answerSentiment === "negative"
+      ? answer.answerSentiment
+      : null;
+  const transcript = answer.transcript?.trim() || "—";
+
+  const questionLabel = answer.questionText?.trim() || "Bot question";
+
+  return (
+    <tr className="bg-sky-50/50 hover:bg-sky-50/80">
+      <td className="px-2 py-2" />
+      {variant === "tickets" ? (
+        <>
+          <td className="px-4 py-2 pl-6 text-sm font-medium text-gray-800 max-w-[220px] line-clamp-2">
+            {questionLabel}
+          </td>
+          <td className="px-4 py-2 text-sm text-gray-700 max-w-[240px] line-clamp-2">{transcript}</td>
+          <td className="px-4 py-2 hidden md:table-cell">
+            <span className={`inline-flex px-2 py-0.5 rounded text-xs capitalize ${sentimentClass(sentiment)}`}>
+              {sentiment ?? "—"}
+            </span>
+          </td>
+          <td colSpan={3} className="px-4 py-2" />
+        </>
+      ) : (
+        <>
+          <td className="px-4 py-2 pl-6 text-sm font-medium text-gray-800 max-w-[200px] line-clamp-2">
+            {questionLabel}
+          </td>
+          <td className="px-4 py-2 text-xs text-gray-500">Bot answer</td>
+          <td className="px-4 py-2 text-sm text-gray-600 hidden lg:table-cell">—</td>
+          <td className="px-4 py-2 text-sm text-gray-600 hidden md:table-cell">—</td>
+          <td className="px-4 py-2">
+            <span className={`inline-flex px-2 py-0.5 rounded text-xs capitalize ${sentimentClass(sentiment)}`}>
+              {sentiment ?? "—"}
+            </span>
+          </td>
+          <td className="px-4 py-2 text-xs hidden sm:table-cell">—</td>
+          <td className="px-4 py-2 text-xs">—</td>
+          <td className="px-4 py-2 text-xs text-gray-600 max-w-[200px] line-clamp-2">{transcript}</td>
+          <td className="px-4 py-2" />
+        </>
+      )}
+      <td className="px-4 py-2 text-right">
+        <button type="button" onClick={onView} className="text-xs font-semibold text-[#2A6FDB] hover:underline">
+          Listen
+        </button>
+      </td>
+    </tr>
   );
 }
 
@@ -310,7 +405,7 @@ function ChildRow({
             {svc ? <span className="font-medium">Service: {svc}</span> : "—"}
             {dept && dept !== "—" ? <div className="text-xs text-gray-500">{dept}</div> : null}
             {item.isSplitChild ? (
-              <div className="text-xs text-amber-700">Split issue ticket</div>
+              <div className="text-xs text-amber-700 font-medium">Complaint ticket (split issue)</div>
             ) : null}
             {(item.botConversationAnswers?.length ?? 0) > 0 ? (
               <div className="text-xs text-[#2A6FDB] font-semibold flex items-center gap-1 mt-0.5">
@@ -334,7 +429,7 @@ function ChildRow({
         </>
       ) : (
         <>
-          <td className="px-4 py-2 pl-8 text-xs text-gray-500">↳ detail</td>
+          <td className="px-4 py-2 pl-8 text-xs text-gray-500">↳ ticket</td>
           <td className="px-4 py-2 text-xs text-gray-600">{childModeShortLabel(item, groupItems)}</td>
           <td className="px-4 py-2 text-sm text-gray-600 hidden lg:table-cell">{dept || "—"}</td>
           <td className="px-4 py-2 text-sm text-gray-600 hidden md:table-cell">{svc || "—"}</td>
@@ -346,7 +441,7 @@ function ChildRow({
           <td className="px-4 py-2 text-xs hidden sm:table-cell">{item.rating}</td>
           <td className="px-4 py-2 text-xs">{item.status}</td>
           <td className="px-4 py-2 text-xs text-gray-600 max-w-[200px] line-clamp-2">
-            {item.aiSummary?.trim() || item.comments?.trim() || "—"}
+            {ticketAiSummaryForItem(item) || "—"}
           </td>
           <td className="px-4 py-2 text-xs text-gray-500 hidden lg:table-cell">
             {new Date(item.createdAt).toLocaleString()}

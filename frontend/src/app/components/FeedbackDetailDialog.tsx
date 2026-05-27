@@ -75,7 +75,15 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
             </span>
             <span className="px-2 py-1 rounded-md bg-gray-100 text-gray-700">{item.status}</span>
             {displaySentimentForItem(item) ? (
-              <span className="px-2 py-1 rounded-md bg-blue-50 text-blue-800 capitalize">
+              <span
+                className={`px-2 py-1 rounded-md capitalize ${
+                  displaySentimentForItem(item) === "positive"
+                    ? "bg-emerald-50 text-emerald-800"
+                    : displaySentimentForItem(item) === "negative"
+                      ? "bg-red-50 text-red-700"
+                      : "bg-blue-50 text-blue-800"
+                }`}
+              >
                 AI {displaySentimentForItem(item)}
               </span>
             ) : null}

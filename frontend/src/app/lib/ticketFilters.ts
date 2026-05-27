@@ -28,25 +28,25 @@ export function isPlausibleServiceLabel(
 }
 
 export function ticketService(item: FeedbackItem): string {
+  const fromField = sanitizeOptionalLabel(item.service);
+  if (item.isSplitChild && isPlausibleServiceLabel(fromField, item)) {
+    return fromField;
+  }
+
   const issueServices = (item.feedbackIssues || [])
     .map((i) => sanitizeOptionalLabel(i.recommendedService))
     .filter((s) => isPlausibleServiceLabel(s, item));
-
-  if (item.isSplitChild && issueServices[0]) {
-    return issueServices[0];
-  }
 
   if (issueServices.length === 1) {
     return issueServices[0];
   }
 
-  if (issueServices.length > 1) {
-    return issueServices[0];
-  }
-
-  const fromField = sanitizeOptionalLabel(item.service);
   if (isPlausibleServiceLabel(fromField, item)) {
     return fromField;
+  }
+
+  if (issueServices.length > 1) {
+    return issueServices[0];
   }
 
   return "";

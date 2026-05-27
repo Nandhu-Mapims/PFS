@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import {
   ArrowLeft,
@@ -256,6 +256,41 @@ export function TicketDetail() {
             </div>
           </div>
 
+          {/* AI Analysis (OpenRouter when configured on API) */}
+          <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl p-6 border-2 border-[#2A6FDB] shadow-sm">
+            <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+              <AlertCircle size={24} className="text-[#2A6FDB]" />
+              AI Sentiment Analysis
+            </h3>
+            {(ticket.aiSentiment || ticket.aiUrgency) && (
+              <div className="flex flex-wrap gap-2 mb-4">
+                {rowSentiment && (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-white border border-[#2A6FDB] text-[#2A6FDB] capitalize">
+                    {rowSentiment}
+                  </span>
+                )}
+                {ticket.aiUrgency && (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-white border border-[#F4A261] text-[#92400e] capitalize">
+                    Urgency: {ticket.aiUrgency}
+                  </span>
+                )}
+              </div>
+            )}
+            <p className="text-gray-700 leading-relaxed font-medium">{aiSummary}</p>
+            {ticket.aiTopics && ticket.aiTopics.length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {ticket.aiTopics.map((t) => (
+                  <span
+                    key={t}
+                    className="px-2 py-1 rounded-md text-xs bg-white/80 border border-gray-200 text-gray-700"
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Feedback — speech-to-text + voice audio */}
           <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
             <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
@@ -305,41 +340,6 @@ export function TicketDetail() {
               </div>
             )}
 
-          </div>
-
-          {/* AI Analysis (OpenRouter when configured on API) */}
-          <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl p-6 border-2 border-[#2A6FDB] shadow-sm">
-            <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-              <AlertCircle size={24} className="text-[#2A6FDB]" />
-              AI Sentiment Analysis
-            </h3>
-            {(ticket.aiSentiment || ticket.aiUrgency) && (
-              <div className="flex flex-wrap gap-2 mb-4">
-                {rowSentiment && (
-                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-white border border-[#2A6FDB] text-[#2A6FDB] capitalize">
-                    {rowSentiment}
-                  </span>
-                )}
-                {ticket.aiUrgency && (
-                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-white border border-[#F4A261] text-[#92400e] capitalize">
-                    Urgency: {ticket.aiUrgency}
-                  </span>
-                )}
-              </div>
-            )}
-            <p className="text-gray-700 leading-relaxed font-medium">{aiSummary}</p>
-            {ticket.aiTopics && ticket.aiTopics.length > 0 && (
-              <div className="mt-4 flex flex-wrap gap-2">
-                {ticket.aiTopics.map((t) => (
-                  <span
-                    key={t}
-                    className="px-2 py-1 rounded-md text-xs bg-white/80 border border-gray-200 text-gray-700"
-                  >
-                    {t}
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
 
           {ticket.feedbackIssues && ticket.feedbackIssues.length > 0 && (
@@ -440,7 +440,7 @@ export function TicketDetail() {
             <h3 className="text-lg font-semibold text-gray-800 mb-4">Update Status</h3>
             <select
               value={status}
-              onChange={(e) => setStatus(e.target.value)}
+              onChange={(e) => setStatus(e.target.value as FeedbackItem["status"])}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none mb-4"
             >
               <option value="New">New</option>
@@ -466,31 +466,17 @@ export function TicketDetail() {
               <Save size={20} />
               {isSaving ? "Saving..." : "Save Changes"}
             </button>
+
+            {showDeleteAction && (
+              <button
+                onClick={() => void handleDelete()}
+                className="w-full mt-3 px-4 py-3 bg-red-700 text-white rounded-lg hover:bg-red-800 transition-colors text-sm font-bold"
+              >
+                Delete Ticket
+              </button>
+            )}
           </div>
 
-          {/* Quick Actions */}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">Quick Actions</h3>
-            <div className="space-y-3">
-              <button className="w-full px-4 py-3 bg-[#2A6FDB] text-white rounded-lg hover:bg-[#1e5bbd] transition-colors text-sm font-bold">
-                Send Follow-up Email
-              </button>
-              <button className="w-full px-4 py-3 bg-[#2FBF71] text-white rounded-lg hover:bg-[#28a962] transition-colors text-sm font-bold">
-                Call Patient
-              </button>
-              <button className="w-full px-4 py-3 bg-[#E5533D] text-white rounded-lg hover:bg-[#d43e29] transition-colors text-sm font-bold">
-                Escalate to Manager
-              </button>
-              {showDeleteAction && (
-                <button
-                  onClick={() => void handleDelete()}
-                  className="w-full px-4 py-3 bg-red-700 text-white rounded-lg hover:bg-red-800 transition-colors text-sm font-bold"
-                >
-                  Delete Ticket
-                </button>
-              )}
-            </div>
-          </div>
         </div>
       </div>
       </>

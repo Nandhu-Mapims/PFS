@@ -1,5 +1,5 @@
 import type { FeedbackItem } from "./api";
-import { displaySentimentForItem } from "./feedbackDisplay";
+import { displaySentimentForItem, groupSentimentLabel } from "./feedbackDisplay";
 import { ticketDepartment, ticketService, ticketServices } from "./ticketFilters";
 
 export type PatientFeedbackGroup = {
@@ -15,7 +15,7 @@ export type PatientFeedbackGroup = {
   latestCreatedAt: string;
   /** Single status if all match, else "Mixed" */
   statusLabel: string;
-  dominantSentiment: FeedbackItem["aiSentiment"] | null;
+  dominantSentiment: FeedbackItem["aiSentiment"] | "mixed" | null;
 };
 
 function groupKeyFor(item: FeedbackItem): string {
@@ -62,14 +62,9 @@ export function buildPatientFeedbackGroups(items: FeedbackItem[]): PatientFeedba
     const departments = uniqueStrings(sorted.map(ticketDepartment));
     const ratings = sorted.map((i) => i.rating);
     const statuses = uniqueStrings(sorted.map((i) => i.status));
-    const sentiments = sorted
-      .map((i) => displaySentimentForItem(i))
-      .filter((s): s is NonNullable<typeof s> => Boolean(s));
-
-    let dominantSentiment: FeedbackItem["aiSentiment"] | null = null;
-    if (sentiments.includes("negative")) dominantSentiment = "negative";
-    else if (sentiments.includes("neutral")) dominantSentiment = "neutral";
-    else if (sentiments.includes("positive")) dominantSentiment = "positive";
+    const groupSentiment = groupSentimentLabel(sorted);
+    const dominantSentiment: FeedbackItem["aiSentiment"] | "mixed" | null =
+      groupSentiment === "mixed" ? "mixed" : groupSentiment;
 
     groups.push({
       groupKey,

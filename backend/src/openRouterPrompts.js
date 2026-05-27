@@ -58,14 +58,17 @@ export function buildFeedbackAnalysisUserPrompt(params) {
 <txt>${esc(comments || "")}</txt>
 ${svcLine}
 <r>
-sentiment+urgency from txt only (no rating); vague→neutral.
+rating:integer 1-5 from overall tone (ta/en); 5 praise 4 good 3 mixed 2 poor 1 very poor; align with sentiment.
+sentiment+urgency from txt; vague→neutral.
 topics:1-5 English tags from txt only; no Wait/Nurse/Bill/Food unless said.
 ta:காத்து=air/AC not wait;பாத்ரூம்→Cleanliness/Housekeeping; wait tag only if wait/காத்திருப்பு.
 recommendedService: exact name from svc pipe or "".
 issues:1 if one problem else split only clear multi-service; no fake extra issues;
+each issue sentiment must match ONLY that issueSummary text (positive praise→positive even if another Q was negative).
+Bot txt has Q:/A: blocks: rate each A separately; do not copy overall negative to a positive answer.
 each:{department,recommendedService,issueSummary,suggestedAction,sentiment per issue}.
 </r>
-<o>{"sentiment":"","urgency":"low|medium|high","topics":[],"summary":"","recommendedService":"","issues":[]}</o>`;
+<o>{"rating":3,"sentiment":"","urgency":"low|medium|high","topics":[],"summary":"","recommendedService":"","issues":[]}</o>`;
 }
 
 /**

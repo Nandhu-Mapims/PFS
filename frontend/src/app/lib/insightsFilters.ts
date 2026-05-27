@@ -87,8 +87,16 @@ export function startOfMonth(date: Date): Date {
   return d;
 }
 
+/** Calendar date in the user's local timezone (not UTC). */
+export function localDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 export function toDateInputValue(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return localDateKey(date);
 }
 
 export function thisWeekRange(now = new Date()): CustomDateRange {
@@ -133,10 +141,10 @@ export function isDefaultPresetRange(
 
 export function bucketKeyForPeriod(date: Date, granularity: PeriodGranularity): string {
   if (granularity === "daily") {
-    return date.toISOString().slice(0, 10);
+    return localDateKey(date);
   }
   if (granularity === "weekly") {
-    return startOfWeek(date).toISOString().slice(0, 10);
+    return localDateKey(startOfWeek(date));
   }
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
@@ -172,7 +180,7 @@ export function enumerateBucketKeys(granularity: PeriodGranularity, window: Filt
     const end = new Date(window.end);
     end.setHours(0, 0, 0, 0);
     while (cur.getTime() <= end.getTime()) {
-      keys.push(cur.toISOString().slice(0, 10));
+      keys.push(localDateKey(cur));
       cur.setDate(cur.getDate() + 1);
     }
     return keys;
@@ -181,7 +189,7 @@ export function enumerateBucketKeys(granularity: PeriodGranularity, window: Filt
     let cur = startOfWeek(window.start);
     const end = startOfWeek(window.end);
     while (cur.getTime() <= end.getTime()) {
-      keys.push(cur.toISOString().slice(0, 10));
+      keys.push(localDateKey(cur));
       cur = new Date(cur);
       cur.setDate(cur.getDate() + 7);
     }
@@ -205,6 +213,46 @@ export function filterItemsInWindow<T extends { createdAt: string }>(
     const d = new Date(row.createdAt);
     if (d < window.start || d > window.end) return false;
     return matchesTimeOfDay(d, timeSlot);
+  });
+}
+
+/** Bot/voice sessions split into multiple tickets — count the parent row only for volume KPIs. */
+export function feedbackRowsForAnalytics<T extends { isSplitChild?: boolean }>(items: T[]): T[] {
+  return items.filter((row) => !row.isSplitChild);
+}
+
+/** Rows that opened a complaint ticket (includes split issue tickets). */
+export function feedbackRowsWithTicket<T extends { ticketId?: string | null }>(items: T[]): T[] {
+  return items.filter((row) => Boolean(String(row.ticketId || "").trim()));
+}
+
+export function buildStatusBuckets(
+  items: { createdAt: string; status: string }[],
+  granularity: PeriodGranularity,
+  window: FilterWindow
+): Array<{
+  key: string;
+  label: string;
+  new: number;
+  inProgress: number;
+  resolved: number;
+}> {
+  const map = new Map<string, { new: number; inProgress: number; resolved: number }>();
+  for (const row of items) {
+    const key = bucketKeyForPeriod(new Date(row.createdAt), granularity);
+    if (!map.has(key)) map.set(key, { new: 0, inProgress: 0, resolved: 0 });
+    const entry = map.get(key)!;
+    if (row.status === "In Progress") entry.inProgress += 1;
+    else if (row.status === "Resolved") entry.resolved += 1;
+    else entry.new += 1;
+  }
+  return enumerateBucketKeys(granularity, window).map((key) => {
+    const counts = map.get(key) || { new: 0, inProgress: 0, resolved: 0 };
+    return {
+      key,
+      label: formatBucketLabel(key, granularity),
+      ...counts,
+    };
   });
 }
 

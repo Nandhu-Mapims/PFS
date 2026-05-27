@@ -21,20 +21,6 @@ import {
 } from "./feedbackIssueProcessing.js";
 import { sanitizeOptionalLabel } from "./fieldSanitize.js";
 import { filterAiTopicsForTranscript } from "./aiTopicsFilter.js";
-import {
-  isTmsConfigured,
-  isTmsCatalogEnabled,
-  isTmsOutboundEnabled,
-  createTicketForFeedback,
-  patchTmsTicketFeedbackVoice,
-  getTmsHealth,
-  listTmsDepartments,
-  getTmsTicket,
-  listTmsTickets,
-  buildTmsTicketUrl,
-  tmsErrorToHttp,
-  logTmsFailure,
-} from "./tmsClient.js";
 import { lookupPatientRecords, isEmrPatientLookupEnabled } from "./emrPatientLookup.js";
 import {
   Branding,
@@ -46,7 +32,9 @@ import {
 } from "./models.js";
 import {
   attachBotAnswerPlaybackUrls,
+  attachBotAnswerSentimentsFromIssues,
   buildBotCommentsFromAnswers,
+  inferAnswerSentimentHeuristic,
   ensureBotConversationConfig,
   registerBotConversationRoutes,
   saveBotAnswerRecording,
@@ -255,71 +243,6 @@ function newTicketId() {
   return `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 }
 
-/**
- * Pushes a feedback record to TMS as a real ticket. If TMS isn't configured or
- * the call fails, we keep the local `ticketId` so the UI keeps working and we
- * stash the error on the feedback row for diagnostics. Returns the patched doc.
- */
-async function syncFeedbackToTms(feedback, { reason } = {}) {
-  if (!isTmsOutboundEnabled()) {
-    // eslint-disable-next-line no-console
-    console.log("[feedback] tms sync skipped", {
-      feedbackId: String(feedback?._id || ""),
-      reason: isTmsConfigured()
-        ? "TMS_OUTBOUND_ENABLED is not set"
-        : "TMS_API_BASE_URL not set",
-    });
-    return feedback;
-  }
-  try {
-    // eslint-disable-next-line no-console
-    console.log("[feedback] tms sync calling TMS…", {
-      feedbackId: String(feedback._id),
-      trigger: reason || "unspecified",
-      localTicketId: feedback.ticketId || null,
-      rating: feedback.rating,
-    });
-    const tmsTicket = await createTicketForFeedback(feedback);
-    const tmsId = tmsTicket?.id || tmsTicket?._id || null;
-    const tmsNumber = tmsTicket?.ticketNumber || null;
-    const set = {
-      tmsTicketId: tmsId ? String(tmsId) : null,
-      tmsTicketNumber: tmsNumber || null,
-      tmsTicketUrl: buildTmsTicketUrl(tmsNumber || tmsId),
-      tmsSyncedAt: new Date(),
-      tmsSyncError: null,
-    };
-    if (tmsNumber) {
-      // Replace the placeholder TKT-XXXX with the real TMS ticket number for clarity.
-      set.ticketId = tmsNumber;
-    }
-    const updated = await Feedback.findByIdAndUpdate(feedback._id, { $set: set }, { new: true }).lean();
-    // eslint-disable-next-line no-console
-    console.log("[feedback] tms sync ok", {
-      feedbackId: String(feedback._id),
-      reason: reason || "unspecified",
-      tmsTicketId: set.tmsTicketId,
-      tmsTicketNumber: set.tmsTicketNumber,
-    });
-    return updated || feedback;
-  } catch (error) {
-    logTmsFailure("createTicketForFeedback", error);
-    // eslint-disable-next-line no-console
-    console.error("[feedback] tms sync FAILED", {
-      feedbackId: String(feedback?._id || ""),
-      message: error?.message || String(error),
-      httpStatus: error?.status ?? null,
-      tmsResponseBody: error?.body ?? null,
-    });
-    const set = {
-      tmsSyncError: String(error?.message || "TMS sync failed").slice(0, 500),
-      tmsSyncedAt: new Date(),
-    };
-    const updated = await Feedback.findByIdAndUpdate(feedback._id, { $set: set }, { new: true }).lean();
-    return updated || feedback;
-  }
-}
-
 async function ensureDefaults() {
   const deptCount = await Department.countDocuments();
   if (deptCount === 0) {
@@ -345,50 +268,6 @@ async function ensureDefaults() {
   await ensureBotConversationConfig();
 }
 
-/**
- * Loads TMS departments for routing/AI hints. Never throws — returns [] if TMS is
- * unreachable (common on production when the Feedback server cannot call tms.mapims.edu.in).
- */
-async function loadTmsDepartmentDocsOrEmpty() {
-  if (!isTmsCatalogEnabled()) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[feedback] TMS catalog disabled — use local routing services only (set TMS_CATALOG_ENABLED=true to pull from TMS)"
-    );
-    return [];
-  }
-  try {
-    const result = await listTmsDepartments();
-    const tmsRows = Array.isArray(result?.data) ? result.data : [];
-    const mapped = tmsRows
-      .filter((row) => row && row.name)
-      .map((row) => ({
-        _id: String(row._id || ""),
-        name: String(row.name || "").trim(),
-        description: String(row.description || "").trim(),
-      }))
-      .filter((row) => row.name.length > 0);
-    if (mapped.length > 0) {
-      // eslint-disable-next-line no-console
-      console.log("[feedback] TMS departments loaded", {
-        count: mapped.length,
-        sampleNames: mapped.slice(0, 5).map((d) => d.name),
-      });
-      return mapped;
-    }
-    // eslint-disable-next-line no-console
-    console.warn("[feedback] TMS departments list was empty — continuing without department matching");
-    return [];
-  } catch (error) {
-    logTmsFailure("listTmsDepartments", error);
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[feedback] Could not load departments from TMS (check server outbound HTTPS to TMS_API_BASE_URL, TLS, FEEDBACK_INGEST_TOKEN). Continuing without department list.",
-      error?.message || error
-    );
-    return [];
-  }
-}
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
@@ -493,48 +372,21 @@ async function loadLocalRoutingServicesFromDb() {
   }));
 }
 
-/** TMS + local MongoDB services for AI routing (TMS name wins on duplicate). */
 async function loadServiceCatalogForAi() {
-  const tms = await loadTmsDepartmentDocsOrEmpty();
   const local = await loadLocalRoutingServicesFromDb();
-  const seen = new Set(tms.map((row) => serviceNameKey(row.name)));
-  const extra = local.filter((row) => {
-    const key = serviceNameKey(row.name);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  return [...tms, ...extra].sort((a, b) => a.name.localeCompare(b.name));
+  return [...local].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function listServiceCatalogForUi() {
-  const tms = await loadTmsDepartmentDocsOrEmpty();
   const local = await loadLocalRoutingServicesFromDb();
-  const tmsKeys = new Set(tms.map((row) => serviceNameKey(row.name)));
-  const items = [
-    ...tms.map((row) => ({
-      _id: row._id,
-      name: row.name,
-      description: row.description || "",
-      source: "tms",
-      readOnly: true,
-    })),
-    ...local
-      .filter((row) => !tmsKeys.has(serviceNameKey(row.name)))
-      .map((row) => ({
-        _id: row._id,
-        name: row.name,
-        description: row.description || "",
-        source: "local",
-        readOnly: false,
-      })),
-  ];
+  const items = local.map((row) => ({
+    _id: row._id,
+    name: row.name,
+    description: row.description || "",
+    source: "local",
+    readOnly: false,
+  }));
   return items.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-async function tmsServiceNameKeys() {
-  const tms = await loadTmsDepartmentDocsOrEmpty();
-  return new Set(tms.map((row) => serviceNameKey(row.name)));
 }
 
 function normalizeServicesPayload(services) {
@@ -592,12 +444,6 @@ app.post("/api/services", async (req, res) => {
       return res.status(400).json({ message: "name is required" });
     }
     const trimmedName = String(name).trim();
-    const tmsKeys = await tmsServiceNameKeys();
-    if (tmsKeys.has(serviceNameKey(trimmedName))) {
-      return res.status(409).json({
-        message: "A service with this name already exists in TMS — edit it in TMS instead.",
-      });
-    }
     const doc = await RoutingService.create({
       name: trimmedName,
       description: String(description || "").trim(),
@@ -632,12 +478,6 @@ app.patch("/api/services/:id", async (req, res) => {
       const trimmedName = String(name).trim();
       if (!trimmedName) {
         return res.status(400).json({ message: "name cannot be empty" });
-      }
-      const tmsKeys = await tmsServiceNameKeys();
-      if (tmsKeys.has(serviceNameKey(trimmedName)) && serviceNameKey(trimmedName) !== serviceNameKey(existing.name)) {
-        return res.status(409).json({
-          message: "A service with this name already exists in TMS.",
-        });
       }
       existing.name = trimmedName;
     }
@@ -902,8 +742,6 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
   try {
     const rows = await Feedback.find({ aiSentiment: "negative" }).lean();
     let updated = 0;
-    let tmsSynced = 0;
-    let tmsFailed = 0;
     for (const row of rows) {
       const set = {};
       let opened = false;
@@ -918,12 +756,6 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
         await Feedback.updateOne({ _id: row._id }, { $set: set });
         updated += 1;
       }
-      if (opened && isTmsOutboundEnabled() && !row.tmsTicketId) {
-        const fresh = await Feedback.findById(row._id).lean();
-        const after = await syncFeedbackToTms(fresh, { reason: "seed_open_negative" });
-        if (after?.tmsTicketId) tmsSynced += 1;
-        else tmsFailed += 1;
-      }
     }
     const withTickets = await Feedback.countDocuments({
       aiSentiment: "negative",
@@ -932,10 +764,10 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
     return res.json({
       updated,
       negativeWithTicket: withTickets,
-      tmsSynced,
-      tmsFailed,
-      tmsConfigured: isTmsConfigured(),
-      tmsOutboundEnabled: isTmsOutboundEnabled(),
+      tmsSynced: 0,
+      tmsFailed: 0,
+      tmsConfigured: false,
+      tmsOutboundEnabled: false,
     });
   } catch (error) {
     return res.status(500).json({ message: "Failed to open negative tickets" });
@@ -1108,31 +940,6 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
       }
       if (botConversationAnswers.length) {
         comments = buildBotCommentsFromAnswers(botConversationAnswers);
-        if (process.env.OPENROUTER_API_KEY) {
-          botConversationAnswers = await Promise.all(
-            botConversationAnswers.map(async (row) => {
-              try {
-                const inferred = await inferRatingFromVoiceTranscript(row.transcript);
-                return { ...row, answerSentiment: inferred.sentiment };
-              } catch {
-                return row;
-              }
-            })
-          );
-        }
-      }
-      if (!rating || rating < 1 || rating > 5) {
-        try {
-          const inferred = await inferRatingFromVoiceTranscript(comments || "");
-          if (inferred?.rating >= 1 && inferred.rating <= 5) {
-            rating = inferred.rating;
-          }
-        } catch {
-          /* keep rating as-is */
-        }
-      }
-      if (!rating || rating < 1 || rating > 5) {
-        rating = 3;
       }
     }
     const rawEncounter = String(req.body.patientEncounterType || "").toLowerCase().trim();
@@ -1142,14 +949,12 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
     const ipNo = String(req.body.ipNo || "").trim().slice(0, 80);
     const visitOrAdmissionDate = String(req.body.visitOrAdmissionDate || "").trim().slice(0, 80);
 
-    if (!patientName || !rating) {
-      return res
-        .status(400)
-        .json({ message: "patientName and rating are required" });
+    if (!patientName) {
+      return res.status(400).json({ message: "patientName is required" });
     }
 
     const serviceCatalog = await loadServiceCatalogForAi();
-    const numericRating = Number(rating);
+    let numericRating = Number(rating);
 
     /** Visit department: UHID/EMR first; name-only flow uses saved hospital department from form */
     const visitDepartment = patientRegNo
@@ -1179,6 +984,88 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
           message: svcAiErr?.message || String(svcAiErr),
         });
       }
+    }
+
+    let pendingAi = null;
+    let usedVoiceRatingForBot = false;
+    let botVoiceOverallSentiment = null;
+
+    // Re-introduce the older "7 OpenRouter requests" behavior for bot sessions:
+    // 1) Infer overall rating/sentiment from the combined bot transcripts
+    // 2) Infer sentiment for each of the 5 bot answers
+    // 3) Run the full OpenRouter analysis once to create issues/tickets.
+    if (
+      submissionMode === "bot" &&
+      process.env.OPENROUTER_API_KEY &&
+      botConversationAnswers.length > 0
+    ) {
+      try {
+        const combinedTranscript = botConversationAnswers
+          .map((a) => String(a.transcript || "").trim())
+          .filter(Boolean)
+          .join(" ");
+        const overall = await inferRatingFromVoiceTranscript(combinedTranscript);
+        if (overall?.rating >= 1 && overall?.rating <= 5) {
+          numericRating = overall.rating;
+          usedVoiceRatingForBot = true;
+        }
+        if (
+          overall?.sentiment &&
+          ["positive", "neutral", "negative"].includes(overall.sentiment)
+        ) {
+          botVoiceOverallSentiment = overall.sentiment;
+        }
+      } catch {
+        // Keep defaults if voice rating inference fails.
+      }
+
+      // Per-answer sentiment (sets answerSentiment on each stored answer).
+      for (const ans of botConversationAnswers) {
+        try {
+          const out = await inferRatingFromVoiceTranscript(String(ans.transcript || "").trim());
+          if (out?.sentiment && ["positive", "neutral", "negative"].includes(out.sentiment)) {
+            ans.answerSentiment = out.sentiment;
+          }
+        } catch {
+          // Keep whatever sentiment is already present for that answer.
+        }
+      }
+    }
+    if (process.env.OPENROUTER_API_KEY && String(comments || "").trim()) {
+      try {
+        pendingAi = await analyzePatientFeedback(
+          {
+            patientName,
+            patientDepartment: visitDepartment,
+            department: visitDepartment,
+            service: normalizedService,
+            comments: comments || "",
+          },
+          {
+            feedbackId: "submit",
+            serviceChoices: serviceCatalog.map((d) => ({
+              name: d.name,
+              description: d.description || "",
+            })),
+          }
+        );
+        if (pendingAi?.rating >= 1 && pendingAi.rating <= 5) {
+          if (submissionMode === "bot") {
+            if (!usedVoiceRatingForBot) numericRating = pendingAi.rating;
+          } else if (!Number.isFinite(numericRating) || numericRating < 1 || numericRating > 5) {
+            numericRating = pendingAi.rating;
+          }
+        }
+      } catch (preAiErr) {
+        // eslint-disable-next-line no-console
+        console.error("[feedback] OpenRouter analyze failed (pre-create)", {
+          message: preAiErr?.message || String(preAiErr),
+        });
+      }
+    }
+
+    if (!Number.isFinite(numericRating) || numericRating < 1 || numericRating > 5) {
+      numericRating = 3;
     }
 
     const complaintSignature = buildComplaintSignature(
@@ -1231,31 +1118,15 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
       serviceResolvedByAiHint: serviceHintFromAi,
     });
 
-    if (process.env.OPENROUTER_API_KEY) {
+    if (pendingAi) {
       try {
         // eslint-disable-next-line no-console
-        console.log("[feedback] AI analysis starting", {
+        console.log("[feedback] applying OpenRouter analysis", {
           feedbackId: String(feedback._id),
+          rating: pendingAi.rating,
         });
-        const ai = await analyzePatientFeedback(
-          {
-            patientName,
-            patientDepartment: visitDepartment,
-            department: visitDepartment,
-            service: normalizedService,
-            rating: numericRating,
-            comments: comments || "",
-          },
-          {
-            feedbackId: String(feedback._id),
-            serviceChoices: serviceCatalog.map((d) => ({
-              name: d.name,
-              description: d.description || "",
-            })),
-          }
-        );
-        if (ai) {
-          const issueBundle = await applyIssueTicketsAndTms({
+        const ai = pendingAi;
+        const issueBundle = await applyIssueTicketsAndTms({
             feedbackId: String(feedback._id),
             patientName,
             rating: numericRating,
@@ -1281,10 +1152,33 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
             pickCatalogService(primaryIssue?.recommendedService) ||
             pickCatalogService(ai.recommendedService) ||
             pickCatalogService(normalizedService);
-          const primarySentiment =
+          let primarySentiment =
             primaryIssue?.sentiment && ["positive", "neutral", "negative"].includes(primaryIssue.sentiment)
               ? primaryIssue.sentiment
               : ai.sentiment;
+          if (
+            botVoiceOverallSentiment &&
+            ["positive", "neutral", "negative"].includes(botVoiceOverallSentiment)
+          ) {
+            primarySentiment = botVoiceOverallSentiment;
+          }
+          const primaryFromSummary = inferAnswerSentimentHeuristic(primaryIssue?.issueSummary);
+          if (
+            primaryFromSummary &&
+            primaryFromSummary !== "neutral" &&
+            primarySentiment !== primaryFromSummary
+          ) {
+            primarySentiment = primaryFromSummary;
+          }
+
+          const botAnswersWithSentiment =
+            submissionMode === "bot" && (outDoc.botConversationAnswers || []).length
+              ? attachBotAnswerSentimentsFromIssues(
+                  outDoc.botConversationAnswers,
+                  issueBundle.issues,
+                  primarySentiment
+                )
+              : outDoc.botConversationAnswers;
 
           const setFields = {
             aiSentiment: primarySentiment,
@@ -1307,6 +1201,9 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
               comments || ""
             ),
             ticketId: ticketId || null,
+            ...(botAnswersWithSentiment?.length
+              ? { botConversationAnswers: botAnswersWithSentiment }
+              : {}),
           };
 
           if (primarySentiment === "negative" && !ticketId) {
@@ -1353,10 +1250,18 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
 
             for (let i = 1; i < issueBundle.issues.length; i++) {
               const issue = issueBundle.issues[i];
-              const issueSentiment =
+              let issueSentiment =
                 issue?.sentiment && ["positive", "neutral", "negative"].includes(issue.sentiment)
                   ? issue.sentiment
                   : ai.sentiment;
+              const fromSummary = inferAnswerSentimentHeuristic(issue.issueSummary);
+              if (
+                fromSummary &&
+                fromSummary !== "neutral" &&
+                issueSentiment !== fromSummary
+              ) {
+                issueSentiment = fromSummary;
+              }
               const childSig = buildComplaintSignature(
                 issue.department || visitDepartment,
                 issue.recommendedService,
@@ -1395,11 +1300,6 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
                 ticketId: childTicketId,
               });
               let childDoc = child.toObject();
-              if (childTicketId && childTicketIsFresh && isTmsOutboundEnabled()) {
-                childDoc = await syncFeedbackToTms(childDoc, {
-                  reason: `split_issue_${i + 1}`,
-                });
-              }
               splitChildDocs.push(childDoc);
             }
           }
@@ -1411,11 +1311,10 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
             issueCount: issueBundle.issues.length,
             splitChildren: splitChildDocs.length,
             ticketOpenedForNegative: Boolean(setFields.ticketId),
-          });
-        }
+        });
       } catch (aiErr) {
         // eslint-disable-next-line no-console
-        console.error("[feedback] AI analysis failed", {
+        console.error("[feedback] AI apply failed", {
           feedbackId: String(feedback._id),
           message: aiErr?.message || String(aiErr),
         });
@@ -1425,68 +1324,6 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
       console.log(
         "[feedback] AI analysis skipped (set OPENROUTER_API_KEY in .env to enable)"
       );
-    }
-
-    const tmsReady = isTmsOutboundEnabled();
-    const willSyncTms = Boolean(
-      outDoc.ticketId && ticketIsFresh && !outDoc.tmsTicketId && tmsReady
-    );
-    if (!tmsReady) {
-      // eslint-disable-next-line no-console
-      console.log("[feedback] tms push skipped", {
-        feedbackId: String(feedback._id),
-        why: isTmsConfigured()
-          ? "TMS_OUTBOUND_ENABLED not set"
-          : "TMS_API_BASE_URL not set",
-        ticketId: outDoc.ticketId || null,
-        ticketIsFresh,
-        ticketRule,
-        rating: numericRating,
-      });
-    } else if (!outDoc.ticketId) {
-      // eslint-disable-next-line no-console
-      console.log("[feedback] tms push skipped", {
-        feedbackId: String(feedback._id),
-        why: "no_feedback_ticket_id",
-        detail:
-          "TMS only runs when a feedback ticket is opened (rating 1, or rating 2 with multi-patient rule, or AI negative sentiment). Rating 3–5 with neutral/positive AI usually does not open a ticket.",
-        rating: numericRating,
-        ticketRule,
-        aiSentiment: outDoc.aiSentiment || null,
-      });
-    } else if (!ticketIsFresh) {
-      // eslint-disable-next-line no-console
-      console.log("[feedback] tms push skipped", {
-        feedbackId: String(feedback._id),
-        why: "ticket_not_fresh_reuse_or_no_new_sync",
-        ticketId: outDoc.ticketId,
-        ticketRule,
-      });
-    } else if (outDoc.tmsTicketId) {
-      // eslint-disable-next-line no-console
-      console.log("[feedback] tms push skipped", {
-        feedbackId: String(feedback._id),
-        why: "already_has_tmsTicketId",
-        tmsTicketId: outDoc.tmsTicketId,
-      });
-    } else if (willSyncTms) {
-      // eslint-disable-next-line no-console
-      console.log("[feedback] tms push starting", {
-        feedbackId: String(feedback._id),
-        ticketId: outDoc.ticketId,
-        ticketRule,
-      });
-    }
-
-    if (outDoc.ticketId && ticketIsFresh && !outDoc.tmsTicketId && isTmsOutboundEnabled()) {
-      outDoc = await syncFeedbackToTms(outDoc, { reason: ticketRule });
-      // eslint-disable-next-line no-console
-      console.log("[feedback] tms push finished", {
-        feedbackId: String(feedback._id),
-        tmsTicketId: outDoc.tmsTicketId || null,
-        tmsTicketNumber: outDoc.tmsTicketNumber || null,
-        tmsSyncError: outDoc.tmsSyncError || null,
-      });
     }
 
     if (submissionMode === "bot" && answerAudioFiles.length && botConversationAnswers.length) {
@@ -1545,24 +1382,6 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
           );
         }
         outDoc = { ...outDoc, voiceRecordingRelPath: rel };
-        const tmsId = outDoc.tmsTicketId;
-        if (tmsId && isTmsOutboundEnabled()) {
-          try {
-            await patchTmsTicketFeedbackVoice(String(tmsId), {
-              feedbackVoiceRecordingRelPath: rel,
-              feedbackSourceId: String(feedback._id),
-            });
-          } catch (patchErr) {
-            logTmsFailure("patchTmsTicketFeedbackVoice", patchErr);
-            // eslint-disable-next-line no-console
-            console.error("[feedback] voice meta PATCH to TMS failed", {
-              feedbackId: String(feedback._id),
-              tmsTicketId: String(tmsId),
-              message: patchErr?.message || String(patchErr),
-              httpStatus: patchErr?.status ?? null,
-            });
-          }
-        }
       } catch (voiceErr) {
         // eslint-disable-next-line no-console
         console.error("[feedback] failed to persist voice recording", {
@@ -1573,26 +1392,12 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
     }
 
     const payload = attachVoicePlaybackUrl(outDoc);
-    const tmsConfigured = isTmsConfigured();
-    const tmsOutboundEnabled = isTmsOutboundEnabled();
-    let tmsSyncHint = null;
-    if (outDoc.ticketId && !tmsOutboundEnabled) {
-      tmsSyncHint = isTmsConfigured()
-        ? "Local ticket only — TMS outbound sync is disabled (TMS_OUTBOUND_ENABLED is not set)."
-        : "Local ticket only — TMS is not configured on this server.";
-    } else if (outDoc.ticketId && tmsOutboundEnabled && !outDoc.tmsTicketId && outDoc.tmsSyncError) {
-      tmsSyncHint = `TMS sync failed: ${String(outDoc.tmsSyncError).slice(0, 300)}`;
-    } else if (outDoc.ticketId && tmsOutboundEnabled && !outDoc.tmsTicketId) {
-      tmsSyncHint =
-        "Feedback ticket was opened locally but no TMS row was created (check server logs for [feedback] tms push skipped / FAILED).";
-    }
-
     return res.status(201).json({
       ...payload,
       ticketRaised: Boolean(outDoc.ticketId),
-      tmsConfigured,
-      tmsOutboundEnabled,
-      tmsSyncHint,
+      tmsConfigured: false,
+      tmsOutboundEnabled: false,
+      tmsSyncHint: null,
       splitTickets: splitChildDocs.map((row) => ({
         _id: row._id,
         ticketId: row.ticketId,
@@ -1859,127 +1664,6 @@ app.delete("/api/branding", async (_req, res) => {
     return res.json(serializeBrandingSettings(reset));
   } catch (error) {
     return res.status(500).json({ message: "Failed to reset branding" });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// TMS (Ticket Management System) proxy/integration routes
-// ---------------------------------------------------------------------------
-
-app.get("/api/tms/health", async (_req, res) => {
-  if (!isTmsConfigured()) {
-    return res.status(200).json({
-      configured: false,
-      outboundEnabled: false,
-      catalogEnabled: false,
-      message:
-        "TMS integration is not configured. Set TMS_API_BASE_URL to the TMS API root (e.g. https://tms.mapims.edu.in/api).",
-    });
-  }
-  if (!isTmsOutboundEnabled() && !isTmsCatalogEnabled()) {
-    return res.status(200).json({
-      configured: true,
-      outboundEnabled: false,
-      catalogEnabled: false,
-      reachable: false,
-      message:
-        "TMS URL is set but send/receive is disabled. Tickets stay in Feedback only unless you set TMS_OUTBOUND_ENABLED or TMS_CATALOG_ENABLED.",
-    });
-  }
-  try {
-    const result = await getTmsHealth();
-    return res.status(result.ok ? 200 : 502).json({
-      configured: true,
-      outboundEnabled: isTmsOutboundEnabled(),
-      catalogEnabled: isTmsCatalogEnabled(),
-      reachable: result.ok,
-      status: result.status,
-      tms: result.body,
-    });
-  } catch (error) {
-    const { status, body } = tmsErrorToHttp(error);
-    return res.status(status).json({
-      configured: true,
-      outboundEnabled: isTmsOutboundEnabled(),
-      catalogEnabled: isTmsCatalogEnabled(),
-      reachable: false,
-      ...body,
-    });
-  }
-});
-
-app.get("/api/tms/departments", async (_req, res) => {
-  if (!isTmsCatalogEnabled()) {
-    return res.status(503).json({ message: "TMS catalog pull is disabled on this server" });
-  }
-  try {
-    const result = await listTmsDepartments();
-    return res.json(result);
-  } catch (error) {
-    const { status, body } = tmsErrorToHttp(error);
-    return res.status(status).json(body);
-  }
-});
-
-app.get("/api/tms/tickets", async (req, res) => {
-  if (!isTmsConfigured()) {
-    return res.status(503).json({ message: "TMS integration is not configured" });
-  }
-  try {
-    const result = await listTmsTickets(req.query || {});
-    return res.json(result);
-  } catch (error) {
-    const { status, body } = tmsErrorToHttp(error);
-    return res.status(status).json(body);
-  }
-});
-
-app.get("/api/tms/tickets/:id", async (req, res) => {
-  if (!isTmsConfigured()) {
-    return res.status(503).json({ message: "TMS integration is not configured" });
-  }
-  try {
-    const ticket = await getTmsTicket(req.params.id);
-    return res.json(ticket);
-  } catch (error) {
-    const { status, body } = tmsErrorToHttp(error);
-    return res.status(status).json(body);
-  }
-});
-
-/**
- * Manually push a feedback to TMS (e.g. retry after a previous sync failure).
- * Accepts either the Feedback _id or the local ticketId.
- */
-app.post("/api/tms/tickets/sync/:feedbackId", async (req, res) => {
-  if (!isTmsOutboundEnabled()) {
-    return res.status(403).json({
-      message:
-        "TMS outbound sync is disabled. Tickets are kept in the Feedback system only.",
-    });
-  }
-  try {
-    const { feedbackId } = req.params;
-    const query = mongoose.Types.ObjectId.isValid(feedbackId)
-      ? { _id: feedbackId }
-      : { ticketId: feedbackId };
-    const feedback = await Feedback.findOne(query).lean();
-    if (!feedback) {
-      return res.status(404).json({ message: "Feedback not found" });
-    }
-    if (!feedback.ticketId) {
-      // Open a local ticket id first so the row is treated as a ticket.
-      const ticketId = newTicketId();
-      await Feedback.updateOne({ _id: feedback._id }, { $set: { ticketId, status: "New" } });
-      feedback.ticketId = ticketId;
-    }
-    const updated = await syncFeedbackToTms(feedback, { reason: "manual_resync" });
-    return res.json({
-      ok: Boolean(updated?.tmsTicketId),
-      feedback: updated,
-    });
-  } catch (error) {
-    return res.status(500).json({ message: "Failed to sync to TMS" });
   }
 });
 

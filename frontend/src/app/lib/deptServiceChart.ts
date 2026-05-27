@@ -20,10 +20,24 @@ type DeptNode = {
   services: Map<string, SentimentCounts>;
 };
 
-function departmentFromItem(item: FeedbackItem, issueDept?: string): string {
-  return sanitizeOptionalLabel(
-    item.lookupDepartment || issueDept || item.department
-  );
+/** AI routing department for an issue (not EMR visit department). */
+function routingDepartmentFromIssue(item: FeedbackItem, issueDept?: string): string {
+  return sanitizeOptionalLabel(issueDept || item.department || item.lookupDepartment);
+}
+
+function serviceLabelForChart(
+  issue: { recommendedService?: string; issueSummary?: string },
+  item: FeedbackItem
+): string {
+  const svc = sanitizeOptionalLabel(issue.recommendedService || item.service);
+  if (svc) return svc;
+  const summary = String(issue.issueSummary || "").trim();
+  if (summary.length >= 6) {
+    return summary.length > 40 ? `${summary.slice(0, 37)}…` : summary;
+  }
+  const topic = sanitizeOptionalLabel(item.aiTopics?.[0]);
+  if (topic) return topic;
+  return "No service mapped";
 }
 
 function slicesFromFeedback(item: FeedbackItem): Array<{
@@ -34,11 +48,11 @@ function slicesFromFeedback(item: FeedbackItem): Array<{
   const sentiment = getAiSentimentBucket(item);
   if (sentiment !== "positive" && sentiment !== "negative") return [];
 
-  const fallbackDept = departmentFromItem(item);
+  const fallbackDept = routingDepartmentFromIssue(item);
   const issueRows =
     Array.isArray(item.feedbackIssues) && item.feedbackIssues.length > 0
       ? item.feedbackIssues
-      : [{ department: fallbackDept, recommendedService: item.service ?? "" }];
+      : [{ department: fallbackDept, recommendedService: item.service ?? "", issueSummary: "" }];
 
   const out: Array<{
     department: string;
@@ -47,12 +61,11 @@ function slicesFromFeedback(item: FeedbackItem): Array<{
   }> = [];
 
   for (const issue of issueRows) {
-    const department = departmentFromItem(item, issue.department);
-    const service = sanitizeOptionalLabel(issue.recommendedService || item.service);
+    const department = routingDepartmentFromIssue(item, issue.department);
     if (!department) continue;
     out.push({
       department,
-      service: service || "Unassigned service",
+      service: serviceLabelForChart(issue, item),
       sentiment,
     });
   }
@@ -74,6 +87,7 @@ export function buildDeptServiceSentimentChartData(
   const deptMap = new Map<string, DeptNode>();
 
   for (const item of items) {
+    if (item.isSplitChild) continue;
     for (const slice of slicesFromFeedback(item)) {
       let node = deptMap.get(slice.department);
       if (!node) {

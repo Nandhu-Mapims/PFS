@@ -1,3 +1,4 @@
+import { resolveDepartmentHeuristic } from "./departmentNormalize.js";
 import { sanitizeOptionalLabel } from "./fieldSanitize.js";
 import { filterAiTopicsForTranscript } from "./aiTopicsFilter.js";
 import {
@@ -47,6 +48,12 @@ function normalizeUrgency(value) {
   const v = String(value || "").toLowerCase();
   if (["low", "medium", "high"].includes(v)) return v;
   return "medium";
+}
+
+function normalizeRating(value, fallback = 3) {
+  const r = Number(value);
+  if (!Number.isFinite(r)) return fallback;
+  return Math.min(5, Math.max(1, Math.round(r)));
 }
 
 function stripJsonFence(text) {
@@ -172,7 +179,13 @@ function normalizeIssueFromAi(raw, serviceChoices, emrDepartment) {
   const inferredDept = sanitizeOptionalLabel(raw?.department);
   const dept = (inferredDept || emrDept).slice(0, 120);
   const svcRaw = sanitizeOptionalLabel(raw?.recommendedService);
-  const svc = resolveServiceFromAi(svcRaw, serviceChoices) || "";
+  const svcHeuristic = svcRaw
+    ? resolveDepartmentHeuristic(svcRaw, serviceChoices).name || ""
+    : "";
+  const svc =
+    (svcHeuristic ? resolveServiceFromAi(svcHeuristic, serviceChoices) : null) ||
+    resolveServiceFromAi(svcRaw, serviceChoices) ||
+    "";
   return {
     department: dept,
     recommendedService: svc,
@@ -310,6 +323,7 @@ export async function analyzePatientFeedback(input, options = {}) {
   const filteredTopics = filterAiTopicsForTranscript(topics, comments);
 
   const result = {
+    rating: normalizeRating(parsed.rating, 3),
     sentiment: normalizeSentiment(parsed.sentiment),
     urgency: normalizeUrgency(parsed.urgency),
     topics: filteredTopics,
@@ -325,6 +339,7 @@ export async function analyzePatientFeedback(input, options = {}) {
   // eslint-disable-next-line no-console
   console.log("[openrouter] analysis complete", {
     feedbackId,
+    rating: result.rating,
     sentiment: result.sentiment,
     urgency: result.urgency,
     topics: result.topics,

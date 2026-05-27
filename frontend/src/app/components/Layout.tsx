@@ -29,25 +29,28 @@ export function Layout() {
     path.includes("ticket") ||
     path.includes("admin");
   const showHeaderActions = Boolean(session) && isStaffRoute;
+  const onInsightsArea =
+    path.startsWith("/management") ||
+    path === "/analytics" ||
+    path === "/insights" ||
+    path.startsWith("/admin/management-overview") ||
+    path === "/admin/insights" ||
+    path === "/admin/analytics";
+
   const showBottomNav =
     Boolean(session) &&
-    [
-      "/dashboard",
-      "/staff",
-      "/management",
-      "/analytics",
-      "/insights",
-      "/admin",
-      "/admin/analytics",
-      "/admin/insights",
-      "/admin/management-overview",
-      "/admin/departments",
-      "/admin/services",
-      "/admin/tickets",
-      "/admin/users",
-      "/admin/settings",
-      "/admin/bot-conversation",
-    ].includes(path);
+    (onInsightsArea ||
+      [
+        "/dashboard",
+        "/staff",
+        "/admin",
+        "/admin/departments",
+        "/admin/services",
+        "/admin/tickets",
+        "/admin/users",
+        "/admin/settings",
+        "/admin/bot-conversation",
+      ].includes(path));
 
   const isAdminShell = isAdmin && path.startsWith("/admin");
 
@@ -99,26 +102,14 @@ export function Layout() {
                     <button
                       type="button"
                       role="tab"
-                      aria-selected={
-                        path === "/admin/management-overview" ||
-                        path === "/admin/insights" ||
-                        path === "/admin/analytics"
-                      }
-                      onClick={() => navigate("/admin/management-overview")}
+                      aria-selected={onInsightsArea}
+                      onClick={() => navigate("/admin/management-overview/submissions")}
                       className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
-                        path === "/admin/management-overview" ||
-                        path === "/admin/insights" ||
-                        path === "/admin/analytics"
+                        onInsightsArea
                           ? "bg-white shadow-sm"
                           : "text-gray-600 hover:text-gray-900"
                       }`}
-                      style={
-                        path === "/admin/management-overview" ||
-                        path === "/admin/insights" ||
-                        path === "/admin/analytics"
-                          ? activePrimaryStyle
-                          : undefined
-                      }
+                      style={onInsightsArea ? activePrimaryStyle : undefined}
                     >
                       Insights
                     </button>
@@ -225,7 +216,7 @@ export function Layout() {
                   <>
                     <button
                       type="button"
-                      onClick={() => navigate("/admin/management-overview")}
+                      onClick={() => navigate("/admin/management-overview/submissions")}
                       className="px-4 py-2 text-white rounded-lg transition-all duration-200"
                       style={activePrimaryBackgroundStyle}
                     >
@@ -233,9 +224,9 @@ export function Layout() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => navigate("/management")}
+                      onClick={() => navigate("/management/submissions")}
                       className={`px-4 py-2 rounded-lg border transition-all duration-200 ${
-                        path === "/management"
+                        onInsightsArea
                           ? "border-[#2A6FDB] text-[#2A6FDB] bg-blue-50"
                           : "border-gray-300 text-gray-700 hover:bg-gray-100"
                       }`}
@@ -255,9 +246,9 @@ export function Layout() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => navigate("/management")}
+                      onClick={() => navigate("/management/submissions")}
                       className={`px-4 py-2 rounded-lg border transition-all duration-200 ${
-                        path === "/management" || path === "/analytics" || path === "/insights"
+                        onInsightsArea
                           ? "border-[#2A6FDB] text-[#2A6FDB] bg-blue-50"
                           : "border-gray-300 text-gray-700 hover:bg-gray-100"
                       }`}
@@ -308,21 +299,11 @@ export function Layout() {
               <div className="flex w-full justify-around overflow-x-auto">
                 <button
                   type="button"
-                  onClick={() => navigate("/admin/management-overview")}
+                  onClick={() => navigate("/admin/management-overview/submissions")}
                   className={`flex flex-col items-center gap-1 px-2 py-2 shrink-0 ${
-                    path === "/admin/management-overview" ||
-                    path === "/admin/analytics" ||
-                    path === "/admin/insights"
-                      ? ""
-                      : "text-gray-500"
+                    onInsightsArea ? "" : "text-gray-500"
                   }`}
-                  style={
-                    path === "/admin/management-overview" ||
-                    path === "/admin/analytics" ||
-                    path === "/admin/insights"
-                      ? activePrimaryStyle
-                      : undefined
-                  }
+                  style={onInsightsArea ? activePrimaryStyle : undefined}
                 >
                   <BarChart3 size={22} />
                   <span className="text-[10px] sm:text-xs">Insights</span>
@@ -376,22 +357,14 @@ export function Layout() {
               <>
                 <button
                   type="button"
-                  onClick={() => navigate("/management")}
+                  onClick={() => navigate("/management/submissions")}
                   className={`flex flex-col items-center gap-1 px-4 py-2 ${
-                    path === "/management" ||
-                    path === "/analytics" ||
-                    path === "/insights" ||
-                    path === "/staff" ||
-                    path === "/dashboard"
+                    onInsightsArea || path === "/staff" || path === "/dashboard"
                       ? ""
                       : "text-gray-500"
                   }`}
                   style={
-                    path === "/management" ||
-                    path === "/analytics" ||
-                    path === "/insights" ||
-                    path === "/staff" ||
-                    path === "/dashboard"
+                    onInsightsArea || path === "/staff" || path === "/dashboard"
                       ? activePrimaryStyle
                       : undefined
                   }

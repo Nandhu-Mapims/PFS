@@ -22,7 +22,6 @@ export function AdminServicesPage() {
   const [editDescription, setEditDescription] = useState("");
 
   const localCount = list.filter((row) => row.source === "local").length;
-  const tmsCount = list.filter((row) => row.source === "tms").length;
 
   async function load() {
     try {
@@ -165,8 +164,8 @@ export function AdminServicesPage() {
             {loading
               ? "Loading…"
               : list.length === 0
-                ? "No services yet — create one above or connect TMS"
-                : `${list.length} total (${localCount} local, ${tmsCount} from TMS)`}
+                ? "No services yet — create one above."
+                : `${list.length} total (${localCount} local)`}
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -218,14 +217,8 @@ export function AdminServicesPage() {
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="text-lg font-semibold text-gray-900">{row.name}</h3>
-                          <span
-                            className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                              row.source === "tms"
-                                ? "bg-slate-100 text-slate-700"
-                                : "bg-violet-100 text-violet-800"
-                            }`}
-                          >
-                            {row.source === "tms" ? "TMS" : "Local"}
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-violet-100 text-violet-800">
+                            Local
                           </span>
                         </div>
                         {row.description ? (
@@ -233,11 +226,6 @@ export function AdminServicesPage() {
                         ) : (
                           <p className="text-sm text-gray-400 mt-1 italic">No description</p>
                         )}
-                        {row.readOnly ? (
-                          <p className="text-xs text-gray-500 mt-2">
-                            Managed in TMS — edit there, not in this app.
-                          </p>
-                        ) : null}
                       </div>
                       {!row.readOnly ? (
                         <div className="flex shrink-0 gap-3">

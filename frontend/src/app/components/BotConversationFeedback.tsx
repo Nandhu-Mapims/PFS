@@ -5,7 +5,6 @@ import {
   coerceTranscriptText,
   createBotFeedback,
   getBotConversationConfig,
-  inferVoiceRatingFromTranscript,
   resolveUploadUrl,
   type BotConversationAnswer,
   type BotConversationConfig,
@@ -202,18 +201,11 @@ export function BotConversationFeedback() {
       const mergedComments = finalAnswers
         .map((a) => `Q: ${a.questionText}\nA: ${a.transcript}`)
         .join("\n\n");
-      let rating = 3;
-      try {
-        const inferred = await inferVoiceRatingFromTranscript(mergedComments);
-        if (inferred.rating >= 1 && inferred.rating <= 5) rating = inferred.rating;
-      } catch {
-        /* default 3 */
-      }
       const session = getSession();
       try {
       const created = await createBotFeedback({
         ...identity.getSubmitFields(),
-        rating,
+        rating: 3,
         comments: mergedComments,
         source: session?.role === "staff" ? "staff" : "patient",
         submissionMode: "bot",

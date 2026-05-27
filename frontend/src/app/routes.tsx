@@ -8,7 +8,10 @@ import { PaperUpload } from "./components/PaperUpload";
 import { ThankYou } from "./components/ThankYou";
 import { Dashboard } from "./components/Dashboard";
 import { TicketDetail } from "./components/TicketDetail";
-import { ManagementDashboard } from "./components/ManagementDashboard";
+import { InsightsHub } from "./components/insights/InsightsHub";
+import { SubmissionTrendsRoute } from "./components/insights/SubmissionTrendsRoute";
+import { TicketsTrendsRoute } from "./components/insights/TicketsTrendsRoute";
+import { SentimentLeaderboardRoute } from "./components/insights/SentimentLeaderboardRoute";
 import { WorkflowDiagram } from "./components/WorkflowDiagram";
 import { AdminPage } from "./components/AdminPage";
 import { AdminHospitalDepartmentsPage } from "./components/AdminHospitalDepartmentsPage";
@@ -44,18 +47,34 @@ export const router = createBrowserRouter([
           { path: "dashboard", Component: Dashboard },
           { path: "ticket/:id", Component: TicketDetail },
           { path: "ticket/:id/delete", Component: TicketDetail },
-          { path: "management", Component: ManagementDashboard },
-          { path: "analytics", element: <Navigate to="/management" replace /> },
-          { path: "insights", element: <Navigate to="/management" replace /> },
+          {
+            path: "management",
+            Component: InsightsHub,
+            children: [
+              { path: "submissions", Component: SubmissionTrendsRoute },
+              { path: "tickets", Component: TicketsTrendsRoute },
+              { path: "sentiment", Component: SentimentLeaderboardRoute },
+            ],
+          },
+          { path: "analytics", element: <Navigate to="/management/submissions" replace /> },
+          { path: "insights", element: <Navigate to="/management/submissions" replace /> },
           { path: "workflow", Component: WorkflowDiagram },
         ],
       },
       {
         Component: AdminGuard,
         children: [
-          { path: "admin/management-overview", Component: ManagementDashboard },
-          { path: "admin/insights", Component: ManagementDashboard },
-          { path: "admin/analytics", element: <Navigate to="/admin/management-overview" replace /> },
+          {
+            path: "admin/management-overview",
+            Component: InsightsHub,
+            children: [
+              { path: "submissions", Component: SubmissionTrendsRoute },
+              { path: "tickets", Component: TicketsTrendsRoute },
+              { path: "sentiment", Component: SentimentLeaderboardRoute },
+            ],
+          },
+          { path: "admin/insights", element: <Navigate to="/admin/management-overview/submissions" replace /> },
+          { path: "admin/analytics", element: <Navigate to="/admin/management-overview/submissions" replace /> },
           { path: "admin/departments", Component: AdminHospitalDepartmentsPage },
           { path: "admin/services", Component: AdminServicesPage },
           { path: "admin/users", Component: AdminUsersPage },
