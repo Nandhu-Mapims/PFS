@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import {
+  deleteFeedback,
   getFeedback,
   getFeedbackAnalytics,
   type FeedbackAnalytics,
@@ -27,7 +28,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { RecentFeedbackBySentiment } from "./RecentFeedbackBySentiment";
 
 const ratingLabel: Record<number, string> = {
@@ -53,6 +54,8 @@ const BRAND_QR = {
 
 export function AdminPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const isDeleteMode = location.pathname.includes("/delete");
   const [items, setItems] = useState<FeedbackItem[]>([]);
   const [analytics, setAnalytics] = useState<FeedbackAnalytics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -86,6 +89,24 @@ export function AdminPage() {
       }
     }
   }, []);
+
+  const handleDeleteFeedback = useCallback(
+    async (item: FeedbackItem) => {
+      const label = item.ticketId ?? item.patientName ?? item._id;
+      const confirmed = window.confirm(
+        `Delete feedback ${label}? This removes the submission${item.ticketId ? " and its ticket" : ""}. This cannot be undone.`
+      );
+      if (!confirmed) return;
+      try {
+        setError(null);
+        await deleteFeedback(item._id);
+        setItems((current) => current.filter((row) => row._id !== item._id));
+      } catch {
+        setError("Failed to delete feedback.");
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     void loadData();
@@ -531,9 +552,11 @@ export function AdminPage() {
         isLoading={isLoading}
         isRefreshing={isRefreshing}
         error={error}
+        isDeleteMode={isDeleteMode}
         onRefresh={() => void loadData({ silent: true })}
         onDownloadAll={downloadAllFeedbackCsv}
         onDownloadRange={downloadFilteredFeedbackCsv}
+        onDeleteItem={isDeleteMode ? (item) => void handleDeleteFeedback(item) : undefined}
       />
     </div>
   );

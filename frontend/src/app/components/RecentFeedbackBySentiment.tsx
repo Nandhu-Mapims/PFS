@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router";
 import type { FeedbackItem } from "../lib/api";
 import { getAiSentimentBucket } from "../lib/sentiment";
 import { ticketDepartment, ticketService, uniqueSorted } from "../lib/ticketFilters";
@@ -31,9 +32,11 @@ type RecentFeedbackBySentimentProps = {
   isLoading: boolean;
   isRefreshing: boolean;
   error: string | null;
+  isDeleteMode?: boolean;
   onRefresh: () => void;
   onDownloadAll: () => void;
   onDownloadRange: (rows: FeedbackItem[]) => void;
+  onDeleteItem?: (item: FeedbackItem) => void;
 };
 
 function matchesSentiment(item: FeedbackItem, filter: AiSentimentFilter): boolean {
@@ -48,10 +51,13 @@ export function RecentFeedbackBySentiment({
   isLoading,
   isRefreshing,
   error,
+  isDeleteMode = false,
   onRefresh,
   onDownloadAll,
   onDownloadRange,
+  onDeleteItem,
 }: RecentFeedbackBySentimentProps) {
+  const navigate = useNavigate();
   const [sentimentFilter, setSentimentFilter] = useState<AiSentimentFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [departmentFilter, setDepartmentFilter] = useState("all");
@@ -140,6 +146,30 @@ export function RecentFeedbackBySentiment({
         }}
       />
       <div className="px-4 py-4 border-b border-gray-100 space-y-3">
+        {isDeleteMode ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+            <span>Overview delete mode — each row has a Delete action.</span>
+            <button
+              type="button"
+              onClick={() => navigate("/admin")}
+              className="text-xs font-semibold text-red-800 underline hover:no-underline"
+            >
+              Exit delete mode
+            </button>
+          </div>
+        ) : (
+          <p className="text-xs text-gray-400">
+            Need to remove submissions?{" "}
+            <button
+              type="button"
+              onClick={() => navigate("/admin/delete")}
+              className="text-gray-500 underline hover:text-red-700"
+            >
+              Open hidden delete mode
+            </button>
+          </p>
+        )}
+
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-lg font-semibold text-gray-800">Recent feedback</h3>
@@ -303,6 +333,7 @@ export function RecentFeedbackBySentiment({
           groups={visibleGroups}
           variant="overview"
           onViewItem={openDetail}
+          onDeleteItem={onDeleteItem}
           emptyMessage="No feedback to show."
         />
       )}

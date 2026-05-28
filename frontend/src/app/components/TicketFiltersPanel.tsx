@@ -15,7 +15,7 @@ import {
   type CustomDateRange,
   type PeriodGranularity,
 } from "../lib/insightsFilters";
-import type { TicketSentimentFilter, TicketStatusFilter } from "../lib/ticketFilters";
+import type { TicketStatusFilter } from "../lib/ticketFilters";
 
 const STATUS_OPTIONS: { id: TicketStatusFilter; label: string }[] = [
   { id: "all", label: "All" },
@@ -34,8 +34,6 @@ type TicketFiltersPanelProps = {
   onDepartmentFilterChange: (v: string) => void;
   serviceFilter: string;
   onServiceFilterChange: (v: string) => void;
-  sentimentFilter: TicketSentimentFilter;
-  onSentimentFilterChange: (v: TicketSentimentFilter) => void;
   departmentOptions: string[];
   serviceOptions: string[];
   periodFilter: PeriodGranularity;
@@ -73,8 +71,6 @@ export function TicketFiltersPanel({
   onDepartmentFilterChange,
   serviceFilter,
   onServiceFilterChange,
-  sentimentFilter,
-  onSentimentFilterChange,
   departmentOptions,
   serviceOptions,
   periodFilter,
@@ -210,22 +206,6 @@ export function TicketFiltersPanel({
                       {name}
                     </SelectItem>
                   ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
-                AI sentiment
-              </label>
-              <Select value={sentimentFilter} onValueChange={(v) => onSentimentFilterChange(v as TicketSentimentFilter)}>
-                <SelectTrigger className={selectTriggerClass}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="positive">Positive</SelectItem>
-                  <SelectItem value="neutral">Neutral</SelectItem>
-                  <SelectItem value="negative">Negative</SelectItem>
                 </SelectContent>
               </Select>
             </div>

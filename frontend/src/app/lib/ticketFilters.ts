@@ -2,7 +2,6 @@ import type { FeedbackItem } from "./api";
 import { sanitizeOptionalLabel } from "./fieldSanitize";
 
 export type TicketStatusFilter = "all" | "New" | "In Progress" | "Resolved" | "pending";
-export type TicketSentimentFilter = "all" | "positive" | "neutral" | "negative";
 
 export function ticketDepartment(item: FeedbackItem): string {
   return sanitizeOptionalLabel(item.lookupDepartment || item.department) || "";
@@ -69,7 +68,6 @@ export function filterTicketsByDimensions(
     status: TicketStatusFilter;
     department: string;
     service: string;
-    sentiment: TicketSentimentFilter;
   }
 ): FeedbackItem[] {
   return rows.filter((row) => {
@@ -87,10 +85,6 @@ export function filterTicketsByDimensions(
       if (ticketService(row) !== opts.service) return false;
     }
 
-    if (opts.sentiment !== "all") {
-      if (row.aiSentiment !== opts.sentiment) return false;
-    }
-
     return true;
   });
 }
@@ -103,7 +97,6 @@ export function buildFilterSummary(opts: {
   status: TicketStatusFilter;
   department: string;
   service: string;
-  sentiment: TicketSentimentFilter;
   dateLabel: string;
 }): string {
   const parts: string[] = [];
@@ -111,7 +104,6 @@ export function buildFilterSummary(opts: {
   else if (opts.status !== "all") parts.push(opts.status);
   if (opts.department !== "all") parts.push(`Dept: ${opts.department}`);
   if (opts.service !== "all") parts.push(`Service: ${opts.service}`);
-  if (opts.sentiment !== "all") parts.push(`AI: ${opts.sentiment}`);
   if (opts.dateLabel && !opts.dateLabel.startsWith("All tickets")) {
     parts.push(opts.dateLabel);
   }

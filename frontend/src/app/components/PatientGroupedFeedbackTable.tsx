@@ -271,6 +271,15 @@ function GroupRows({
           >
             {(rep.botConversationAnswers?.length ?? 0) > 0 ? "View & listen" : "View"}
           </button>
+          {onDeleteItem ? (
+            <button
+              type="button"
+              onClick={() => onDeleteItem(rep)}
+              className="text-sm font-semibold text-[#E5533D] hover:underline"
+            >
+              Delete
+            </button>
+          ) : null}
         </div>
       </td>
     </tr>

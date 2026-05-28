@@ -116,14 +116,14 @@ export function Layout() {
                     <button
                       type="button"
                       role="tab"
-                      aria-selected={path === "/admin"}
+                      aria-selected={path === "/admin" || path === "/admin/delete"}
                       onClick={() => navigate("/admin")}
                       className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
-                        path === "/admin"
+                        path === "/admin" || path === "/admin/delete"
                           ? "bg-white shadow-sm"
                           : "text-gray-600 hover:text-gray-900"
                       }`}
-                      style={path === "/admin" ? activePrimaryStyle : undefined}
+                      style={path === "/admin" || path === "/admin/delete" ? activePrimaryStyle : undefined}
                     >
                       Overview
                     </button>
@@ -158,14 +158,14 @@ export function Layout() {
                     <button
                       type="button"
                       role="tab"
-                      aria-selected={path === "/admin/tickets"}
+                      aria-selected={path.startsWith("/admin/tickets")}
                       onClick={() => navigate("/admin/tickets")}
                       className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
-                        path === "/admin/tickets"
+                        path.startsWith("/admin/tickets")
                           ? "bg-white shadow-sm"
                           : "text-gray-600 hover:text-gray-900"
                       }`}
-                      style={path === "/admin/tickets" ? activePrimaryStyle : undefined}
+                      style={path.startsWith("/admin/tickets") ? activePrimaryStyle : undefined}
                     >
                       Tickets
                     </button>
@@ -334,9 +334,9 @@ export function Layout() {
                   type="button"
                   onClick={() => navigate("/admin/tickets")}
                   className={`flex flex-col items-center gap-1 px-2 py-2 shrink-0 ${
-                    path === "/admin/tickets" ? "" : "text-gray-500"
+                    path.startsWith("/admin/tickets") ? "" : "text-gray-500"
                   }`}
-                  style={path === "/admin/tickets" ? activePrimaryStyle : undefined}
+                  style={path.startsWith("/admin/tickets") ? activePrimaryStyle : undefined}
                 >
                   <ClipboardList size={22} />
                   <span className="text-[10px] sm:text-xs">Tickets</span>

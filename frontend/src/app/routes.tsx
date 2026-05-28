@@ -83,6 +83,7 @@ export const router = createBrowserRouter([
           { path: "admin/settings", Component: AdminSettingsPage },
           { path: "admin/bot-conversation", Component: AdminBotConversationPage },
           { path: "admin", Component: AdminPage },
+          { path: "admin/delete", Component: AdminPage },
         ],
       },
     ],

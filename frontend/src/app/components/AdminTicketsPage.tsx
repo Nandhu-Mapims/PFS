@@ -17,7 +17,6 @@ import {
   ticketDepartment,
   ticketService,
   uniqueSorted,
-  type TicketSentimentFilter,
   type TicketStatusFilter,
 } from "../lib/ticketFilters";
 import { buildPatientFeedbackGroups } from "../lib/patientFeedbackGroups";
@@ -59,7 +58,6 @@ export function AdminTicketsPage() {
   const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>("all");
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [serviceFilter, setServiceFilter] = useState("all");
-  const [sentimentFilter, setSentimentFilter] = useState<TicketSentimentFilter>("all");
   const [catalogDepartments, setCatalogDepartments] = useState<string[]>([]);
   const [catalogServices, setCatalogServices] = useState<string[]>([]);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
@@ -155,7 +153,6 @@ export function AdminTicketsPage() {
     statusFilter !== "all" ||
     departmentFilter !== "all" ||
     serviceFilter !== "all" ||
-    sentimentFilter !== "all" ||
     dateFilterActive;
 
   const sortedItems = useMemo(() => {
@@ -169,7 +166,6 @@ export function AdminTicketsPage() {
       status: statusFilter,
       department: departmentFilter,
       service: serviceFilter,
-      sentiment: sentimentFilter,
     });
     return [...filtered].sort((a, b) => b._id.localeCompare(a._id));
   }, [
@@ -181,7 +177,6 @@ export function AdminTicketsPage() {
     statusFilter,
     departmentFilter,
     serviceFilter,
-    sentimentFilter,
   ]);
 
   const patientGroups = useMemo(
@@ -195,16 +190,14 @@ export function AdminTicketsPage() {
     else if (statusFilter !== "all") chips.push({ key: "status", label: statusFilter });
     if (departmentFilter !== "all") chips.push({ key: "dept", label: departmentFilter });
     if (serviceFilter !== "all") chips.push({ key: "svc", label: serviceFilter });
-    if (sentimentFilter !== "all") chips.push({ key: "sent", label: sentimentFilter });
     if (dateFilterActive) chips.push({ key: "date", label: "Date range" });
     return chips;
-  }, [statusFilter, departmentFilter, serviceFilter, sentimentFilter, dateFilterActive]);
+  }, [statusFilter, departmentFilter, serviceFilter, dateFilterActive]);
 
   const clearAllFilters = () => {
     setStatusFilter("all");
     setDepartmentFilter("all");
     setServiceFilter("all");
-    setSentimentFilter("all");
     setCustomFrom("");
     setCustomTo("");
     setDateFilterActive(false);
@@ -274,7 +267,8 @@ export function AdminTicketsPage() {
     };
   }, [ticketRows, sortedItems]);
 
-  const showDeleteActions = location.pathname.includes("/delete");
+  const isDeleteMode = location.pathname.includes("/delete");
+  const showDeleteActions = isDeleteMode;
 
   const handleDelete = useCallback(
     async (item: FeedbackItem) => {
@@ -302,7 +296,9 @@ export function AdminTicketsPage() {
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Ticket Management</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Filter by status, department, service, and date — then open a ticket to update progress.
+            {isDeleteMode
+              ? "Delete mode — remove test or duplicate tickets. This view is not linked in the main menu."
+              : "Complaint tickets (AI-negative). Filter by status, department, service, and date — then open a ticket to update progress."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -325,6 +321,30 @@ export function AdminTicketsPage() {
           </button>
         </div>
       </div>
+
+      {isDeleteMode ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+          <span>Delete mode is on — each row has a Delete action.</span>
+          <button
+            type="button"
+            onClick={() => navigate("/admin/tickets")}
+            className="text-xs font-semibold text-red-800 underline hover:no-underline"
+          >
+            Exit delete mode
+          </button>
+        </div>
+      ) : (
+        <p className="text-xs text-gray-400">
+          Need to remove tickets?{" "}
+          <button
+            type="button"
+            onClick={() => navigate("/admin/tickets/delete")}
+            className="text-gray-500 underline hover:text-red-700"
+          >
+            Open hidden delete mode
+          </button>
+        </p>
+      )}
 
       {syncMessage ? (
         <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2" role="status">
@@ -399,8 +419,6 @@ export function AdminTicketsPage() {
         onDepartmentFilterChange={setDepartmentFilter}
         serviceFilter={serviceFilter}
         onServiceFilterChange={setServiceFilter}
-        sentimentFilter={sentimentFilter}
-        onSentimentFilterChange={setSentimentFilter}
         departmentOptions={departmentOptions}
         serviceOptions={serviceOptions}
         periodFilter={periodFilter}
@@ -442,7 +460,9 @@ export function AdminTicketsPage() {
             <PatientGroupedFeedbackTable
               groups={patientGroups}
               variant="tickets"
-              onViewItem={(item) => navigate(`/ticket/${item._id}`)}
+              onViewItem={(item) =>
+                navigate(isDeleteMode ? `/ticket/${item._id}/delete` : `/ticket/${item._id}`)
+              }
               onDeleteItem={showDeleteActions ? (item) => void handleDelete(item) : undefined}
               emptyMessage="No tickets to show."
             />
