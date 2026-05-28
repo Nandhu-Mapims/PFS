@@ -326,3 +326,40 @@ export async function lookupPatientRecords(params) {
     matches,
   };
 }
+
+/**
+ * First-time department bootstrap for feedback form dropdowns.
+ * Pulls distinct non-empty department labels from recent OP/IP EMR rows.
+ *
+ * @param {{ frmDate?: string; toDate?: string }} [params]
+ * @returns {Promise<string[]>}
+ */
+export async function listEmrDepartments(params = {}) {
+  const { frmDate, toDate } = resolveDateRange(params.frmDate, params.toDate);
+  const opQuery = buildOpQuery({ frmDate, toDate, regno: "", patname: "" });
+  const ipQuery = buildIpQuery({ frmDate, toDate, regno: "", patname: "" });
+
+  let opRows = [];
+  let ipRows = [];
+  try {
+    opRows = await fetchEmrRows(opQuery);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[emr departments] OP query failed", {
+      message: e instanceof Error ? e.message : String(e),
+    });
+  }
+  try {
+    ipRows = await fetchEmrRows(ipQuery);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[emr departments] IP query failed", {
+      message: e instanceof Error ? e.message : String(e),
+    });
+  }
+
+  const labels = [...opRows, ...ipRows]
+    .map((row) => sanitizeOptionalLabel(getFromRow(row, "DEPARTMENT")))
+    .filter(Boolean);
+  return [...new Set(labels)].sort((a, b) => a.localeCompare(b));
+}

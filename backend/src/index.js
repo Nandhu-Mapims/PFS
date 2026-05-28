@@ -21,7 +21,11 @@ import {
 } from "./feedbackIssueProcessing.js";
 import { sanitizeOptionalLabel } from "./fieldSanitize.js";
 import { filterAiTopicsForTranscript } from "./aiTopicsFilter.js";
-import { lookupPatientRecords, isEmrPatientLookupEnabled } from "./emrPatientLookup.js";
+import {
+  lookupPatientRecords,
+  isEmrPatientLookupEnabled,
+  listEmrDepartments,
+} from "./emrPatientLookup.js";
 import {
   Branding,
   Department,
@@ -422,6 +426,31 @@ app.get("/api/departments", async (_req, res) => {
 
 app.get("/api/hospital-departments", async (_req, res) => {
   try {
+    const existing = await listHospitalDepartmentsFromDb();
+    if (existing.length > 0) {
+      return res.json(existing);
+    }
+
+    if (!isEmrPatientLookupEnabled()) {
+      return res.json([]);
+    }
+
+    const emrDeptNames = await listEmrDepartments();
+    if (!emrDeptNames.length) {
+      return res.json([]);
+    }
+
+    await Department.bulkWrite(
+      emrDeptNames.map((name) => ({
+        updateOne: {
+          filter: { name },
+          update: { $setOnInsert: { name, description: "", services: [] } },
+          upsert: true,
+        },
+      })),
+      { ordered: false }
+    );
+
     return res.json(await listHospitalDepartmentsFromDb());
   } catch (error) {
     return res.status(500).json({ message: "Failed to list departments" });
@@ -1152,11 +1181,12 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
             pickCatalogService(primaryIssue?.recommendedService) ||
             pickCatalogService(ai.recommendedService) ||
             pickCatalogService(normalizedService);
-          let primarySentiment =
+          const hasPrimaryIssueSentiment = Boolean(
             primaryIssue?.sentiment && ["positive", "neutral", "negative"].includes(primaryIssue.sentiment)
-              ? primaryIssue.sentiment
-              : ai.sentiment;
+          );
+          let primarySentiment = hasPrimaryIssueSentiment ? primaryIssue.sentiment : ai.sentiment;
           if (
+            !hasPrimaryIssueSentiment &&
             botVoiceOverallSentiment &&
             ["positive", "neutral", "negative"].includes(botVoiceOverallSentiment)
           ) {
@@ -1170,6 +1200,8 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
           ) {
             primarySentiment = primaryFromSummary;
           }
+          const canOpenTicketForSentiment = (sentiment) =>
+            sentiment === "negative" || sentiment === "neutral";
 
           const botAnswersWithSentiment =
             submissionMode === "bot" && (outDoc.botConversationAnswers || []).length
@@ -1205,6 +1237,23 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
               ? { botConversationAnswers: botAnswersWithSentiment }
               : {}),
           };
+
+          if (!canOpenTicketForSentiment(primarySentiment)) {
+            setFields.ticketId = null;
+            ticketId = null;
+            ticketRule = "none";
+            ticketIsFresh = false;
+            if (setFields.feedbackIssues?.[0]) {
+              setFields.feedbackIssues[0].ticketId = null;
+            }
+          }
+          if (Array.isArray(setFields.feedbackIssues) && setFields.feedbackIssues.length) {
+            setFields.feedbackIssues = setFields.feedbackIssues.map((issue) =>
+              canOpenTicketForSentiment(issue?.sentiment)
+                ? issue
+                : { ...issue, ticketId: null }
+            );
+          }
 
           if (primarySentiment === "negative" && !ticketId) {
             setFields.ticketId = newTicketId();
@@ -1269,7 +1318,10 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
               );
               let childTicketId = issue.ticketId;
               let childTicketIsFresh = false;
-              if (!childTicketId) {
+              if (!canOpenTicketForSentiment(issueSentiment)) {
+                childTicketId = null;
+                childTicketIsFresh = false;
+              } else if (!childTicketId) {
                 const childEval = await evaluateTicketForFeedback(Feedback, {
                   patientName,
                   rating: numericRating,

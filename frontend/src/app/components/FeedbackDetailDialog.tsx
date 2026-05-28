@@ -1,3 +1,4 @@
+import React from "react";
 import {
   Dialog,
   DialogContent,
@@ -47,11 +48,16 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
   const hasVoice = Boolean(voiceSrc);
   const transcript = item.comments?.trim() || "";
   const ticketSummary = ticketAiSummaryForItem(item);
+  const transcriptFallbackSummary = transcript
+    ? `${transcript.replace(/\s+/g, " ").trim().slice(0, 220)}${
+        transcript.length > 220 ? "..." : ""
+      }`
+    : "";
   const aiSummary =
     ticketSummary ||
     (item.aiSentiment
       ? `AI sentiment: ${item.aiSentiment}. Review the full feedback below.`
-      : "AI summary not generated yet.");
+      : transcriptFallbackSummary || "AI summary not generated yet.");
   const displayTopics = filterAiTopicsForTranscript(item.aiTopics, transcript);
 
   return (

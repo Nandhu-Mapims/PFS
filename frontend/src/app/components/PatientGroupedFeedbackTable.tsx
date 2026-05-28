@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Mic } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { FeedbackItem } from "../lib/api";
 import type { PatientFeedbackGroup } from "../lib/patientFeedbackGroups";
 import type { BotConversationAnswer } from "../lib/api";
@@ -29,6 +29,24 @@ type PatientGroupedFeedbackTableProps = {
   onDeleteItem?: (item: FeedbackItem) => void;
   emptyMessage?: string;
 };
+
+function ticketChildrenForGroup(group: PatientFeedbackGroup, variant: "overview" | "tickets"): FeedbackItem[] {
+  return group.items
+    .filter((item) => (variant === "tickets" ? Boolean(item.ticketId) : item.isSplitChild))
+    .sort((a, b) => {
+      if (variant !== "tickets") return 0;
+      const sentimentRank = (s: FeedbackItem["aiSentiment"]) => {
+        if (s === "negative") return 0;
+        if (s === "neutral") return 1;
+        if (s === "positive") return 2;
+        return 3;
+      };
+      const rankDiff = sentimentRank(a.aiSentiment) - sentimentRank(b.aiSentiment);
+      if (rankDiff !== 0) return rankDiff;
+      if (a.isSplitChild === b.isSplitChild) return 0;
+      return a.isSplitChild ? 1 : -1;
+    });
+}
 
 function sentimentClass(sentiment: ReturnType<typeof getAiSentimentBucket> | "mixed"): string {
   if (sentiment === "negative") return "bg-red-50 text-red-700";
@@ -61,7 +79,29 @@ export function PatientGroupedFeedbackTable({
   }
 
   return (
-    <div className="overflow-x-auto">
+    <>
+      <div className="md:hidden space-y-3 p-2">
+        {groups.map((group) => {
+          const isOpen = expanded.has(group.groupKey);
+          const multi = group.items.length > 1;
+          const sentiment = group.dominantSentiment ?? getAiSentimentBucket(group.representative);
+          return (
+            <MobileGroupCard
+              key={`mobile-${group.groupKey}`}
+              group={group}
+              multi={multi}
+              isOpen={isOpen}
+              onToggle={() => toggle(group.groupKey)}
+              variant={variant}
+              sentiment={sentiment}
+              onViewItem={onViewItem}
+              onDeleteItem={onDeleteItem}
+            />
+          );
+        })}
+      </div>
+
+      <div className="hidden md:block overflow-x-auto">
       <table className="w-full">
         <thead className="bg-gray-50 border-b border-gray-100">
           <tr>
@@ -129,6 +169,7 @@ export function PatientGroupedFeedbackTable({
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
@@ -269,7 +310,7 @@ function GroupRows({
             onClick={() => onViewItem(rep)}
             className="text-sm font-semibold text-[#2A6FDB] hover:underline"
           >
-            {(rep.botConversationAnswers?.length ?? 0) > 0 ? "View & listen" : "View"}
+            {variant === "tickets" ? "View" : (rep.botConversationAnswers?.length ?? 0) > 0 ? "View & listen" : "View"}
           </button>
           {onDeleteItem ? (
             <button
@@ -293,17 +334,17 @@ function GroupRows({
   const childRows =
     multi && isOpen ? (
       <>
-        {botAnswers.map((answer) => (
-          <BotAnswerRow
-            key={`${group.groupKey}-q-${answer.questionOrder}`}
-            answer={answer}
-            variant={variant}
-            onView={() => botParent && onViewItem(botParent)}
-          />
-        ))}
-        {group.items
-          .filter((item) => item.isSplitChild)
-          .map((item) => (
+        {variant === "overview"
+          ? botAnswers.map((answer) => (
+              <BotAnswerRow
+                key={`${group.groupKey}-q-${answer.questionOrder}`}
+                answer={answer}
+                variant={variant}
+                onView={() => botParent && onViewItem(botParent)}
+              />
+            ))
+          : null}
+        {ticketChildrenForGroup(group, variant).map((item) => (
             <ChildRow
               key={item._id}
               item={item}
@@ -321,6 +362,138 @@ function GroupRows({
       {parentRow}
       {childRows}
     </>
+  );
+}
+
+function MobileGroupCard({
+  group,
+  multi,
+  isOpen,
+  onToggle,
+  variant,
+  sentiment,
+  onViewItem,
+  onDeleteItem,
+}: {
+  group: PatientFeedbackGroup;
+  multi: boolean;
+  isOpen: boolean;
+  onToggle: () => void;
+  variant: "overview" | "tickets";
+  sentiment: ReturnType<typeof getAiSentimentBucket>;
+  onViewItem: (item: FeedbackItem) => void;
+  onDeleteItem?: (item: FeedbackItem) => void;
+}) {
+  const rep = group.representative;
+  const botParent = botSessionParent(group.items);
+  const botAnswers = [...(botParent?.botConversationAnswers ?? [])].sort(
+    (a, b) => a.questionOrder - b.questionOrder
+  );
+  const summaryLines = ticketSummariesForDisplay(group.items);
+  const summary =
+    summaryLines[0] ||
+    rep.aiSummary?.trim() ||
+    rep.comments?.trim() ||
+    "—";
+  const childItems = ticketChildrenForGroup(group, variant);
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-semibold text-gray-900 truncate">{group.patientName}</p>
+          {group.patientRegNo ? (
+            <p className="text-[11px] font-mono text-gray-500 mt-0.5">UHID {group.patientRegNo}</p>
+          ) : null}
+          <p className="text-xs text-gray-500 mt-1">
+            {group.ticketCount} ticket{group.ticketCount !== 1 ? "s" : ""} · {group.items.length} record
+            {group.items.length !== 1 ? "s" : ""}
+          </p>
+        </div>
+        <span className={`inline-flex px-2 py-1 rounded-full text-[11px] font-semibold capitalize ${sentimentClass(sentiment)}`}>
+          {sentiment ?? "pending"}
+        </span>
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+        <p className="text-gray-600">Rating: <span className="font-medium text-gray-800">{group.lowestRating} · {ratingLabel[group.lowestRating] ?? "—"}</span></p>
+        <p className="text-gray-600">Status: <span className="font-medium text-gray-800">{group.statusLabel}</span></p>
+      </div>
+
+      <p className="mt-2 text-xs text-gray-600 line-clamp-2">{summary}</p>
+
+      <div className="mt-3 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => onViewItem(rep)}
+          className="text-sm font-semibold text-[#2A6FDB] hover:underline"
+        >
+          {variant === "tickets" ? "View" : (rep.botConversationAnswers?.length ?? 0) > 0 ? "View & listen" : "View"}
+        </button>
+        {onDeleteItem ? (
+          <button
+            type="button"
+            onClick={() => onDeleteItem(rep)}
+            className="text-sm font-semibold text-[#E5533D] hover:underline"
+          >
+            Delete
+          </button>
+        ) : null}
+        {multi ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="ml-auto text-xs font-semibold text-gray-600 rounded-lg border border-gray-200 px-2 py-1"
+          >
+            {isOpen ? "Hide details" : "Show details"}
+          </button>
+        ) : null}
+      </div>
+
+      {multi && isOpen ? (
+        <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
+          {variant === "overview"
+            ? botAnswers.map((answer) => (
+                <div key={`m-bot-${group.groupKey}-${answer.questionOrder}`} className="rounded-xl bg-sky-50/60 p-2">
+                  <p className="text-xs font-medium text-gray-800 line-clamp-2">{answer.questionText || "Bot question"}</p>
+                  <p className="text-xs text-gray-600 line-clamp-2 mt-1">{answer.transcript || "—"}</p>
+                </div>
+              ))
+            : null}
+          {childItems.map((item) => (
+            <div key={`m-child-${item._id}`} className="rounded-xl border border-gray-200 p-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-mono text-gray-700 truncate">{item.ticketId ?? item._id}</p>
+                <span className={`inline-flex px-2 py-0.5 rounded text-[11px] capitalize ${sentimentClass(getAiSentimentBucket(item))}`}>
+                  {getAiSentimentBucket(item) ?? "—"}
+                </span>
+              </div>
+              <p className="text-xs text-gray-700 mt-1 line-clamp-2">
+                {ticketService(item) ? `Service: ${ticketService(item)}` : ticketAiSummaryForItem(item) || "—"}
+              </p>
+              <div className="mt-2 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => onViewItem(item)}
+                  className="text-xs font-semibold text-[#2A6FDB] hover:underline"
+                >
+                  {variant === "tickets" ? "View" : (item.botConversationAnswers?.length ?? 0) > 0 ? "View & listen" : "View"}
+                </button>
+                {onDeleteItem ? (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteItem(item)}
+                    className="text-xs font-semibold text-[#E5533D] hover:underline"
+                  >
+                    Delete
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -416,12 +589,6 @@ function ChildRow({
             {item.isSplitChild ? (
               <div className="text-xs text-amber-700 font-medium">Complaint ticket (split issue)</div>
             ) : null}
-            {(item.botConversationAnswers?.length ?? 0) > 0 ? (
-              <div className="text-xs text-[#2A6FDB] font-semibold flex items-center gap-1 mt-0.5">
-                <Mic size={12} />
-                Bot voice Q&amp;A on ticket page
-              </div>
-            ) : null}
           </td>
           <td className="px-4 py-2 hidden md:table-cell">
             <span className={`inline-flex px-2 py-0.5 rounded text-xs capitalize ${sentimentClass(sentiment)}`}>
@@ -438,7 +605,9 @@ function ChildRow({
         </>
       ) : (
         <>
-          <td className="px-4 py-2 pl-8 text-xs text-gray-500">↳ ticket</td>
+          <td className="px-4 py-2 pl-8 text-xs text-gray-500">
+            {item.ticketId ? "↳ ticket" : "↳ issue"}
+          </td>
           <td className="px-4 py-2 text-xs text-gray-600">{childModeShortLabel(item, groupItems)}</td>
           <td className="px-4 py-2 text-sm text-gray-600 hidden lg:table-cell">{dept || "—"}</td>
           <td className="px-4 py-2 text-sm text-gray-600 hidden md:table-cell">{svc || "—"}</td>
@@ -464,7 +633,7 @@ function ChildRow({
             onClick={() => onViewItem(item)}
             className="text-xs font-semibold text-[#2A6FDB] hover:underline"
           >
-            {(item.botConversationAnswers?.length ?? 0) > 0 ? "View & listen" : "View"}
+            {variant === "tickets" ? "View" : (item.botConversationAnswers?.length ?? 0) > 0 ? "View & listen" : "View"}
           </button>
           {onDeleteItem ? (
             <button

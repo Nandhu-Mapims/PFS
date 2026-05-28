@@ -221,9 +221,28 @@ export function feedbackRowsForAnalytics<T extends { isSplitChild?: boolean }>(i
   return items.filter((row) => !row.isSplitChild);
 }
 
-/** Rows that opened a complaint ticket (includes split issue tickets). */
-export function feedbackRowsWithTicket<T extends { ticketId?: string | null }>(items: T[]): T[] {
-  return items.filter((row) => Boolean(String(row.ticketId || "").trim()));
+/** Rows that opened a complaint ticket (includes split issue tickets), excluding positive sentiment tickets. */
+export function feedbackRowsWithTicket<
+  T extends {
+    ticketId?: string | null;
+    aiSentiment?: string | null;
+    feedbackIssues?: Array<{ ticketId?: string | null; sentiment?: string | null }>;
+  }
+>(items: T[]): T[] {
+  const isTicketSentimentAllowed = (sentiment?: string | null) =>
+    sentiment === "negative" || sentiment === "neutral";
+
+  return items.filter(
+    (row) => {
+      if (!Boolean(String(row.ticketId || "").trim())) return false;
+      if (isTicketSentimentAllowed(row.aiSentiment)) return true;
+      return (row.feedbackIssues || []).some(
+        (issue) =>
+          String(issue.ticketId || "").trim() === String(row.ticketId || "").trim() &&
+          isTicketSentimentAllowed(issue.sentiment)
+      );
+    }
+  );
 }
 
 export function buildStatusBuckets(

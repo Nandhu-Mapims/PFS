@@ -381,47 +381,47 @@ export function AdminPage() {
 
   return (
     <div className="w-full">
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="mb-5 sm:mb-6 flex flex-col gap-3 sm:gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-3xl md:text-4xl font-bold text-gray-800">Admin Panel</h2>
-          <p className="text-base md:text-lg text-gray-600 mt-2">
+          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-800">Admin Panel</h2>
+          <p className="text-sm sm:text-base md:text-lg text-gray-600 mt-1.5 sm:mt-2">
             SaaS-level analytics for patient feedback performance
           </p>
         </div>
-        <div className="flex flex-col items-stretch sm:items-end gap-2 sm:flex-row">
+        <div className="grid grid-cols-2 gap-2 w-full sm:w-auto sm:flex sm:items-center">
           <button
             type="button"
             onClick={() => navigate("/admin/settings")}
-            className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50"
+            className="px-3 sm:px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50"
           >
             Settings
           </button>
           <button
             type="button"
             onClick={() => navigate("/admin/tickets")}
-            className="px-4 py-2 rounded-lg bg-[#2A6FDB] text-white text-sm font-semibold hover:bg-[#1e5bbd]"
+            className="px-3 sm:px-4 py-2 rounded-lg bg-[#2A6FDB] text-white text-sm font-semibold hover:bg-[#1e5bbd]"
           >
             Ticket management
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white rounded-xl p-5 shadow-md border-l-4 border-[#2A6FDB]">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 mb-6">
+        <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#2A6FDB]">
           <p className="text-gray-600 text-sm mb-1 font-medium">Total Tickets</p>
           <p className="text-3xl font-bold text-gray-800">{analytics?.totals.all ?? 0}</p>
         </div>
-        <div className="bg-white rounded-xl p-5 shadow-md border-l-4 border-[#2FBF71]">
+        <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#2FBF71]">
           <p className="text-gray-600 text-sm mb-1 font-medium">Average Rating</p>
           <p className="text-3xl font-bold text-gray-800">{averageRating}</p>
         </div>
-        <div className="bg-white rounded-xl p-5 shadow-md border-l-4 border-[#F4A261]">
+        <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#F4A261]">
           <p className="text-gray-600 text-sm mb-1 font-medium">Negative Tickets</p>
           <p className="text-3xl font-bold text-gray-800">
             {analytics?.totals.negative ?? 0}
           </p>
         </div>
-        <div className="bg-white rounded-xl p-5 shadow-md border-l-4 border-[#7C3AED]">
+        <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#7C3AED]">
           <p className="text-gray-600 text-sm mb-1 font-medium">AI Uploaded Tickets</p>
           <p className="text-3xl font-bold text-gray-800">
             {analytics?.totals.aiTickets ?? 0}

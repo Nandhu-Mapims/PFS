@@ -51,9 +51,9 @@ export function InsightsHub() {
 
   return (
     <div className="w-full space-y-6 pb-10">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 sm:gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Insights</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Insights</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Submissions, tickets, and department/service sentiment rankings (includes split issues).
           </p>

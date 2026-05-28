@@ -322,14 +322,25 @@ export async function analyzePatientFeedback(input, options = {}) {
 
   const filteredTopics = filterAiTopicsForTranscript(topics, comments);
 
+  const normalizedSummary = String(parsed.summary || "")
+    .trim()
+    .slice(0, 300);
+  const fallbackSummaryFromIssue = String(issues[0]?.issueSummary || "")
+    .trim()
+    .slice(0, 300);
+  const fallbackSummaryFromTranscript = comments
+    ? comments.replace(/\s+/g, " ").trim().slice(0, 300)
+    : "";
+
   const result = {
     rating: normalizeRating(parsed.rating, 3),
     sentiment: normalizeSentiment(parsed.sentiment),
     urgency: normalizeUrgency(parsed.urgency),
     topics: filteredTopics,
-    summary: String(parsed.summary || "")
-      .trim()
-      .slice(0, 300),
+    summary:
+      normalizedSummary ||
+      fallbackSummaryFromIssue ||
+      fallbackSummaryFromTranscript,
     recommendedService: primaryService || issues[0]?.recommendedService || "",
     issues,
     /** @deprecated use recommendedService — kept for callers not yet migrated */

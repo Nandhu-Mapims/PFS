@@ -157,18 +157,7 @@ export function RecentFeedbackBySentiment({
               Exit delete mode
             </button>
           </div>
-        ) : (
-          <p className="text-xs text-gray-400">
-            Need to remove submissions?{" "}
-            <button
-              type="button"
-              onClick={() => navigate("/admin/delete")}
-              className="text-gray-500 underline hover:text-red-700"
-            >
-              Open hidden delete mode
-            </button>
-          </p>
-        )}
+        ) : null}
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">

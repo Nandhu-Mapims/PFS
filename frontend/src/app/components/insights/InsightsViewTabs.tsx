@@ -2,7 +2,7 @@ import { BarChart2, ClipboardList, TrendingUp } from "lucide-react";
 import { NavLink } from "react-router";
 
 function tabClass({ isActive }: { isActive: boolean }) {
-  return `inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all whitespace-nowrap ${
+  return `inline-flex w-full items-center justify-center gap-1.5 rounded-lg px-2 sm:px-3 py-2 text-[11px] sm:text-sm font-semibold transition-all ${
     isActive
       ? "bg-[#2A6FDB] text-white shadow-sm"
       : "text-gray-600 hover:bg-white hover:text-gray-900"
@@ -16,7 +16,7 @@ export function InsightsViewTabs({ basePath }: { basePath: string }) {
 
   return (
     <div
-      className="inline-flex max-w-full overflow-x-auto rounded-xl border border-gray-200 bg-gray-50 p-1"
+      className="grid w-full grid-cols-3 rounded-xl border border-gray-200 bg-gray-50 p-1"
       role="tablist"
       aria-label="Insights views"
     >

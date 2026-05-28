@@ -34,6 +34,21 @@ function isOpenTicket(item: FeedbackItem): boolean {
   return Boolean(item.ticketId) && item.status !== "Resolved";
 }
 
+function isTicketSentimentAllowed(sentiment?: string | null): boolean {
+  return sentiment === "negative" || sentiment === "neutral";
+}
+
+function shouldIncludeInTicketRows(item: FeedbackItem): boolean {
+  const ticketId = String(item.ticketId || "").trim();
+  if (!ticketId) return false;
+  if (isTicketSentimentAllowed(item.aiSentiment)) return true;
+  return (item.feedbackIssues || []).some(
+    (issue) =>
+      String(issue.ticketId || "").trim() === ticketId &&
+      isTicketSentimentAllowed(issue.sentiment)
+  );
+}
+
 const ratingLabel: Record<number, string> = {
   1: "Very Poor",
   2: "Poor",
@@ -127,7 +142,7 @@ export function AdminTicketsPage() {
   }, [loadTickets]);
 
   const ticketRows = useMemo(
-    () => items.filter((item) => Boolean(item.ticketId)),
+    () => items.filter(shouldIncludeInTicketRows),
     [items]
   );
 

@@ -95,7 +95,7 @@ export function Layout() {
                   <>
                 {isAdminShell ? (
                   <nav
-                    className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-gray-200 bg-gray-100/80 p-1 shadow-sm"
+                    className="hidden md:inline-flex flex-wrap items-center gap-1 rounded-xl border border-gray-200 bg-gray-100/80 p-1 shadow-sm"
                     role="tablist"
                     aria-label="Admin sections"
                   >
@@ -287,13 +287,17 @@ export function Layout() {
       </header>
 
       {/* Main Content — wider canvas so dashboards use horizontal space */}
-      <main className="flex-1 w-full max-w-[min(100%,1600px)] mx-auto px-3 sm:px-5 py-6">
+      <main
+        className={`flex-1 w-full max-w-[min(100%,1600px)] mx-auto px-3 sm:px-5 py-6 ${
+          showBottomNav ? "pb-24 md:pb-6" : ""
+        }`}
+      >
         <Outlet />
       </main>
 
       {/* Bottom Navigation - Only for staff views */}
       {showBottomNav && (
-        <nav className="bg-white border-t border-gray-200 shadow-lg md:hidden">
+        <nav className="fixed bottom-0 inset-x-0 z-40 bg-white border-t border-gray-200 shadow-lg md:hidden">
           <div className="flex justify-around items-center h-16">
             {isAdmin ? (
               <div className="flex w-full justify-around overflow-x-auto">
@@ -310,6 +314,17 @@ export function Layout() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => navigate("/admin")}
+                  className={`flex flex-col items-center gap-1 px-2 py-2 shrink-0 ${
+                    path === "/admin" || path === "/admin/delete" ? "" : "text-gray-500"
+                  }`}
+                  style={path === "/admin" || path === "/admin/delete" ? activePrimaryStyle : undefined}
+                >
+                  <Home size={22} />
+                  <span className="text-[10px] sm:text-xs">Overview</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => navigate("/admin/departments")}
                   className={`flex flex-col items-center gap-1 px-2 py-2 shrink-0 ${
                     path === "/admin/departments" ? "" : "text-gray-500"
@@ -318,6 +333,17 @@ export function Layout() {
                 >
                   <Building2 size={22} />
                   <span className="text-[10px] sm:text-xs">Depts</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate("/admin/services")}
+                  className={`flex flex-col items-center gap-1 px-2 py-2 shrink-0 ${
+                    path === "/admin/services" ? "" : "text-gray-500"
+                  }`}
+                  style={path === "/admin/services" ? activePrimaryStyle : undefined}
+                >
+                  <Building2 size={22} />
+                  <span className="text-[10px] sm:text-xs">Services</span>
                 </button>
                 <button
                   type="button"
