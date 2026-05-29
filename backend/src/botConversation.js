@@ -135,81 +135,43 @@ export function buildBotCommentsFromAnswers(answers) {
     .join("\n\n");
 }
 
-/** Lightweight per-answer sentiment (no extra OpenRouter call). */
-export function inferAnswerSentimentHeuristic(transcript) {
-  const t = String(transcript || "")
-    .trim()
-    .toLowerCase();
-  if (!t || t === "(no speech)" || t.length < 2) return "neutral";
-
-  const positive = [
-    "good",
-    "great",
-    "excellent",
-    "happy",
-    "satisfied",
-    "satisfactory",
-    "helpful",
-    "polite",
-    "calm",
-    "nice",
-    "thank",
-    "well",
-    "comfortable",
-    "நல்ல",
-    "சந்தோஷ",
-    "பாராட்ட",
-    "நன்றி",
-  ];
-  const negative = [
-    "bad",
-    "poor",
-    "rude",
-    "not helpful",
-    "unhelpful",
-    "dirty",
-    "delay",
-    "long wait",
-    "worst",
-    "terrible",
-    "no help",
-    "கெட்ட",
-    "மோச",
-    "பிரச்சனை",
-    "கோபம்",
-  ];
-
-  const pos = positive.some((w) => t.includes(w));
-  const neg = negative.some((w) => t.includes(w));
-  if (pos && !neg) return "positive";
-  if (neg && !pos) return "negative";
-  return "neutral";
+/** Use OpenRouter/AI sentiment only — never override with keyword heuristics. */
+export function aiSentimentOnly(value) {
+  return value && ["positive", "neutral", "negative"].includes(value) ? value : null;
 }
 
-/** Per-answer sentiment: AI issue when aligned, else transcript heuristic (not overall negative). */
+export function canOpenTicketForSentiment(sentiment) {
+  return sentiment === "negative" || sentiment === "neutral";
+}
+
+export function ensureIssueTicketIds(issues, { newTicketId }) {
+  return (issues || []).map((issue) => {
+    const sentiment = aiSentimentOnly(issue?.sentiment);
+    if (!sentiment) return issue;
+    if (!canOpenTicketForSentiment(sentiment)) {
+      return { ...issue, ticketId: null };
+    }
+    if (issue?.ticketId) return issue;
+    if (sentiment === "negative") {
+      return { ...issue, ticketId: newTicketId() };
+    }
+    return issue;
+  });
+}
+
+/** Per-answer sentiment from AI only (per-answer OpenRouter call, then matching issue, then overall). */
 export function attachBotAnswerSentimentsFromIssues(answers, issues, fallbackSentiment) {
   if (!Array.isArray(answers) || !answers.length) return answers || [];
-  const fallback =
-    fallbackSentiment && ["positive", "neutral", "negative"].includes(fallbackSentiment)
-      ? fallbackSentiment
-      : "neutral";
+  const fallback = aiSentimentOnly(fallbackSentiment) || "neutral";
   const sortedIssues = Array.isArray(issues) ? issues : [];
   return answers.map((row, idx) => {
-    // If we already have an OpenRouter/derived sentiment for this specific answer,
-    // keep it. This is important when we re-introduce per-answer OpenRouter calls.
-    const existing = row?.answerSentiment;
-    if (existing && ["positive", "neutral", "negative"].includes(existing)) {
+    const existing = aiSentimentOnly(row?.answerSentiment);
+    if (existing) {
       return { ...row, answerSentiment: existing };
     }
 
-    const issue = sortedIssues[idx];
-    const fromIssue =
-      issue?.sentiment && ["positive", "neutral", "negative"].includes(issue.sentiment)
-        ? issue.sentiment
-        : null;
-    const fromTranscript = inferAnswerSentimentHeuristic(row.transcript);
-    const answerSentiment = fromTranscript !== "neutral" ? fromTranscript : fromIssue || fallback;
-    return { ...row, answerSentiment };
+    const fromIssue = aiSentimentOnly(sortedIssues[idx]?.sentiment);
+    return { ...row, answerSentiment: fromIssue || fallback };
   });
 }
 

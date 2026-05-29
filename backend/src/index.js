@@ -38,7 +38,9 @@ import {
   attachBotAnswerPlaybackUrls,
   attachBotAnswerSentimentsFromIssues,
   buildBotCommentsFromAnswers,
-  inferAnswerSentimentHeuristic,
+  aiSentimentOnly,
+  canOpenTicketForSentiment,
+  ensureIssueTicketIds,
   ensureBotConversationConfig,
   registerBotConversationRoutes,
   saveBotAnswerRecording,
@@ -1181,27 +1183,17 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
             pickCatalogService(primaryIssue?.recommendedService) ||
             pickCatalogService(ai.recommendedService) ||
             pickCatalogService(normalizedService);
-          const hasPrimaryIssueSentiment = Boolean(
-            primaryIssue?.sentiment && ["positive", "neutral", "negative"].includes(primaryIssue.sentiment)
-          );
-          let primarySentiment = hasPrimaryIssueSentiment ? primaryIssue.sentiment : ai.sentiment;
-          if (
-            !hasPrimaryIssueSentiment &&
-            botVoiceOverallSentiment &&
-            ["positive", "neutral", "negative"].includes(botVoiceOverallSentiment)
-          ) {
-            primarySentiment = botVoiceOverallSentiment;
+          let primarySentiment =
+            aiSentimentOnly(primaryIssue?.sentiment) || aiSentimentOnly(ai.sentiment);
+          if (!primarySentiment) {
+            primarySentiment = aiSentimentOnly(botVoiceOverallSentiment);
           }
-          const primaryFromSummary = inferAnswerSentimentHeuristic(primaryIssue?.issueSummary);
-          if (
-            primaryFromSummary &&
-            primaryFromSummary !== "neutral" &&
-            primarySentiment !== primaryFromSummary
-          ) {
-            primarySentiment = primaryFromSummary;
+          issueBundle.issues = ensureIssueTicketIds(issueBundle.issues, { newTicketId });
+          if (issueBundle.issues[0]?.ticketId && canOpenTicketForSentiment(primarySentiment)) {
+            ticketId = issueBundle.issues[0].ticketId;
+            ticketRule = ticketRule === "none" ? "ai_negative_sentiment" : ticketRule;
+            ticketIsFresh = true;
           }
-          const canOpenTicketForSentiment = (sentiment) =>
-            sentiment === "negative" || sentiment === "neutral";
 
           const botAnswersWithSentiment =
             submissionMode === "bot" && (outDoc.botConversationAnswers || []).length
@@ -1248,11 +1240,13 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
             }
           }
           if (Array.isArray(setFields.feedbackIssues) && setFields.feedbackIssues.length) {
-            setFields.feedbackIssues = setFields.feedbackIssues.map((issue) =>
-              canOpenTicketForSentiment(issue?.sentiment)
-                ? issue
-                : { ...issue, ticketId: null }
-            );
+            setFields.feedbackIssues = setFields.feedbackIssues.map((issue) => {
+              const sentiment = aiSentimentOnly(issue?.sentiment);
+              if (sentiment && !canOpenTicketForSentiment(sentiment)) {
+                return { ...issue, ticketId: null };
+              }
+              return issue;
+            });
           }
 
           if (primarySentiment === "negative" && !ticketId) {
@@ -1299,18 +1293,8 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
 
             for (let i = 1; i < issueBundle.issues.length; i++) {
               const issue = issueBundle.issues[i];
-              let issueSentiment =
-                issue?.sentiment && ["positive", "neutral", "negative"].includes(issue.sentiment)
-                  ? issue.sentiment
-                  : ai.sentiment;
-              const fromSummary = inferAnswerSentimentHeuristic(issue.issueSummary);
-              if (
-                fromSummary &&
-                fromSummary !== "neutral" &&
-                issueSentiment !== fromSummary
-              ) {
-                issueSentiment = fromSummary;
-              }
+              const issueSentiment =
+                aiSentimentOnly(issue?.sentiment) || aiSentimentOnly(ai.sentiment);
               const childSig = buildComplaintSignature(
                 issue.department || visitDepartment,
                 issue.recommendedService,
