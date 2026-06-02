@@ -58,12 +58,12 @@ app.use(express.json());
 
 const speechUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 12 * 1024 * 1024 },
+  limits: { fileSize: 60 * 1024 * 1024 },
 });
 
 const feedbackSubmitUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 60 * 1024 * 1024 },
 }).fields([
   { name: "voiceRecording", maxCount: 1 },
   { name: "answerAudio", maxCount: 12 },
@@ -71,7 +71,7 @@ const feedbackSubmitUpload = multer({
 
 const botAudioUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 40 * 1024 * 1024 },
+  limits: { fileSize: 80 * 1024 * 1024 },
 });
 
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
