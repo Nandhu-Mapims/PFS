@@ -348,18 +348,7 @@ export function AdminTicketsPage() {
             Exit delete mode
           </button>
         </div>
-      ) : (
-        <p className="text-xs text-gray-400">
-          Need to remove tickets?{" "}
-          <button
-            type="button"
-            onClick={() => navigate("/admin/tickets/delete")}
-            className="text-gray-500 underline hover:text-red-700"
-          >
-            Open hidden delete mode
-          </button>
-        </p>
-      )}
+      ) : null}
 
       {syncMessage ? (
         <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2" role="status">

@@ -173,7 +173,6 @@ export function resolveUploadUrl(path: string | null | undefined): string | null
 
 export async function createFeedback(payload: FeedbackPayload): Promise<CreateFeedbackResponse> {
   const { voiceRecording, ...fields } = payload;
-  let response: Response;
 
   const appendEmrFields = (fd: FormData) => {
     if (fields.patientRegNo != null && fields.patientRegNo !== "") {
@@ -192,39 +191,33 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
     }
   };
 
+  const fd = new FormData();
+  fd.append("patientName", fields.patientName);
+  if (fields.department != null && fields.department !== "") {
+    fd.append("department", fields.department);
+  }
+  if (fields.service != null && fields.service !== "") {
+    fd.append("service", fields.service);
+  }
+  fd.append("rating", String(fields.rating));
+  fd.append("comments", fields.comments ?? "");
+  if (fields.source) fd.append("source", fields.source);
+  fd.append(
+    "submissionMode",
+    fields.submissionMode || (voiceRecording?.size ? "voice" : "standard")
+  );
+  appendEmrFields(fd);
+
   if (voiceRecording && voiceRecording.size > 0) {
-    const fd = new FormData();
-    fd.append("patientName", fields.patientName);
-    if (fields.department != null && fields.department !== "") {
-      fd.append("department", fields.department);
-    }
-    if (fields.service != null && fields.service !== "") {
-      fd.append("service", fields.service);
-    }
-    fd.append("rating", String(fields.rating));
-    fd.append("comments", fields.comments ?? "");
-    if (fields.source) fd.append("source", fields.source);
-    if (!fields.submissionMode) {
-      fd.append("submissionMode", "voice");
-    } else {
-      fd.append("submissionMode", fields.submissionMode);
-    }
-    appendEmrFields(fd);
     const mime = voiceRecording.type || "audio/webm";
     const ext = mime.includes("mp4") ? "m4a" : "webm";
     fd.append("voiceRecording", voiceRecording, `voice-feedback.${ext}`);
-
-    response = await fetch(`${API_BASE_URL}/api/feedback`, {
-      method: "POST",
-      body: fd,
-    });
-  } else {
-    response = await fetch(`${API_BASE_URL}/api/feedback`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(fields),
-    });
   }
+
+  const response = await fetch(`${API_BASE_URL}/api/feedback`, {
+    method: "POST",
+    body: fd,
+  });
 
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {

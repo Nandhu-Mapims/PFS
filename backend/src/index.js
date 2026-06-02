@@ -1149,6 +1149,41 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
       serviceResolvedByAiHint: serviceHintFromAi,
     });
 
+    if (
+      !pendingAi &&
+      process.env.OPENROUTER_API_KEY &&
+      String(comments || "").trim()
+    ) {
+      try {
+        pendingAi = await analyzePatientFeedback(
+          {
+            patientName,
+            patientDepartment: visitDepartment,
+            department: visitDepartment,
+            service: normalizedService,
+            comments: comments || "",
+          },
+          {
+            feedbackId: String(feedback._id),
+            serviceChoices: serviceCatalog.map((d) => ({
+              name: d.name,
+              description: d.description || "",
+            })),
+          }
+        );
+        // eslint-disable-next-line no-console
+        console.log("[feedback] OpenRouter retry after create succeeded", {
+          feedbackId: String(feedback._id),
+        });
+      } catch (retryErr) {
+        // eslint-disable-next-line no-console
+        console.error("[feedback] OpenRouter analyze failed (post-create retry)", {
+          feedbackId: String(feedback._id),
+          message: retryErr?.message || String(retryErr),
+        });
+      }
+    }
+
     if (pendingAi) {
       try {
         // eslint-disable-next-line no-console
@@ -1358,7 +1393,9 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
     } else {
       // eslint-disable-next-line no-console
       console.log(
-        "[feedback] AI analysis skipped (set OPENROUTER_API_KEY in .env to enable)"
+        process.env.OPENROUTER_API_KEY
+          ? "[feedback] AI analysis not applied (OpenRouter returned no result or comments were empty)"
+          : "[feedback] AI analysis skipped (set OPENROUTER_API_KEY in .env to enable)"
       );
     }
 

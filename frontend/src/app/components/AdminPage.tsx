@@ -408,7 +408,7 @@ export function AdminPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 mb-6">
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#2A6FDB]">
-          <p className="text-gray-600 text-sm mb-1 font-medium">Total Tickets</p>
+          <p className="text-gray-600 text-sm mb-1 font-medium">Total Submissions</p>
           <p className="text-3xl font-bold text-gray-800">{analytics?.totals.all ?? 0}</p>
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#2FBF71]">
@@ -416,13 +416,13 @@ export function AdminPage() {
           <p className="text-3xl font-bold text-gray-800">{averageRating}</p>
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#F4A261]">
-          <p className="text-gray-600 text-sm mb-1 font-medium">Negative Tickets</p>
+          <p className="text-gray-600 text-sm mb-1 font-medium">Negative (AI)</p>
           <p className="text-3xl font-bold text-gray-800">
             {analytics?.totals.negative ?? 0}
           </p>
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#7C3AED]">
-          <p className="text-gray-600 text-sm mb-1 font-medium">AI Uploaded Tickets</p>
+          <p className="text-gray-600 text-sm mb-1 font-medium">AI Channel Submissions</p>
           <p className="text-3xl font-bold text-gray-800">
             {analytics?.totals.aiTickets ?? 0}
           </p>
@@ -431,7 +431,7 @@ export function AdminPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <div className="bg-white rounded-xl shadow-md p-5">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">Ticket Status Distribution</h3>
+          <h3 className="text-lg font-semibold text-gray-800 mb-4">Submission Status Distribution</h3>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>

@@ -65,6 +65,44 @@ function stripJsonFence(text) {
   return t.trim();
 }
 
+/** Tolerate occasional trailing bracket noise from LLM completions (e.g. `[]}]}`). */
+function parseModelJson(raw, { feedbackId = "unknown" } = {}) {
+  const text = stripJsonFence(String(raw || ""));
+  const candidates = [text];
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    candidates.push(text.slice(start, end + 1));
+  }
+
+  const repairCandidates = (value) => {
+    const out = [value];
+    // Gemini typo: `"issues":[]}]}` — premature `}` then trailing `]}`.
+    const bracketFixed = value.replace(/\[\]\}\]\}$/, "[]}");
+    if (bracketFixed !== value) out.push(bracketFixed);
+    const trailingFixed = value.replace(/\[\]\s*\]+\s*\}$/, "[]}");
+    if (trailingFixed !== value) out.push(trailingFixed);
+    return out;
+  };
+
+  for (const candidate of candidates) {
+    for (const attempt of repairCandidates(candidate)) {
+      try {
+        return JSON.parse(attempt);
+      } catch {
+        // try next repair variant
+      }
+    }
+  }
+
+  // eslint-disable-next-line no-console
+  console.error("[openrouter] parse JSON failed", {
+    feedbackId,
+    rawPreview: text.slice(0, 500),
+  });
+  throw new Error("OpenRouter returned non-JSON");
+}
+
 /**
  * @param {string | null | undefined} raw
  * @param {{ name: string; description?: string }[]} choices
@@ -152,12 +190,8 @@ export async function inferRatingFromVoiceTranscript(transcript) {
 
   let parsed;
   try {
-    parsed = JSON.parse(stripJsonFence(raw));
+    parsed = parseModelJson(raw, { feedbackId: "voice-rating" });
   } catch {
-    // eslint-disable-next-line no-console
-    console.error("[openrouter] infer voice rating parse failed", {
-      rawPreview: raw.slice(0, 300),
-    });
     return noop();
   }
 
@@ -241,51 +275,63 @@ export async function analyzePatientFeedback(input, options = {}) {
     commentChars: comments.length,
   });
 
-  const response = await fetch(OPENROUTER_URL, {
-    method: "POST",
-    headers: openRouterHeaders(apiKey),
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: SYSTEM_JSON_ONLY },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0.2,
-      max_tokens: 512,
-    }),
+  const requestBody = JSON.stringify({
+    model,
+    messages: [
+      { role: "system", content: SYSTEM_JSON_ONLY },
+      { role: "user", content: userContent },
+    ],
+    temperature: 0.2,
+    max_tokens: 512,
   });
 
-  if (!response.ok) {
-    const errText = await response.text().catch(() => "");
-    // eslint-disable-next-line no-console
-    console.error("[openrouter] HTTP error", {
-      feedbackId,
-      status: response.status,
-      bodyPreview: errText.slice(0, 400),
-    });
-    throw new Error(
-      `OpenRouter HTTP ${response.status}: ${errText.slice(0, 500)}`
-    );
+  let parsed = null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(OPENROUTER_URL, {
+        method: "POST",
+        headers: openRouterHeaders(apiKey),
+        body: requestBody,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        // eslint-disable-next-line no-console
+        console.error("[openrouter] HTTP error", {
+          feedbackId,
+          attempt,
+          status: response.status,
+          bodyPreview: errText.slice(0, 400),
+        });
+        throw new Error(
+          `OpenRouter HTTP ${response.status}: ${errText.slice(0, 500)}`
+        );
+      }
+
+      const data = await response.json();
+      const raw = data.choices?.[0]?.message?.content?.trim();
+      if (!raw) {
+        throw new Error("Empty OpenRouter completion");
+      }
+
+      parsed = parseModelJson(raw, { feedbackId });
+      break;
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2) {
+        // eslint-disable-next-line no-console
+        console.warn("[openrouter] analysis attempt failed, retrying", {
+          feedbackId,
+          attempt,
+          message: err?.message || String(err),
+        });
+      }
+    }
   }
 
-  const data = await response.json();
-  const raw = data.choices?.[0]?.message?.content?.trim();
-  if (!raw) {
-    // eslint-disable-next-line no-console
-    console.error("[openrouter] empty completion", { feedbackId, model });
-    throw new Error("Empty OpenRouter completion");
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(stripJsonFence(raw));
-  } catch {
-    // eslint-disable-next-line no-console
-    console.error("[openrouter] parse JSON failed", {
-      feedbackId,
-      rawPreview: raw.slice(0, 500),
-    });
-    throw new Error("OpenRouter returned non-JSON");
+  if (!parsed) {
+    throw lastError || new Error("OpenRouter analysis failed");
   }
 
   const topics = Array.isArray(parsed.topics)
@@ -433,12 +479,8 @@ export async function resolveDepartmentHintWithOpenRouter(
 
   let parsed;
   try {
-    parsed = JSON.parse(stripJsonFence(raw));
+    parsed = parseModelJson(raw, { feedbackId: "department-hint" });
   } catch {
-    // eslint-disable-next-line no-console
-    console.error("[openrouter] department-hint parse failed", {
-      rawPreview: raw.slice(0, 200),
-    });
     return null;
   }
 
