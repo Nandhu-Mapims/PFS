@@ -232,8 +232,8 @@ function GroupRows({
             ) : null}
             {multi ? (
               <div className="text-xs text-[#2A6FDB] font-semibold mt-1">
-                {group.ticketCount} ticket{group.ticketCount !== 1 ? "s" : ""} · {group.items.length} record
-                {group.items.length !== 1 ? "s" : ""}
+                {group.ticketCount} ticket{group.ticketCount !== 1 ? "s" : ""} · {group.items.length} entr
+                {group.items.length !== 1 ? "ies" : "y"}
               </div>
             ) : null}
           </td>
@@ -406,8 +406,8 @@ function MobileGroupCard({
             <p className="text-[11px] font-mono text-gray-500 mt-0.5">UHID {group.patientRegNo}</p>
           ) : null}
           <p className="text-xs text-gray-500 mt-1">
-            {group.ticketCount} ticket{group.ticketCount !== 1 ? "s" : ""} · {group.items.length} record
-            {group.items.length !== 1 ? "s" : ""}
+            {group.ticketCount} ticket{group.ticketCount !== 1 ? "s" : ""} · {group.items.length} entr
+            {group.items.length !== 1 ? "ies" : "y"}
           </p>
         </div>
         <span className={`inline-flex px-2 py-1 rounded-full text-[11px] font-semibold capitalize ${sentimentClass(sentiment)}`}>

@@ -199,7 +199,7 @@ export function AdminBotConversationPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-800">Bot conversation feedback</h1>
         <p className="text-sm text-gray-600 mt-1">
-          Upload pre-recorded <strong>audio</strong> (MP3) for intro and each question. Files are stored in{" "}
+          Upload saved <strong>audio</strong> (MP3) for intro and each question. Files are stored in{" "}
           <code className="text-xs bg-gray-100 px-1 rounded">uploads/feedback-voice/ai_voice/</code>
         </p>
         <p className="text-sm text-[#2A6FDB] mt-2 font-medium">

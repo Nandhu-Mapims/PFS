@@ -322,7 +322,7 @@ export function TicketDetail() {
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                     <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                       <Mic size={14} />
-                      Voice recording (what the patient spoke)
+                      Voice audio (what the patient spoke)
                     </p>
                     <audio controls className="w-full max-w-xl" preload="metadata" src={voiceAudioSrc!}>
                       Your browser does not support audio playback.

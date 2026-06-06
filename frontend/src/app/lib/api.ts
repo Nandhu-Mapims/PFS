@@ -712,7 +712,13 @@ export interface TranscribeSpeechResponse {
   request_id?: string | null;
 }
 
-export type SpeechLanguageCode = "unknown" | "en-IN" | "ta-IN" | "te-IN" | "kn-IN";
+export type SpeechLanguageCode =
+  | "unknown"
+  | "en-IN"
+  | "hi-IN"
+  | "ta-IN"
+  | "te-IN"
+  | "kn-IN";
 
 function readApiErrorMessage(body: unknown): string {
   if (!body || typeof body !== "object") {

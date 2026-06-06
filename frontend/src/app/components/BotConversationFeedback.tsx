@@ -266,7 +266,7 @@ export function BotConversationFeedback() {
     finishingRef.current = false;
 
     if (!blob) {
-      setSubmitError("Recording was empty. Speak again after the countdown.");
+      setSubmitError("No voice captured. Speak again after the countdown.");
       setQuestionPhase("think");
       setThinkCountdown(thinkSeconds);
       return;
@@ -397,7 +397,7 @@ export function BotConversationFeedback() {
       }, MAX_RECORD_MS);
     } catch {
       stopTracks();
-      setSubmitError("This browser cannot record audio.");
+      setSubmitError("This browser cannot capture voice.");
       setQuestionPhase("think");
     }
   }, [finishRecording, startSilenceMonitor, stopSilenceMonitor, stopTracks]);

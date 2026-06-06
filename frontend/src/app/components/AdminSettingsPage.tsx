@@ -196,7 +196,7 @@ export function AdminSettingsPage() {
           <div>
             <h2 className="text-3xl md:text-4xl font-bold text-gray-800">Settings</h2>
             <p className="text-base text-gray-600 mt-1 max-w-2xl">
-              Color theme, voice recording limit, and hospital logo for patient screens.
+              Color theme, voice time limit, and hospital logo for patient screens.
             </p>
           </div>
         </div>
@@ -263,9 +263,9 @@ export function AdminSettingsPage() {
           <div className="rounded-lg border border-gray-200 p-4 bg-gray-50 space-y-3">
             <div>
               <h3 className="text-lg font-semibold text-gray-800">Voice feedback</h3>
-              <p className="text-sm font-semibold text-gray-800 mt-2">Recording time limit</p>
+              <p className="text-sm font-semibold text-gray-800 mt-2">Voice time limit</p>
               <p className="text-xs text-gray-500 mt-1">
-                Maximum recording duration on the voice feedback screen. Patients see a countdown
+                Maximum time patients can speak on the voice feedback screen. They see a countdown
                 while listening.
               </p>
             </div>
@@ -282,7 +282,7 @@ export function AdminSettingsPage() {
               <span className="text-sm text-gray-600">seconds (15–600)</span>
             </div>
             <p className="text-xs text-gray-500">
-              Default: 120 seconds (2 minutes). Recording stops automatically at 0:00.
+              Default: 120 seconds (2 minutes). Listening stops automatically at 0:00.
             </p>
           </div>
 

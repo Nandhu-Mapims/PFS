@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, Square, Loader } from "lucide-react";
+import { AudioLines, Check, Loader } from "lucide-react";
 import {
   coerceTranscriptText,
   inferVoiceRatingFromTranscript,
@@ -216,7 +216,7 @@ export function FeedbackVoiceSection({
     };
     recorder.onerror = () => {
       clearSegmentTimer();
-      onVoiceError("Recording failed.");
+      onVoiceError("Voice capture failed.");
       setRecordingState("idle");
       stopTracks();
       mediaRecorderRef.current = null;
@@ -237,7 +237,7 @@ export function FeedbackVoiceSection({
         recorder.start(250);
       } catch {
         stopTracks();
-        onVoiceError("This browser cannot record audio for upload.");
+        onVoiceError("This browser cannot capture voice for upload.");
         setRecordingState("idle");
       }
     },
@@ -378,7 +378,7 @@ export function FeedbackVoiceSection({
       await finalizeCurrentSegment(true);
     } catch (err) {
       const msg =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "Recording finalize failed.";
+        err instanceof Error ? err.message : typeof err === "string" ? err : "Could not finish voice capture.";
       onVoiceError(msg);
       await stopArchiveRecorderAsync(false);
       stopTracks();
@@ -469,7 +469,7 @@ export function FeedbackVoiceSection({
     if (!mediaRecorderRef.current) {
       await stopArchiveRecorderAsync(false);
       stopTracks();
-      onVoiceError("This browser cannot record audio for upload.");
+      onVoiceError("This browser cannot capture voice for upload.");
       return;
     }
 
@@ -525,6 +525,7 @@ export function FeedbackVoiceSection({
           >
             <option value="unknown">Auto detect</option>
             <option value="en-IN">English</option>
+            <option value="hi-IN">Hindi</option>
             <option value="ta-IN">Tamil</option>
             <option value="te-IN">Telugu</option>
             <option value="kn-IN">Kannada</option>
@@ -533,22 +534,25 @@ export function FeedbackVoiceSection({
 
         <div className="text-center min-h-[56px]">
           <p className="text-xl md:text-2xl font-bold text-gray-800 mb-1">
-            {recordingState === "idle" && "Tap to speak"}
-            {recordingState === "recording" && "Listening…"}
-            {recordingState === "processing" && "Transcribing & rating…"}
-            {recordingState === "completed" && "Recording complete"}
+            {recordingState === "idle" && "We're ready to listen"}
+            {recordingState === "recording" && "We're listening…"}
+            {recordingState === "processing" && "One moment…"}
+            {recordingState === "completed" && "Done"}
           </p>
           {recordingState === "idle" && !nameMissing && (
             <p className="text-sm text-gray-500 mt-1">
-              Up to {formatCountdown(maxRecordingSeconds)} per recording
+              Up to {formatCountdown(maxRecordingSeconds)} to speak
             </p>
           )}
           {recordingState === "recording" && (
             <>
-              <p className="text-sm text-gray-600">Tap stop when finished, or wait for the timer</p>
+              <p className="text-sm text-gray-600">
+                Take your time — tap <span className="font-semibold text-gray-800">Done</span> when you
+                finish speaking.
+              </p>
               {segmentsDoneUi > 0 && (
                 <p className="mt-2 text-xs font-medium" style={{ color: primaryColor }}>
-                  {segmentsDoneUi} segment{segmentsDoneUi === 1 ? "" : "s"} sent for transcription…
+                  {segmentsDoneUi} part{segmentsDoneUi === 1 ? "" : "s"} sent for transcription…
                 </p>
               )}
             </>
@@ -556,81 +560,81 @@ export function FeedbackVoiceSection({
         </div>
 
         {recordingState === "recording" && (
-          <div
-            className="w-full max-w-xs rounded-2xl border-2 px-6 py-4 text-center shadow-inner"
-            style={{
-              borderColor: secondsRemaining <= 10 ? "#E5533D" : `${primaryColor}55`,
-              backgroundColor: secondsRemaining <= 10 ? "#FEF2F2" : `${primaryColor}0D`,
-            }}
-          >
-            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
-              Time remaining
-            </p>
-            <p
-              className={`text-5xl md:text-6xl font-bold tabular-nums leading-none ${
-                secondsRemaining <= 10 ? "text-[#E5533D]" : ""
-              }`}
-              style={secondsRemaining > 10 ? { color: primaryColor } : undefined}
+          <>
+            <div
+              className="flex items-end justify-center gap-1 h-16 w-full max-w-xs"
+              aria-hidden
             >
-              {formatCountdown(secondsRemaining)}
-            </p>
-            <p className="text-xs text-gray-500 mt-2">
-              Max {formatCountdown(maxRecordingSeconds)} · auto-stops at 0:00
-            </p>
-          </div>
-        )}
-
-        <div className="relative">
-          <button
-            type="button"
-            onClick={toggleRecording}
-            disabled={micDisabled || recordingState === "completed"}
-            title={nameMissing ? "Please enter your name to speak" : undefined}
-            className={`relative w-36 h-36 md:w-44 md:h-44 rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl ${
-              recordingState === "recording"
-                ? "bg-[#E5533D] hover:bg-[#d43e29]"
-                : recordingState === "processing"
-                  ? "bg-gray-400 cursor-not-allowed"
-                  : recordingState === "completed"
-                    ? "bg-gray-300 cursor-not-allowed"
-                    : micDisabled
-                      ? "bg-gray-300 cursor-not-allowed"
-                      : "hover:scale-105"
-            }`}
-            style={micIsPrimary ? { backgroundColor: primaryColor } : undefined}
-          >
-            {recordingState === "processing" ? (
-              <Loader size={56} className="text-white animate-spin" />
-            ) : recordingState === "recording" ? (
-              <Square size={56} className="text-white" fill="white" />
-            ) : (
-              <Mic size={56} className="text-white" strokeWidth={2} />
-            )}
-
-            {recordingState === "recording" && (
-              <>
-                <div className="absolute inset-0 rounded-full border-4 border-[#E5533D] animate-ping opacity-75" />
-                <div className="absolute inset-0 rounded-full border-4 border-[#E5533D] animate-pulse" />
-              </>
-            )}
-          </button>
-        </div>
-
-        {recordingState === "recording" && (
-          <div className="flex items-end justify-center gap-1 h-16 w-full max-w-xs" aria-hidden>
-            {Array.from({ length: 24 }, (_, i) => (
+              {Array.from({ length: 24 }, (_, i) => (
+                <div
+                  key={i}
+                  className="w-1.5 rounded-full animate-pulse"
+                  style={{
+                    backgroundColor: primaryColor,
+                    height: `${10 + (i % 5) * 8}px`,
+                    animationDelay: `${i * 0.05}s`,
+                  }}
+                />
+              ))}
+            </div>
+            <div className="w-full max-w-sm space-y-2 text-center">
               <div
-                key={i}
-                className="w-1.5 rounded-full animate-pulse"
-                style={{
-                  backgroundColor: primaryColor,
-                  height: `${10 + (i % 5) * 8}px`,
-                  animationDelay: `${i * 0.05}s`,
-                }}
-              />
-            ))}
-          </div>
+                className="h-1.5 w-full overflow-hidden rounded-full bg-gray-200"
+                role="progressbar"
+                aria-valuenow={secondsRemaining}
+                aria-valuemin={0}
+                aria-valuemax={maxRecordingSeconds}
+                aria-label="Listening time available"
+              >
+                <div
+                  className="h-full rounded-full transition-[width] duration-1000 ease-linear"
+                  style={{
+                    width: `${Math.max(0, (secondsRemaining / maxRecordingSeconds) * 100)}%`,
+                    backgroundColor: primaryColor,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-gray-400">
+                Up to {formatCountdown(maxRecordingSeconds)} per visit
+              </p>
+            </div>
+          </>
         )}
+
+        <div className="w-full max-w-md">
+          {recordingState === "processing" ? (
+            <div className="flex items-center justify-center gap-3 rounded-2xl border border-gray-200 bg-gray-50 px-6 py-5 text-gray-600">
+              <Loader size={28} className="animate-spin shrink-0" />
+              <span className="text-base font-medium">Understanding your feedback…</span>
+            </div>
+          ) : recordingState === "recording" ? (
+            <button
+              type="button"
+              onClick={toggleRecording}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl px-6 py-4 text-lg font-bold text-white shadow-lg transition-all hover:opacity-95 active:scale-[0.99]"
+              style={{ backgroundColor: primaryColor }}
+            >
+              <Check size={22} strokeWidth={2.5} />
+              Done speaking
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={toggleRecording}
+              disabled={micDisabled || recordingState === "completed"}
+              title={nameMissing ? "Please enter your name to speak" : undefined}
+              className={`w-full flex items-center justify-center gap-3 rounded-2xl px-6 py-5 text-lg md:text-xl font-bold shadow-lg transition-all ${
+                micDisabled || recordingState === "completed"
+                  ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                  : "text-white hover:opacity-95 active:scale-[0.99]"
+              }`}
+              style={micIsPrimary ? { backgroundColor: primaryColor } : undefined}
+            >
+              <AudioLines size={28} strokeWidth={2} />
+              {recordingState === "completed" ? "Feedback received" : "Share your experience"}
+            </button>
+          )}
+        </div>
       </div>
 
       {(localTranscript || recordingState === "completed") && (
@@ -647,7 +651,7 @@ export function FeedbackVoiceSection({
                 className="font-medium hover:underline text-base"
                 style={{ color: primaryColor }}
               >
-                Record again
+                Speak again
               </button>
             </p>
           )}

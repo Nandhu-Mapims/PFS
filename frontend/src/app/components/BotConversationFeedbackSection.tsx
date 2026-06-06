@@ -81,7 +81,7 @@ export function BotConversationFeedbackSection({
               <div>
                 <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1 flex items-center gap-1">
                   <Mic size={14} />
-                  Voice recording
+                  Voice audio
                 </p>
                 <audio controls className="w-full" preload="metadata" src={answerSrc}>
                   Your browser does not support audio playback.
@@ -98,7 +98,7 @@ export function BotConversationFeedbackSection({
         <div className={`rounded-lg border border-gray-200 bg-gray-50 ${cardPad}`}>
           <p className="text-xs font-semibold text-[#2A6FDB] uppercase tracking-wide mb-2 flex items-center gap-1">
             <Mic size={14} />
-            Combined session recording
+            Combined session audio
           </p>
           <audio controls className="w-full max-w-xl" preload="metadata" src={sessionSrc}>
             Your browser does not support audio playback.

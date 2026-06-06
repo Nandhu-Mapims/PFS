@@ -130,7 +130,7 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
             {item.isSplitChild ? (
               <p className="text-xs text-gray-500 mt-2">
                 This is one service ticket from a longer voice message. Speech-to-text below is the full
-                recording.
+                voice session.
               </p>
             ) : null}
           </section>
@@ -163,7 +163,7 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
               {hasVoice ? (
                 <section>
                   <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide mb-2">
-                    Voice recording (what patient spoke)
+                    Voice audio (what patient spoke)
                   </h3>
                   <audio controls className="w-full max-w-xl" preload="metadata" src={voiceSrc!}>
                     Your browser does not support audio playback.

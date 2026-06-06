@@ -105,16 +105,16 @@ export function FeedbackForm() {
       }
     } else {
       if (!voiceReady || selectedEmotion == null) {
-        setSubmitError("Record your voice feedback first.");
+        setSubmitError("Please speak your feedback first.");
         return;
       }
       if (!voiceRecordingBlob || voiceRecordingBlob.size === 0) {
-        setSubmitError("Voice recording was not captured. Tap record again.");
+        setSubmitError("Voice was not captured. Tap to speak again.");
         return;
       }
       const c = comments.trim();
       if (!c || c === "(No speech detected.)") {
-        setSubmitError("No speech detected — tap Record again and speak.");
+        setSubmitError("No speech detected — tap to speak again.");
         return;
       }
     }
@@ -174,9 +174,9 @@ export function FeedbackForm() {
         >
           {inputKind === "voice" ? (
             identity.identificationMode === "name" ? (
-              "Please enter your name before recording."
+              "Please enter your name before speaking."
             ) : (
-              "Look up your registration number and confirm your visit from EMR before recording."
+              "Look up your registration number and confirm your visit from EMR before speaking."
             )
           ) : (
             <>
@@ -190,7 +190,7 @@ export function FeedbackForm() {
               >
                 Use voice instead
               </button>{" "}
-              (Tamil & English). Or{" "}
+              (Tamil, Hindi & English). Or{" "}
               <button
                 type="button"
                 onClick={() => navigate("/feedback")}

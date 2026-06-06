@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Bot, Keyboard, Mic } from "lucide-react";
+import { AudioLines, Bot, Keyboard } from "lucide-react";
 
 export type FeedbackModeChoice = {
   id: "bot" | "voice" | "type";
@@ -20,7 +20,7 @@ export const feedbackModeChoices: FeedbackModeChoice[] = [
   },
   {
     id: "voice",
-    icon: Mic,
+    icon: AudioLines,
     title: "Voice feedback",
     subtitle: "Speak freely",
     path: "/feedback/give?mode=voice",
