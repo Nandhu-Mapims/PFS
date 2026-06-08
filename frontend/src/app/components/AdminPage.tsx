@@ -358,8 +358,11 @@ export function AdminPage() {
         escapeCsv(new Date(item.createdAt).toISOString()),
       ].join(",")
     );
-    const csv = [header.join(","), ...lines].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    // Excel sometimes mis-detects UTF-8 CSV encoding and shows garbage (e.g. '@' for Tamil).
+    // Adding UTF-8 BOM + CRLF improves compatibility when users open the CSV directly.
+    const csv = [header.join(","), ...lines].join("\r\n");
+    const bom = "\uFEFF";
+    const blob = new Blob([bom, csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
