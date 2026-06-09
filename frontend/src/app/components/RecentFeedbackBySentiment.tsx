@@ -5,7 +5,7 @@ import { getAiSentimentBucket } from "../lib/sentiment";
 import { ticketDepartment, ticketService, uniqueSorted } from "../lib/ticketFilters";
 import { FeedbackDetailDialog } from "./FeedbackDetailDialog";
 import { PatientGroupedFeedbackTable } from "./PatientGroupedFeedbackTable";
-import { buildPatientFeedbackGroups, expandOverviewGroupsForDisplay } from "../lib/patientFeedbackGroups";
+import { buildPatientFeedbackGroups } from "../lib/patientFeedbackGroups";
 import {
   Select,
   SelectContent,
@@ -108,10 +108,7 @@ export function RecentFeedbackBySentiment({
     });
   }, [sorted, sentimentFilter, statusFilter, departmentFilter, serviceFilter, fromDate, toDate]);
 
-  const patientGroups = useMemo(
-    () => expandOverviewGroupsForDisplay(buildPatientFeedbackGroups(filtered)),
-    [filtered]
-  );
+  const patientGroups = useMemo(() => buildPatientFeedbackGroups(filtered), [filtered]);
   const visibleGroups = patientGroups.slice(0, ROW_LIMIT);
   const visibleRowCount = visibleGroups.reduce((n, g) => n + g.items.length, 0);
 

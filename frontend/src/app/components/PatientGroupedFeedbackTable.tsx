@@ -2,6 +2,10 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { FeedbackItem } from "../lib/api";
 import type { PatientFeedbackGroup } from "../lib/patientFeedbackGroups";
+import {
+  groupHasSplitIssues,
+  overviewSplitIssueRows,
+} from "../lib/patientFeedbackGroups";
 import type { BotConversationAnswer } from "../lib/api";
 import {
   botSessionParent,
@@ -32,8 +36,12 @@ type PatientGroupedFeedbackTableProps = {
 };
 
 function overviewSentimentForGroup(
-  group: PatientFeedbackGroup
+  group: PatientFeedbackGroup,
+  variant: "overview" | "tickets"
 ): ReturnType<typeof getAiSentimentBucket> | "mixed" {
+  if (variant === "overview" && groupHasSplitIssues(group)) {
+    return group.dominantSentiment === "mixed" ? "mixed" : group.dominantSentiment;
+  }
   if (group.dominantSentiment === "mixed") return "mixed";
   if (group.items.length === 1) {
     return displaySentimentForItem(group.representative) ?? getAiSentimentBucket(group.representative);
@@ -41,7 +49,15 @@ function overviewSentimentForGroup(
   return group.dominantSentiment ?? getAiSentimentBucket(group.representative);
 }
 
+function isOverviewSplitGroup(group: PatientFeedbackGroup, variant: "overview" | "tickets"): boolean {
+  return variant === "overview" && groupHasSplitIssues(group);
+}
+
 function ticketChildrenForGroup(group: PatientFeedbackGroup, variant: "overview" | "tickets"): FeedbackItem[] {
+  if (variant === "overview") {
+    const issues = overviewSplitIssueRows(group);
+    if (issues.length > 1) return issues;
+  }
   return group.items
     .filter((item) => (variant === "tickets" ? Boolean(item.ticketId) : item.isSplitChild))
     .sort((a, b) => {
@@ -59,11 +75,11 @@ function ticketChildrenForGroup(group: PatientFeedbackGroup, variant: "overview"
     });
 }
 
-function sentimentClass(sentiment: ReturnType<typeof getAiSentimentBucket> | "mixed"): string {
+function sentimentClass(sentiment: ReturnType<typeof getAiSentimentBucket> | "mixed" | "split"): string {
   if (sentiment === "negative") return "bg-red-50 text-red-700";
   if (sentiment === "positive") return "bg-emerald-50 text-emerald-700";
   if (sentiment === "neutral") return "bg-amber-50 text-amber-800";
-  if (sentiment === "mixed") return "bg-violet-50 text-violet-800";
+  if (sentiment === "mixed" || sentiment === "split") return "bg-violet-50 text-violet-800";
   return "bg-gray-100 text-gray-600";
 }
 
@@ -93,9 +109,10 @@ export function PatientGroupedFeedbackTable({
     <>
       <div className="md:hidden space-y-3 p-2">
         {groups.map((group) => {
-          const isOpen = expanded.has(group.groupKey);
-          const multi = group.items.length > 1;
-          const sentiment = overviewSentimentForGroup(group);
+          const splitOverview = isOverviewSplitGroup(group, variant);
+          const isOpen = splitOverview || expanded.has(group.groupKey);
+          const multi = splitOverview || group.items.length > 1;
+          const sentiment = overviewSentimentForGroup(group, variant);
           return (
             <MobileGroupCard
               key={`mobile-${group.groupKey}`}
@@ -158,9 +175,10 @@ export function PatientGroupedFeedbackTable({
         </thead>
         <tbody className="divide-y divide-gray-100">
           {groups.map((group) => {
-            const isOpen = expanded.has(group.groupKey);
-            const multi = group.items.length > 1;
-            const sentiment = overviewSentimentForGroup(group);
+            const splitOverview = isOverviewSplitGroup(group, variant);
+            const isOpen = splitOverview || expanded.has(group.groupKey);
+            const multi = splitOverview || group.items.length > 1;
+            const sentiment = overviewSentimentForGroup(group, variant);
 
             return (
               <GroupRows
@@ -214,11 +232,15 @@ function GroupRows({
     group.departments.length > 0
       ? group.departments.slice(0, 3).join(", ") + (group.departments.length > 3 ? "…" : "")
       : "—";
+  const splitIssues = variant === "overview" ? overviewSplitIssueRows(group) : [];
+  const splitIssueCount = splitIssues.length;
   const summaryLines = ticketSummariesForDisplay(group.items);
   const parentSummaryLine =
-    summaryLines.length > 1
-      ? summaryLines.slice(0, 3).join(" · ") + (summaryLines.length > 3 ? "…" : "")
-      : summaryLines[0] || rep.aiSummary?.trim() || rep.comments?.trim() || "—";
+    splitIssueCount > 1
+      ? `${splitIssueCount} AI issues — see split rows below`
+      : summaryLines.length > 1
+        ? summaryLines.slice(0, 3).join(" · ") + (summaryLines.length > 3 ? "…" : "")
+        : summaryLines[0] || rep.aiSummary?.trim() || rep.comments?.trim() || "—";
 
   const parentRow = (
     <tr className={`${multi ? "bg-blue-50/40" : ""} hover:bg-gray-50/80`}>
@@ -281,13 +303,15 @@ function GroupRows({
             {group.patientRegNo ? (
               <div className="text-xs text-gray-500 font-normal mt-0.5 font-mono">UHID {group.patientRegNo}</div>
             ) : null}
-            {rep.ticketId ? (
+            {rep.ticketId && splitIssueCount <= 1 ? (
               <div className="text-xs font-mono text-gray-500 mt-0.5">{rep.ticketId}</div>
             ) : null}
-            {!multi && rep.isSplitChild ? (
-              <div className="text-xs text-amber-700 font-medium mt-0.5">Split issue</div>
+            {splitIssueCount > 1 ? (
+              <div className="text-xs text-violet-700 font-semibold mt-0.5">
+                Split · {splitIssueCount} issues
+              </div>
             ) : null}
-            {multi ? (
+            {multi && splitIssueCount <= 1 ? (
               <div className="text-xs text-[#2A6FDB] font-semibold mt-0.5">
                 {botAnswerCount > 0
                   ? `${botAnswerCount} bot answer${botAnswerCount !== 1 ? "s" : ""}`
@@ -308,7 +332,11 @@ function GroupRows({
           </td>
           <td className="px-4 py-3">
             <span className={`inline-flex px-2 py-0.5 rounded-md text-xs font-medium capitalize ${sentimentClass(sentiment)}`}>
-              {sentiment ?? "pending"}
+              {splitIssueCount > 1 && sentiment === "mixed"
+                ? "mixed"
+                : splitIssueCount > 1 && !sentiment
+                  ? "split"
+                  : sentiment ?? "pending"}
             </span>
           </td>
           <td className="px-4 py-3 text-sm text-gray-600 hidden sm:table-cell whitespace-nowrap">
@@ -316,9 +344,7 @@ function GroupRows({
           </td>
           <td className="px-4 py-3 text-sm text-gray-600">{group.statusLabel}</td>
           <td className="px-4 py-3 text-sm text-gray-600 max-w-[200px]">
-            <span className="line-clamp-2">
-              {ticketAiSummaryForItem(rep) || parentSummaryLine}
-            </span>
+            <span className="line-clamp-2">{parentSummaryLine}</span>
           </td>
           <td className="px-4 py-3 text-xs text-gray-500 hidden lg:table-cell whitespace-nowrap">
             {new Date(group.latestCreatedAt).toLocaleString()}
@@ -353,10 +379,25 @@ function GroupRows({
     (a, b) => a.questionOrder - b.questionOrder
   );
 
+  const overviewIssues = variant === "overview" ? ticketChildrenForGroup(group, variant) : [];
   const childRows =
     multi && isOpen ? (
       <>
-        {variant === "overview"
+        {variant === "overview" && overviewIssues.length > 1
+          ? overviewIssues.map((item, index) => (
+              <ChildRow
+                key={`${group.groupKey}-issue-${item._id}-${index}`}
+                item={item}
+                variant={variant}
+                onViewItem={onViewItem}
+                onDeleteItem={onDeleteItem}
+                groupItems={group.items}
+                issueIndex={index + 1}
+                issueTotal={overviewIssues.length}
+              />
+            ))
+          : null}
+        {variant === "overview" && overviewIssues.length <= 1
           ? botAnswers.map((answer) => (
               <BotAnswerRow
                 key={`${group.groupKey}-q-${answer.questionOrder}`}
@@ -366,16 +407,18 @@ function GroupRows({
               />
             ))
           : null}
-        {ticketChildrenForGroup(group, variant).map((item) => (
-            <ChildRow
-              key={item._id}
-              item={item}
-              variant={variant}
-              onViewItem={onViewItem}
-              onDeleteItem={onDeleteItem}
-              groupItems={group.items}
-            />
-          ))}
+        {variant === "tickets"
+          ? ticketChildrenForGroup(group, variant).map((item) => (
+              <ChildRow
+                key={item._id}
+                item={item}
+                variant={variant}
+                onViewItem={onViewItem}
+                onDeleteItem={onDeleteItem}
+                groupItems={group.items}
+              />
+            ))
+          : null}
       </>
     ) : null;
 
@@ -411,12 +454,16 @@ function MobileGroupCard({
   const botAnswers = [...(botParent?.botConversationAnswers ?? [])].sort(
     (a, b) => a.questionOrder - b.questionOrder
   );
+  const splitIssues = variant === "overview" ? overviewSplitIssueRows(group) : [];
+  const splitIssueCount = splitIssues.length;
   const summaryLines = ticketSummariesForDisplay(group.items);
   const summary =
-    summaryLines[0] ||
-    rep.aiSummary?.trim() ||
-    rep.comments?.trim() ||
-    "—";
+    splitIssueCount > 1
+      ? `${splitIssueCount} AI issues — see split rows below`
+      : summaryLines[0] ||
+        rep.aiSummary?.trim() ||
+        rep.comments?.trim() ||
+        "—";
   const childItems = ticketChildrenForGroup(group, variant);
 
   return (
@@ -427,13 +474,17 @@ function MobileGroupCard({
           {group.patientRegNo ? (
             <p className="text-[11px] font-mono text-gray-500 mt-0.5">UHID {group.patientRegNo}</p>
           ) : null}
-          <p className="text-xs text-gray-500 mt-1">
-            {group.ticketCount} ticket{group.ticketCount !== 1 ? "s" : ""} · {group.items.length} entr
-            {group.items.length !== 1 ? "ies" : "y"}
-          </p>
+          {splitIssueCount > 1 ? (
+            <p className="text-xs text-violet-700 font-semibold mt-1">Split · {splitIssueCount} issues</p>
+          ) : (
+            <p className="text-xs text-gray-500 mt-1">
+              {group.ticketCount} ticket{group.ticketCount !== 1 ? "s" : ""} · {group.items.length} entr
+              {group.items.length !== 1 ? "ies" : "y"}
+            </p>
+          )}
         </div>
         <span className={`inline-flex px-2 py-1 rounded-full text-[11px] font-semibold capitalize ${sentimentClass(sentiment)}`}>
-          {sentiment ?? "pending"}
+          {splitIssueCount > 1 && sentiment === "mixed" ? "mixed" : sentiment ?? "pending"}
         </span>
       </div>
 
@@ -482,16 +533,23 @@ function MobileGroupCard({
                 </div>
               ))
             : null}
-          {childItems.map((item) => (
-            <div key={`m-child-${item._id}`} className="rounded-xl border border-gray-200 p-2">
+          {childItems.map((item, index) => (
+            <div key={`m-child-${item._id}-${index}`} className="rounded-xl border border-gray-200 p-2">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] font-mono text-gray-700 truncate">{item.ticketId ?? item._id}</p>
-                <span className={`inline-flex px-2 py-0.5 rounded text-[11px] capitalize ${sentimentClass(getAiSentimentBucket(item))}`}>
-                  {getAiSentimentBucket(item) ?? "—"}
+                <p className="text-[11px] font-medium text-violet-700">
+                  {splitIssueCount > 1 ? `Issue ${index + 1}/${splitIssueCount}` : item.ticketId ?? item._id}
+                </p>
+                <span
+                  className={`inline-flex px-2 py-0.5 rounded text-[11px] capitalize ${sentimentClass(
+                    displaySentimentForItem(item) ?? getAiSentimentBucket(item)
+                  )}`}
+                >
+                  {displaySentimentForItem(item) ?? getAiSentimentBucket(item) ?? "—"}
                 </span>
               </div>
               <p className="text-xs text-gray-700 mt-1 line-clamp-2">
-                {ticketService(item) ? `Service: ${ticketService(item)}` : ticketAiSummaryForItem(item) || "—"}
+                {ticketAiSummaryForItem(item) ||
+                  (ticketService(item) ? `Service: ${ticketService(item)}` : "—")}
               </p>
               <div className="mt-2 flex items-center gap-3">
                 <button
@@ -588,16 +646,22 @@ function ChildRow({
   onViewItem,
   onDeleteItem,
   groupItems,
+  issueIndex,
+  issueTotal,
 }: {
   item: FeedbackItem;
   variant: "overview" | "tickets";
   onViewItem: (item: FeedbackItem) => void;
   onDeleteItem?: (item: FeedbackItem) => void;
   groupItems?: FeedbackItem[];
+  issueIndex?: number;
+  issueTotal?: number;
 }) {
   const sentiment = displaySentimentForItem(item) ?? getAiSentimentBucket(item);
   const svc = ticketService(item);
   const dept = ticketDepartment(item);
+  const issueLabel =
+    issueIndex && issueTotal ? `Issue ${issueIndex}/${issueTotal}` : item.isSplitChild ? "Split issue" : "↳ issue";
 
   return (
     <tr className="bg-gray-50/90 hover:bg-gray-100/80">
@@ -627,8 +691,11 @@ function ChildRow({
         </>
       ) : (
         <>
-          <td className="px-4 py-2 pl-8 text-xs text-gray-500">
-            {item.ticketId ? "↳ ticket" : "↳ issue"}
+          <td className="px-4 py-2 pl-8 text-xs font-medium text-violet-700">
+            {issueLabel}
+            {item.ticketId ? (
+              <div className="text-[11px] font-mono text-gray-500 mt-0.5">{item.ticketId}</div>
+            ) : null}
           </td>
           <td className="px-4 py-2 text-xs text-gray-600">{childModeShortLabel(item, groupItems)}</td>
           <td className="px-4 py-2 text-sm text-gray-600 hidden lg:table-cell">{dept || "—"}</td>

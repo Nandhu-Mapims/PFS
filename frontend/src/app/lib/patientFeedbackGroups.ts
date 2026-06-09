@@ -1,5 +1,5 @@
 import type { FeedbackIssue, FeedbackItem } from "./api";
-import { displaySentimentForItem, groupSentimentLabel } from "./feedbackDisplay";
+import { groupSentimentLabel } from "./feedbackDisplay";
 import { ticketDepartment, ticketService, ticketServices } from "./ticketFilters";
 
 function normalizeIssueSentiment(
@@ -137,50 +137,20 @@ export function buildPatientFeedbackGroups(items: FeedbackItem[]): PatientFeedba
   return groups.sort((a, b) => b.representative._id.localeCompare(a.representative._id));
 }
 
-function singleItemOverviewGroup(
-  parent: PatientFeedbackGroup,
-  item: FeedbackItem,
-  rowKey: string
-): PatientFeedbackGroup {
-  const sentiment = displaySentimentForItem(item);
-  return {
-    groupKey: `${parent.groupKey}|${rowKey}`,
-    patientName: item.patientName,
-    patientRegNo: item.patientRegNo?.trim() || parent.patientRegNo,
-    representative: item,
-    items: [item],
-    ticketCount: item.ticketId ? 1 : 0,
-    services: uniqueStrings(ticketServices(item)),
-    departments: uniqueStrings([ticketDepartment(item)]),
-    lowestRating: item.rating,
-    latestCreatedAt: item.createdAt,
-    statusLabel: item.status,
-    dominantSentiment: sentiment,
-  };
+export function groupHasSplitIssues(group: PatientFeedbackGroup): boolean {
+  return overviewSplitIssueRows(group).length > 1;
 }
 
-/** Overview: each AI issue is its own row with correct per-issue sentiment (not one positive parent summary). */
+/** All AI issues for one submission — used for grouped split rows in overview. */
+export function overviewSplitIssueRows(group: PatientFeedbackGroup): FeedbackItem[] {
+  return splitRowsFromGroup(group);
+}
+
+/** @deprecated Overview uses grouped split rows, not flat duplicates. */
 export function expandOverviewGroupsForDisplay(
   groups: PatientFeedbackGroup[]
 ): PatientFeedbackGroup[] {
-  const out: PatientFeedbackGroup[] = [];
-  for (const group of groups) {
-    const rows = splitRowsFromGroup(group);
-    if (rows.length <= 1) {
-      const item = rows[0];
-      if (!item) {
-        out.push(group);
-        continue;
-      }
-      out.push(singleItemOverviewGroup(group, item, item._id));
-      continue;
-    }
-    rows.forEach((item, index) => {
-      const rowKey = item.isSplitChild ? item._id : `${item._id}#primary`;
-      out.push(singleItemOverviewGroup(group, item, rowKey || String(index)));
-    });
-  }
-  return out.sort((a, b) => b.representative._id.localeCompare(a.representative._id));
+  return groups;
 }
 
 /** Keep whole patient group when any row matches the predicate (e.g. filters). */

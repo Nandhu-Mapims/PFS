@@ -25,21 +25,47 @@ export function effectiveFeedbackMode(
   return item.submissionMode ?? "standard";
 }
 
-/** Per-service sentiment when AI split issues; else row-level aiSentiment. */
+function normalizeAiSentiment(
+  value: string | null | undefined
+): FeedbackItem["aiSentiment"] | null {
+  if (value === "positive" || value === "neutral" || value === "negative") return value;
+  return null;
+}
+
+/** Match this row to the correct issue in feedbackIssues (summary or service). */
+function sentimentFromMatchingIssue(item: FeedbackItem): FeedbackItem["aiSentiment"] | null {
+  const issues = item.feedbackIssues ?? [];
+  if (!issues.length) return null;
+
+  const summary = item.aiSummary?.trim().toLowerCase() || "";
+  const svc = ticketService(item)?.trim().toLowerCase() || "";
+
+  for (const issue of issues) {
+    const issueSummary = issue.issueSummary?.trim().toLowerCase() || "";
+    const issueSvc = issue.recommendedService?.trim().toLowerCase() || "";
+    const summaryMatch =
+      Boolean(summary && issueSummary) &&
+      (summary === issueSummary ||
+        issueSummary.startsWith(summary) ||
+        summary.startsWith(issueSummary.slice(0, 48)));
+    const svcMatch = Boolean(svc && issueSvc && svc === issueSvc);
+    if (summaryMatch || svcMatch) {
+      const matched = normalizeAiSentiment(issue.sentiment);
+      if (matched) return matched;
+    }
+  }
+  return null;
+}
+
+/** Per-issue sentiment when AI split; else row-level aiSentiment. */
 export function displaySentimentForItem(item: FeedbackItem): FeedbackItem["aiSentiment"] | null {
-  if (item.isSplitChild) {
-    const s = item.aiSentiment;
-    if (s === "positive" || s === "neutral" || s === "negative") return s;
-  }
-  const svc = ticketService(item);
-  if (svc && item.feedbackIssues?.length) {
-    const match = item.feedbackIssues.find(
-      (issue) =>
-        issue.recommendedService?.trim().toLowerCase() === svc.trim().toLowerCase() && issue.sentiment
-    );
-    if (match?.sentiment) return match.sentiment;
-  }
-  return item.aiSentiment ?? null;
+  const fromIssue = sentimentFromMatchingIssue(item);
+  if (fromIssue) return fromIssue;
+
+  const s = item.aiSentiment;
+  if (s === "positive" || s === "neutral" || s === "negative") return s;
+
+  return null;
 }
 
 export function childModeShortLabel(
@@ -109,6 +135,9 @@ function sentimentForGroupDisplay(
 ): FeedbackItem["aiSentiment"] | null {
   const ai = displaySentimentForItem(item);
   if (ai) return ai;
+  if (item.isSplitChild || (item.feedbackIssues?.length ?? 0) > 1) {
+    return null;
+  }
   return sentimentFromRating(item.rating);
 }
 
