@@ -1,6 +1,58 @@
-import type { FeedbackItem } from "./api";
+import type { FeedbackIssue, FeedbackItem } from "./api";
 import { displaySentimentForItem, groupSentimentLabel } from "./feedbackDisplay";
 import { ticketDepartment, ticketService, ticketServices } from "./ticketFilters";
+
+function normalizeIssueSentiment(
+  sentiment: FeedbackIssue["sentiment"]
+): FeedbackItem["aiSentiment"] | null {
+  if (sentiment === "positive" || sentiment === "neutral" || sentiment === "negative") {
+    return sentiment;
+  }
+  return null;
+}
+
+/** One AI issue as an overview row (parent doc + per-issue fields). */
+function feedbackItemForIssue(
+  parent: FeedbackItem,
+  issue: FeedbackIssue,
+  issueIndex: number
+): FeedbackItem {
+  const issueSentiment = normalizeIssueSentiment(issue.sentiment);
+  return {
+    ...parent,
+    aiSentiment: issueSentiment ?? parent.aiSentiment,
+    aiSummary: issue.issueSummary?.trim() || parent.aiSummary,
+    service: issue.recommendedService?.trim() || parent.service,
+    department: issue.department?.trim() || parent.department,
+    suggestedAction: issue.suggestedAction?.trim() || parent.suggestedAction,
+    ticketId: issue.ticketId ?? (issueIndex === 0 ? parent.ticketId : null),
+    isSplitChild: issueIndex > 0,
+  };
+}
+
+function splitRowsFromGroup(group: PatientFeedbackGroup): FeedbackItem[] {
+  const splitChildren = group.items
+    .filter((i) => i.isSplitChild)
+    .sort((a, b) => a._id.localeCompare(b._id));
+  const parent = group.items.find((i) => !i.isSplitChild);
+
+  if (splitChildren.length > 0) {
+    const rows: FeedbackItem[] = [];
+    if (parent) rows.push(parent);
+    rows.push(...splitChildren);
+    return rows;
+  }
+
+  const rep = parent ?? group.representative;
+  const issues = (rep.feedbackIssues ?? []).filter(
+    (issue) => issue.issueSummary?.trim() || issue.recommendedService?.trim()
+  );
+  if (issues.length > 1) {
+    return issues.map((issue, index) => feedbackItemForIssue(rep, issue, index));
+  }
+
+  return [rep];
+}
 
 export type PatientFeedbackGroup = {
   groupKey: string;
@@ -87,11 +139,12 @@ export function buildPatientFeedbackGroups(items: FeedbackItem[]): PatientFeedba
 
 function singleItemOverviewGroup(
   parent: PatientFeedbackGroup,
-  item: FeedbackItem
+  item: FeedbackItem,
+  rowKey: string
 ): PatientFeedbackGroup {
   const sentiment = displaySentimentForItem(item);
   return {
-    groupKey: `${parent.groupKey}|${item._id}`,
+    groupKey: `${parent.groupKey}|${rowKey}`,
     patientName: item.patientName,
     patientRegNo: item.patientRegNo?.trim() || parent.patientRegNo,
     representative: item,
@@ -106,20 +159,26 @@ function singleItemOverviewGroup(
   };
 }
 
-/** Overview: show each AI-split issue as its own row (like ticket management), not hidden under a mixed parent. */
+/** Overview: each AI issue is its own row with correct per-issue sentiment (not one positive parent summary). */
 export function expandOverviewGroupsForDisplay(
   groups: PatientFeedbackGroup[]
 ): PatientFeedbackGroup[] {
   const out: PatientFeedbackGroup[] = [];
   for (const group of groups) {
-    const splitChildren = group.items.filter((i) => i.isSplitChild);
-    if (splitChildren.length === 0) {
-      out.push(group);
+    const rows = splitRowsFromGroup(group);
+    if (rows.length <= 1) {
+      const item = rows[0];
+      if (!item) {
+        out.push(group);
+        continue;
+      }
+      out.push(singleItemOverviewGroup(group, item, item._id));
       continue;
     }
-    for (const child of splitChildren) {
-      out.push(singleItemOverviewGroup(group, child));
-    }
+    rows.forEach((item, index) => {
+      const rowKey = item.isSplitChild ? item._id : `${item._id}#primary`;
+      out.push(singleItemOverviewGroup(group, item, rowKey || String(index)));
+    });
   }
   return out.sort((a, b) => b.representative._id.localeCompare(a.representative._id));
 }

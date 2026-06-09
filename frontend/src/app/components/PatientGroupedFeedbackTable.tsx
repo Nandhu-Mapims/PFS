@@ -6,6 +6,7 @@ import type { BotConversationAnswer } from "../lib/api";
 import {
   botSessionParent,
   childModeShortLabel,
+  displaySentimentForItem,
   effectiveFeedbackMode,
   feedbackModeLabel,
   ticketAiSummaryForItem,
@@ -29,6 +30,16 @@ type PatientGroupedFeedbackTableProps = {
   onDeleteItem?: (item: FeedbackItem) => void;
   emptyMessage?: string;
 };
+
+function overviewSentimentForGroup(
+  group: PatientFeedbackGroup
+): ReturnType<typeof getAiSentimentBucket> | "mixed" {
+  if (group.dominantSentiment === "mixed") return "mixed";
+  if (group.items.length === 1) {
+    return displaySentimentForItem(group.representative) ?? getAiSentimentBucket(group.representative);
+  }
+  return group.dominantSentiment ?? getAiSentimentBucket(group.representative);
+}
 
 function ticketChildrenForGroup(group: PatientFeedbackGroup, variant: "overview" | "tickets"): FeedbackItem[] {
   return group.items
@@ -84,7 +95,7 @@ export function PatientGroupedFeedbackTable({
         {groups.map((group) => {
           const isOpen = expanded.has(group.groupKey);
           const multi = group.items.length > 1;
-          const sentiment = group.dominantSentiment ?? getAiSentimentBucket(group.representative);
+          const sentiment = overviewSentimentForGroup(group);
           return (
             <MobileGroupCard
               key={`mobile-${group.groupKey}`}
@@ -149,7 +160,7 @@ export function PatientGroupedFeedbackTable({
           {groups.map((group) => {
             const isOpen = expanded.has(group.groupKey);
             const multi = group.items.length > 1;
-            const sentiment = group.dominantSentiment ?? getAiSentimentBucket(group.representative);
+            const sentiment = overviewSentimentForGroup(group);
 
             return (
               <GroupRows
@@ -273,6 +284,9 @@ function GroupRows({
             {rep.ticketId ? (
               <div className="text-xs font-mono text-gray-500 mt-0.5">{rep.ticketId}</div>
             ) : null}
+            {!multi && rep.isSplitChild ? (
+              <div className="text-xs text-amber-700 font-medium mt-0.5">Split issue</div>
+            ) : null}
             {multi ? (
               <div className="text-xs text-[#2A6FDB] font-semibold mt-0.5">
                 {botAnswerCount > 0
@@ -302,7 +316,9 @@ function GroupRows({
           </td>
           <td className="px-4 py-3 text-sm text-gray-600">{group.statusLabel}</td>
           <td className="px-4 py-3 text-sm text-gray-600 max-w-[200px]">
-            <span className="line-clamp-2">{parentSummaryLine}</span>
+            <span className="line-clamp-2">
+              {ticketAiSummaryForItem(rep) || parentSummaryLine}
+            </span>
           </td>
           <td className="px-4 py-3 text-xs text-gray-500 hidden lg:table-cell whitespace-nowrap">
             {new Date(group.latestCreatedAt).toLocaleString()}
@@ -579,7 +595,7 @@ function ChildRow({
   onDeleteItem?: (item: FeedbackItem) => void;
   groupItems?: FeedbackItem[];
 }) {
-  const sentiment = getAiSentimentBucket(item);
+  const sentiment = displaySentimentForItem(item) ?? getAiSentimentBucket(item);
   const svc = ticketService(item);
   const dept = ticketDepartment(item);
 
