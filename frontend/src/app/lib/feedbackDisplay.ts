@@ -1,4 +1,5 @@
 import type { FeedbackItem } from "./api";
+import { sentimentFromRating } from "./sentiment";
 import { ticketService } from "./ticketFilters";
 
 export type EffectiveFeedbackMode = "bot" | "voice" | "standard";
@@ -63,6 +64,34 @@ export function ticketAiSummaryForItem(item: FeedbackItem): string {
 }
 
 /** Short lines for overview table — one per split ticket or single summary. */
+/** Overview table action — open detail to read transcript and play audio when available. */
+export function overviewViewActionLabel(
+  item: FeedbackItem,
+  groupItems?: FeedbackItem[]
+): string {
+  if ((item.botConversationAnswers?.length ?? 0) > 0) return "View & listen";
+  if (effectiveFeedbackMode(item, groupItems) === "voice") return "View & listen";
+  return "View";
+}
+
+/** One-line preview for Recent feedback — AI summary when ready, else full transcript. */
+export function groupOverviewSummaryLine(
+  rep: FeedbackItem,
+  groupItems: FeedbackItem[]
+): string {
+  const summaryLines = ticketSummariesForDisplay(groupItems);
+  if (summaryLines.length > 1) {
+    return (
+      summaryLines.slice(0, 3).join(" · ") + (summaryLines.length > 3 ? "…" : "")
+    );
+  }
+  const ai = rep.aiSummary?.trim();
+  if (ai) return ai;
+  const comments = rep.comments?.trim();
+  if (comments) return comments;
+  return "—";
+}
+
 export function ticketSummariesForDisplay(items: FeedbackItem[]): string[] {
   const split = items.filter((i) => i.isSplitChild);
   if (split.length) {
@@ -75,9 +104,19 @@ export function ticketSummariesForDisplay(items: FeedbackItem[]): string[] {
   return one ? [one] : [];
 }
 
+function sentimentForGroupDisplay(
+  item: FeedbackItem
+): FeedbackItem["aiSentiment"] | null {
+  const ai = displaySentimentForItem(item);
+  if (ai) return ai;
+  return sentimentFromRating(item.rating);
+}
+
 export function groupSentimentLabel(items: FeedbackItem[]): FeedbackItem["aiSentiment"] | "mixed" | null {
   const set = new Set(
-    items.map((i) => displaySentimentForItem(i)).filter((s): s is NonNullable<typeof s> => Boolean(s))
+    items
+      .map((i) => sentimentForGroupDisplay(i))
+      .filter((s): s is NonNullable<typeof s> => Boolean(s))
   );
   const botParent =
     items.find((i) => !i.isSplitChild && (i.botConversationAnswers?.length ?? 0) > 0) ??

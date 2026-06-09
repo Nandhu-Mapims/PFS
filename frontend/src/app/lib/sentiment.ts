@@ -12,3 +12,25 @@ export function getAiSentimentBucket(
   if (s === "positive" || s === "neutral" || s === "negative") return s;
   return null;
 }
+
+/** Map patient rating (1–5) to a sentiment bucket when AI has not run yet. */
+export function sentimentFromRating(rating: number): "positive" | "neutral" | "negative" | null {
+  if (!Number.isFinite(rating)) return null;
+  if (rating <= 2) return "negative";
+  if (rating === 3) return "neutral";
+  if (rating >= 4) return "positive";
+  return null;
+}
+
+/** Sentiment for admin lists: AI when available, else patient rating. */
+export function getDisplaySentimentBucket(
+  item: FeedbackItem
+): "positive" | "neutral" | "negative" | null {
+  const ai = getAiSentimentBucket(item);
+  if (ai) return ai;
+  return sentimentFromRating(item.rating);
+}
+
+export function isAiSentimentPending(item: FeedbackItem): boolean {
+  return getAiSentimentBucket(item) === null;
+}
