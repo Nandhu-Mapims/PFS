@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { createFeedback } from "../lib/api";
+import { createFeedback, uploadFeedbackVoiceRecording } from "../lib/api";
 import { getSession } from "../lib/auth";
 import { usePatientIdentity } from "../lib/usePatientIdentity";
 import {
@@ -36,6 +36,7 @@ export function FeedbackForm() {
 
   const [comments, setComments] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitPhase, setSubmitPhase] = useState<"idle" | "text" | "voice">("idle");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [primaryColor, setPrimaryColor] = useState("#2A6FDB");
   const prevModeBucketRef = useRef<string | null>(null);
@@ -108,10 +109,6 @@ export function FeedbackForm() {
         setSubmitError("Please speak your feedback first.");
         return;
       }
-      if (!voiceRecordingBlob || voiceRecordingBlob.size === 0) {
-        setSubmitError("Voice was not captured. Tap to speak again.");
-        return;
-      }
       const c = comments.trim();
       if (!c || c === "(No speech detected.)") {
         setSubmitError("No speech detected — tap to speak again.");
@@ -122,6 +119,7 @@ export function FeedbackForm() {
     try {
       setSubmitError(null);
       setIsSubmitting(true);
+      setSubmitPhase("text");
       const isStaffSession = getSession()?.role === "staff";
 
       const created = await createFeedback({
@@ -129,11 +127,20 @@ export function FeedbackForm() {
         rating: selectedEmotion as number,
         comments: comments.trim(),
         source: isStaffSession ? "staff" : "patient",
-        voiceRecording:
-          inputKind === "voice" && voiceRecordingBlob && voiceRecordingBlob.size > 0
-            ? voiceRecordingBlob
-            : undefined,
+        submissionMode: inputKind === "voice" ? "voice" : "standard",
       });
+
+      let voiceUploadWarning: string | undefined;
+      if (inputKind === "voice" && voiceRecordingBlob && voiceRecordingBlob.size > 0) {
+        setSubmitPhase("voice");
+        try {
+          await uploadFeedbackVoiceRecording(created._id, voiceRecordingBlob);
+        } catch {
+          voiceUploadWarning =
+            "Your feedback was saved. We could not finish sending everything — your words are on record.";
+        }
+      }
+
       navigate("/thank-you", {
         state: {
           rating: selectedEmotion,
@@ -142,12 +149,14 @@ export function FeedbackForm() {
           aiSentiment: created.aiSentiment || undefined,
           aiUrgency: created.aiUrgency || undefined,
           aiTopics: created.aiTopics || undefined,
+          voiceUploadWarning,
         },
       });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Could not submit feedback. Please try again.");
     } finally {
       setIsSubmitting(false);
+      setSubmitPhase("idle");
     }
   };
 
@@ -289,7 +298,7 @@ export function FeedbackForm() {
           {isSubmitting ? (
             <span className="flex items-center justify-center gap-3">
               <span className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin inline-block" />
-              Submitting...
+              {submitPhase === "voice" ? "Almost done..." : "Submitting..."}
             </span>
           ) : (
             "Submit Feedback"

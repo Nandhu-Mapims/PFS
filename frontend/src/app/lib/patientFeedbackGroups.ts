@@ -85,6 +85,45 @@ export function buildPatientFeedbackGroups(items: FeedbackItem[]): PatientFeedba
   return groups.sort((a, b) => b.representative._id.localeCompare(a.representative._id));
 }
 
+function singleItemOverviewGroup(
+  parent: PatientFeedbackGroup,
+  item: FeedbackItem
+): PatientFeedbackGroup {
+  const sentiment = displaySentimentForItem(item);
+  return {
+    groupKey: `${parent.groupKey}|${item._id}`,
+    patientName: item.patientName,
+    patientRegNo: item.patientRegNo?.trim() || parent.patientRegNo,
+    representative: item,
+    items: [item],
+    ticketCount: item.ticketId ? 1 : 0,
+    services: uniqueStrings(ticketServices(item)),
+    departments: uniqueStrings([ticketDepartment(item)]),
+    lowestRating: item.rating,
+    latestCreatedAt: item.createdAt,
+    statusLabel: item.status,
+    dominantSentiment: sentiment,
+  };
+}
+
+/** Overview: show each AI-split issue as its own row (like ticket management), not hidden under a mixed parent. */
+export function expandOverviewGroupsForDisplay(
+  groups: PatientFeedbackGroup[]
+): PatientFeedbackGroup[] {
+  const out: PatientFeedbackGroup[] = [];
+  for (const group of groups) {
+    const splitChildren = group.items.filter((i) => i.isSplitChild);
+    if (splitChildren.length === 0) {
+      out.push(group);
+      continue;
+    }
+    for (const child of splitChildren) {
+      out.push(singleItemOverviewGroup(group, child));
+    }
+  }
+  return out.sort((a, b) => b.representative._id.localeCompare(a.representative._id));
+}
+
 /** Keep whole patient group when any row matches the predicate (e.g. filters). */
 export function filterPatientGroups(
   groups: PatientFeedbackGroup[],

@@ -267,6 +267,12 @@ function GroupRows({
         <>
           <td className="px-4 py-3 font-medium text-sm text-gray-800">
             <div>{group.patientName}</div>
+            {group.patientRegNo ? (
+              <div className="text-xs text-gray-500 font-normal mt-0.5 font-mono">UHID {group.patientRegNo}</div>
+            ) : null}
+            {rep.ticketId ? (
+              <div className="text-xs font-mono text-gray-500 mt-0.5">{rep.ticketId}</div>
+            ) : null}
             {multi ? (
               <div className="text-xs text-[#2A6FDB] font-semibold mt-0.5">
                 {botAnswerCount > 0

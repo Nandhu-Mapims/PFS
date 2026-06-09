@@ -219,16 +219,55 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
     body: fd,
   });
 
-  const body = await response.json().catch(() => ({}));
+  const body = await response.json().catch(() => null);
   if (!response.ok) {
-    const msg =
-      typeof body === "object" && body && "message" in body && typeof (body as { message?: string }).message === "string"
-        ? (body as { message: string }).message
-        : "Could not save feedback";
-    throw new Error(msg);
+    if (body && typeof body === "object" && "message" in body && typeof body.message === "string") {
+      throw new Error(body.message);
+    }
+    if (response.status === 413) {
+      throw new Error(
+        "Upload too large. Your spoken text can still be saved — please submit again."
+      );
+    }
+    if (response.status === 504 || response.status === 502) {
+      throw new Error("Server timed out. Please try submitting again.");
+    }
+    throw new Error("Could not save feedback");
   }
 
   return body as CreateFeedbackResponse;
+}
+
+/** Upload voice audio after feedback text is saved (supports large recordings without blocking submit). */
+export async function uploadFeedbackVoiceRecording(
+  feedbackId: string,
+  voiceRecording: Blob
+): Promise<{ voiceRecordingUrl?: string | null }> {
+  const fd = new FormData();
+  const mime = voiceRecording.type || "audio/webm";
+  const ext = mime.includes("mp4") ? "m4a" : "webm";
+  fd.append("voiceRecording", voiceRecording, `voice-feedback.${ext}`);
+
+  const response = await fetch(`${API_BASE_URL}/api/feedback/${feedbackId}/voice-recording`, {
+    method: "POST",
+    body: fd,
+  });
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    if (body && typeof body === "object" && "message" in body && typeof body.message === "string") {
+      throw new Error(body.message);
+    }
+    if (response.status === 413) {
+      throw new Error("Your feedback was saved, but the recording was too large to send.");
+    }
+    if (response.status === 504 || response.status === 502) {
+      throw new Error("Your feedback was saved, but sending took too long. Please try again.");
+    }
+    throw new Error("Your feedback was saved, but we could not finish sending everything.");
+  }
+
+  return (body || {}) as { voiceRecordingUrl?: string | null };
 }
 
 export async function getBotConversationConfig(): Promise<BotConversationConfig> {

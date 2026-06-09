@@ -74,6 +74,11 @@ const botAudioUpload = multer({
   limits: { fileSize: 80 * 1024 * 1024 },
 });
 
+const voiceRecordingUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 60 * 1024 * 1024 },
+}).single("voiceRecording");
+
 const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
 
 /** TMS loads `<audio src="https://feedback.../uploads/...">` — browsers may send Range; OPTIONS needs explicit CORS. */
@@ -931,9 +936,349 @@ async function applyIssueTicketsAndTms({
   };
 }
 
+async function applyPendingAiToFeedback({
+  feedbackId,
+  pendingAi,
+  patientName,
+  comments,
+  visitDepartment,
+  normalizedService,
+  serviceCatalog,
+  numericRating,
+  ticketId: initialTicketId,
+  ticketRule: initialTicketRule,
+  ticketIsFresh: initialTicketIsFresh,
+  patientRegNo,
+  patientEncounterType,
+  ward,
+  ipNo,
+  visitOrAdmissionDate,
+  submissionMode,
+  botVoiceOverallSentiment,
+  feedbackSource,
+  feedbackLookupDepartment,
+  botConversationAnswers,
+}) {
+  let ticketId = initialTicketId;
+  let ticketRule = initialTicketRule;
+  let ticketIsFresh = initialTicketIsFresh;
+  let outDoc = null;
+  const splitChildDocs = [];
+
+  const feedback = await Feedback.findById(feedbackId).lean();
+  if (!feedback) return { outDoc: null, splitChildDocs };
+
+  outDoc = feedback;
+
+  // eslint-disable-next-line no-console
+  console.log("[feedback] applying OpenRouter analysis", {
+    feedbackId: String(feedbackId),
+    rating: pendingAi.rating,
+  });
+  const ai = pendingAi;
+  const issueBundle = await applyIssueTicketsAndTms({
+    feedbackId: String(feedbackId),
+    patientName,
+    rating: numericRating,
+    issueRows: ai.issues,
+    emrDepartment: visitDepartment,
+    fullComments: comments || "",
+    existingTicketId: ticketId,
+    existingTicketRule: ticketRule,
+    existingTicketIsFresh: ticketIsFresh,
+  });
+
+  ticketId = issueBundle.primaryTicketId;
+  ticketRule = issueBundle.primaryTicketRule;
+  ticketIsFresh = issueBundle.primaryTicketIsFresh;
+
+  const primaryIssue = issueBundle.issues[0];
+  const pickCatalogService = (name) => {
+    const n = sanitizeOptionalLabel(name);
+    if (!n || !serviceCatalog.length) return "";
+    return resolveServiceFromAi(n, serviceCatalog) ? n : "";
+  };
+  const recommendedService =
+    pickCatalogService(primaryIssue?.recommendedService) ||
+    pickCatalogService(ai.recommendedService) ||
+    pickCatalogService(normalizedService);
+  let primarySentiment =
+    aiSentimentOnly(primaryIssue?.sentiment) || aiSentimentOnly(ai.sentiment);
+  if (!primarySentiment) {
+    primarySentiment = aiSentimentOnly(botVoiceOverallSentiment);
+  }
+  issueBundle.issues = ensureIssueTicketIds(issueBundle.issues, { newTicketId });
+  if (issueBundle.issues[0]?.ticketId && canOpenTicketForSentiment(primarySentiment)) {
+    ticketId = issueBundle.issues[0].ticketId;
+    ticketRule = ticketRule === "none" ? "ai_negative_sentiment" : ticketRule;
+    ticketIsFresh = true;
+  }
+
+  const botAnswersWithSentiment =
+    submissionMode === "bot" && (outDoc.botConversationAnswers || []).length
+      ? attachBotAnswerSentimentsFromIssues(
+          outDoc.botConversationAnswers,
+          issueBundle.issues,
+          primarySentiment
+        )
+      : botConversationAnswers || outDoc.botConversationAnswers;
+
+  const setFields = {
+    aiSentiment: primarySentiment,
+    aiUrgency: ai.urgency,
+    aiTopics: filterAiTopicsForTranscript(
+      ai.topics.length ? ai.topics : [],
+      comments || ""
+    ),
+    aiSummary: ai.summary,
+    aiAnalyzedAt: new Date(),
+    service: recommendedService || normalizedService,
+    department: visitDepartment || sanitizeOptionalLabel(primaryIssue?.department),
+    lookupDepartment: patientRegNo ? visitDepartment : feedbackLookupDepartment || "",
+    suggestedAction: primaryIssue?.suggestedAction || "",
+    feedbackIssues: issueBundle.issues,
+    submissionGroupId: issueBundle.submissionGroupId,
+    complaintSignature: buildComplaintSignature(
+      primaryIssue?.department || visitDepartment,
+      recommendedService,
+      comments || ""
+    ),
+    ticketId: ticketId || null,
+    ...(botAnswersWithSentiment?.length
+      ? { botConversationAnswers: botAnswersWithSentiment }
+      : {}),
+  };
+
+  if (!canOpenTicketForSentiment(primarySentiment)) {
+    setFields.ticketId = null;
+    ticketId = null;
+    ticketRule = "none";
+    ticketIsFresh = false;
+    if (setFields.feedbackIssues?.[0]) {
+      setFields.feedbackIssues[0].ticketId = null;
+    }
+  }
+  if (Array.isArray(setFields.feedbackIssues) && setFields.feedbackIssues.length) {
+    setFields.feedbackIssues = setFields.feedbackIssues.map((issue) => {
+      const sentiment = aiSentimentOnly(issue?.sentiment);
+      if (sentiment && !canOpenTicketForSentiment(sentiment)) {
+        return { ...issue, ticketId: null };
+      }
+      return issue;
+    });
+  }
+
+  if (primarySentiment === "negative" && !ticketId) {
+    setFields.ticketId = newTicketId();
+    setFields.status = "New";
+    ticketId = setFields.ticketId;
+    ticketIsFresh = true;
+    ticketRule = ticketRule === "none" ? "ai_negative_sentiment" : ticketRule;
+    if (setFields.feedbackIssues?.[0]) {
+      setFields.feedbackIssues[0].ticketId = setFields.ticketId;
+    }
+  }
+
+  const updated = await Feedback.findByIdAndUpdate(
+    feedbackId,
+    { $set: setFields },
+    { new: true }
+  ).lean();
+  if (updated) {
+    outDoc = updated;
+  }
+
+  if (issueBundle.issues.length > 1) {
+    const base = {
+      patientName,
+      patientRegNo,
+      patientEncounterType,
+      ward,
+      ipNo,
+      visitOrAdmissionDate,
+      lookupDepartment: patientRegNo ? visitDepartment : "",
+      rating: numericRating,
+      source: feedbackSource || outDoc.source,
+      submissionMode,
+      botConversationAnswers: outDoc.botConversationAnswers || [],
+      submissionGroupId: issueBundle.submissionGroupId,
+      isSplitChild: true,
+      aiUrgency: ai.urgency,
+      aiTopics: filterAiTopicsForTranscript(ai.topics, comments || ""),
+      aiSummary: ai.summary,
+      aiAnalyzedAt: new Date(),
+      feedbackIssues: issueBundle.issues,
+    };
+
+    for (let i = 1; i < issueBundle.issues.length; i++) {
+      const issue = issueBundle.issues[i];
+      const issueSentiment =
+        aiSentimentOnly(issue?.sentiment) || aiSentimentOnly(ai.sentiment);
+      const childSig = buildComplaintSignature(
+        issue.department || visitDepartment,
+        issue.recommendedService,
+        issue.issueSummary
+      );
+      let childTicketId = issue.ticketId;
+      let childTicketIsFresh = false;
+      if (!canOpenTicketForSentiment(issueSentiment)) {
+        childTicketId = null;
+        childTicketIsFresh = false;
+      } else if (!childTicketId) {
+        const childEval = await evaluateTicketForFeedback(Feedback, {
+          patientName,
+          rating: numericRating,
+          complaintSignature: childSig,
+        });
+        childTicketId = childEval.ticketId;
+        childTicketIsFresh = childEval.ticketIsFresh;
+      } else {
+        childTicketIsFresh = true;
+      }
+
+      if (issueSentiment === "negative" && !childTicketId) {
+        childTicketId = newTicketId();
+        childTicketIsFresh = true;
+      }
+
+      const childTopics = filterAiTopicsForTranscript(ai.topics, comments || "");
+      const child = await Feedback.create({
+        ...base,
+        aiSentiment: issueSentiment,
+        department: issue.department || visitDepartment,
+        service: issue.recommendedService || recommendedService,
+        comments: String(comments || "").trim(),
+        aiSummary: issue.issueSummary,
+        aiTopics: childTopics,
+        suggestedAction: issue.suggestedAction,
+        complaintSignature: childSig,
+        ticketId: childTicketId,
+      });
+      splitChildDocs.push(child.toObject());
+    }
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("[feedback] AI fields saved to DB", {
+    feedbackId: String(feedbackId),
+    aiSentiment: ai.sentiment,
+    issueCount: issueBundle.issues.length,
+    splitChildren: splitChildDocs.length,
+    ticketOpenedForNegative: Boolean(setFields.ticketId),
+  });
+
+  return { outDoc, splitChildDocs, ticketId };
+}
+
+async function runDeferredFeedbackAiPipeline(ctx) {
+  const {
+    feedbackId,
+    patientName,
+    comments,
+    visitDepartment,
+    normalizedService,
+    serviceCatalog,
+    numericRating,
+    ticketId,
+    ticketRule,
+    ticketIsFresh,
+    patientRegNo,
+    patientEncounterType,
+    ward,
+    ipNo,
+    visitOrAdmissionDate,
+    submissionMode,
+    botVoiceOverallSentiment,
+    feedbackSource,
+    feedbackLookupDepartment,
+    botConversationAnswers,
+  } = ctx;
+
+  let pendingAi = null;
+  try {
+    pendingAi = await analyzePatientFeedback(
+      {
+        patientName,
+        patientDepartment: visitDepartment,
+        department: visitDepartment,
+        service: normalizedService,
+        comments: comments || "",
+      },
+      {
+        feedbackId: String(feedbackId),
+        serviceChoices: serviceCatalog.map((d) => ({
+          name: d.name,
+          description: d.description || "",
+        })),
+      }
+    );
+  } catch (analyzeErr) {
+    // eslint-disable-next-line no-console
+    console.error("[feedback] deferred OpenRouter analyze failed", {
+      feedbackId: String(feedbackId),
+      message: analyzeErr?.message || String(analyzeErr),
+    });
+    return;
+  }
+
+  if (!pendingAi) {
+    // eslint-disable-next-line no-console
+    console.log("[feedback] deferred AI skipped (no OpenRouter result)", {
+      feedbackId: String(feedbackId),
+    });
+    return;
+  }
+
+  try {
+    await applyPendingAiToFeedback({
+      feedbackId,
+      pendingAi,
+      patientName,
+      comments,
+      visitDepartment,
+      normalizedService,
+      serviceCatalog,
+      numericRating,
+      ticketId,
+      ticketRule,
+      ticketIsFresh,
+      patientRegNo,
+      patientEncounterType,
+      ward,
+      ipNo,
+      visitOrAdmissionDate,
+      submissionMode,
+      botVoiceOverallSentiment,
+      feedbackSource,
+      feedbackLookupDepartment,
+      botConversationAnswers,
+    });
+  } catch (aiErr) {
+    // eslint-disable-next-line no-console
+    console.error("[feedback] deferred AI apply failed", {
+      feedbackId: String(feedbackId),
+      message: aiErr?.message || String(aiErr),
+    });
+  }
+}
+
 registerBotConversationRoutes(app, { uploadsRoot: UPLOADS_ROOT, botAudioUpload });
 
-app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
+app.post("/api/feedback", (req, res, next) => {
+  feedbackSubmitUpload(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({
+          message:
+            "Voice file is too large to upload. Please submit again — your spoken text will still be saved.",
+        });
+      }
+      return res.status(400).json({ message: err.message });
+    }
+    if (err) return next(err);
+    return next();
+  });
+}, async (req, res) => {
   try {
     const patientName = req.body.patientName;
     let comments = req.body.comments;
@@ -973,6 +1318,7 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
         comments = buildBotCommentsFromAnswers(botConversationAnswers);
       }
     }
+    const deferAiProcessing = submissionMode === "voice" || submissionMode === "standard";
     const rawEncounter = String(req.body.patientEncounterType || "").toLowerCase().trim();
     const patientEncounterType = ["op", "ip"].includes(rawEncounter) ? rawEncounter : "";
     const patientRegNo = String(req.body.patientRegNo || "").trim().slice(0, 80);
@@ -1062,7 +1408,11 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
         }
       }
     }
-    if (process.env.OPENROUTER_API_KEY && String(comments || "").trim()) {
+    if (
+      !deferAiProcessing &&
+      process.env.OPENROUTER_API_KEY &&
+      String(comments || "").trim()
+    ) {
       try {
         pendingAi = await analyzePatientFeedback(
           {
@@ -1150,6 +1500,7 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
     });
 
     if (
+      !deferAiProcessing &&
       !pendingAi &&
       process.env.OPENROUTER_API_KEY &&
       String(comments || "").trim()
@@ -1184,205 +1535,34 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
       }
     }
 
-    if (pendingAi) {
+    if (!deferAiProcessing && pendingAi) {
       try {
-        // eslint-disable-next-line no-console
-        console.log("[feedback] applying OpenRouter analysis", {
-          feedbackId: String(feedback._id),
-          rating: pendingAi.rating,
+        const aiResult = await applyPendingAiToFeedback({
+          feedbackId: feedback._id,
+          pendingAi,
+          patientName,
+          comments,
+          visitDepartment,
+          normalizedService,
+          serviceCatalog,
+          numericRating,
+          ticketId,
+          ticketRule,
+          ticketIsFresh,
+          patientRegNo,
+          patientEncounterType,
+          ward,
+          ipNo,
+          visitOrAdmissionDate,
+          submissionMode,
+          botVoiceOverallSentiment,
+          feedbackSource: outDoc.source,
+          feedbackLookupDepartment: feedback.lookupDepartment || "",
+          botConversationAnswers: outDoc.botConversationAnswers,
         });
-        const ai = pendingAi;
-        const issueBundle = await applyIssueTicketsAndTms({
-            feedbackId: String(feedback._id),
-            patientName,
-            rating: numericRating,
-            issueRows: ai.issues,
-            emrDepartment: visitDepartment,
-            fullComments: comments || "",
-            existingTicketId: ticketId,
-            existingTicketRule: ticketRule,
-            existingTicketIsFresh: ticketIsFresh,
-          });
-
-          ticketId = issueBundle.primaryTicketId;
-          ticketRule = issueBundle.primaryTicketRule;
-          ticketIsFresh = issueBundle.primaryTicketIsFresh;
-
-          const primaryIssue = issueBundle.issues[0];
-          const pickCatalogService = (name) => {
-            const n = sanitizeOptionalLabel(name);
-            if (!n || !serviceCatalog.length) return "";
-            return resolveServiceFromAi(n, serviceCatalog) ? n : "";
-          };
-          const recommendedService =
-            pickCatalogService(primaryIssue?.recommendedService) ||
-            pickCatalogService(ai.recommendedService) ||
-            pickCatalogService(normalizedService);
-          let primarySentiment =
-            aiSentimentOnly(primaryIssue?.sentiment) || aiSentimentOnly(ai.sentiment);
-          if (!primarySentiment) {
-            primarySentiment = aiSentimentOnly(botVoiceOverallSentiment);
-          }
-          issueBundle.issues = ensureIssueTicketIds(issueBundle.issues, { newTicketId });
-          if (issueBundle.issues[0]?.ticketId && canOpenTicketForSentiment(primarySentiment)) {
-            ticketId = issueBundle.issues[0].ticketId;
-            ticketRule = ticketRule === "none" ? "ai_negative_sentiment" : ticketRule;
-            ticketIsFresh = true;
-          }
-
-          const botAnswersWithSentiment =
-            submissionMode === "bot" && (outDoc.botConversationAnswers || []).length
-              ? attachBotAnswerSentimentsFromIssues(
-                  outDoc.botConversationAnswers,
-                  issueBundle.issues,
-                  primarySentiment
-                )
-              : outDoc.botConversationAnswers;
-
-          const setFields = {
-            aiSentiment: primarySentiment,
-            aiUrgency: ai.urgency,
-            aiTopics: filterAiTopicsForTranscript(
-              ai.topics.length ? ai.topics : [],
-              comments || ""
-            ),
-            aiSummary: ai.summary,
-            aiAnalyzedAt: new Date(),
-            service: recommendedService || normalizedService,
-            department: visitDepartment || sanitizeOptionalLabel(primaryIssue?.department),
-            lookupDepartment: patientRegNo ? visitDepartment : feedback.lookupDepartment || "",
-            suggestedAction: primaryIssue?.suggestedAction || "",
-            feedbackIssues: issueBundle.issues,
-            submissionGroupId: issueBundle.submissionGroupId,
-            complaintSignature: buildComplaintSignature(
-              primaryIssue?.department || visitDepartment,
-              recommendedService,
-              comments || ""
-            ),
-            ticketId: ticketId || null,
-            ...(botAnswersWithSentiment?.length
-              ? { botConversationAnswers: botAnswersWithSentiment }
-              : {}),
-          };
-
-          if (!canOpenTicketForSentiment(primarySentiment)) {
-            setFields.ticketId = null;
-            ticketId = null;
-            ticketRule = "none";
-            ticketIsFresh = false;
-            if (setFields.feedbackIssues?.[0]) {
-              setFields.feedbackIssues[0].ticketId = null;
-            }
-          }
-          if (Array.isArray(setFields.feedbackIssues) && setFields.feedbackIssues.length) {
-            setFields.feedbackIssues = setFields.feedbackIssues.map((issue) => {
-              const sentiment = aiSentimentOnly(issue?.sentiment);
-              if (sentiment && !canOpenTicketForSentiment(sentiment)) {
-                return { ...issue, ticketId: null };
-              }
-              return issue;
-            });
-          }
-
-          if (primarySentiment === "negative" && !ticketId) {
-            setFields.ticketId = newTicketId();
-            setFields.status = "New";
-            ticketId = setFields.ticketId;
-            ticketIsFresh = true;
-            ticketRule = ticketRule === "none" ? "ai_negative_sentiment" : ticketRule;
-            if (setFields.feedbackIssues?.[0]) {
-              setFields.feedbackIssues[0].ticketId = setFields.ticketId;
-            }
-          }
-
-          const updated = await Feedback.findByIdAndUpdate(
-            feedback._id,
-            { $set: setFields },
-            { new: true }
-          ).lean();
-          if (updated) {
-            outDoc = updated;
-          }
-
-          if (issueBundle.issues.length > 1) {
-            const base = {
-              patientName,
-              patientRegNo,
-              patientEncounterType,
-              ward,
-              ipNo,
-              visitOrAdmissionDate,
-              lookupDepartment: patientRegNo ? visitDepartment : "",
-              rating: numericRating,
-              source: outDoc.source,
-              submissionMode,
-              botConversationAnswers: outDoc.botConversationAnswers || [],
-              submissionGroupId: issueBundle.submissionGroupId,
-              isSplitChild: true,
-              aiUrgency: ai.urgency,
-              aiTopics: filterAiTopicsForTranscript(ai.topics, comments || ""),
-              aiSummary: ai.summary,
-              aiAnalyzedAt: new Date(),
-              feedbackIssues: issueBundle.issues,
-            };
-
-            for (let i = 1; i < issueBundle.issues.length; i++) {
-              const issue = issueBundle.issues[i];
-              const issueSentiment =
-                aiSentimentOnly(issue?.sentiment) || aiSentimentOnly(ai.sentiment);
-              const childSig = buildComplaintSignature(
-                issue.department || visitDepartment,
-                issue.recommendedService,
-                issue.issueSummary
-              );
-              let childTicketId = issue.ticketId;
-              let childTicketIsFresh = false;
-              if (!canOpenTicketForSentiment(issueSentiment)) {
-                childTicketId = null;
-                childTicketIsFresh = false;
-              } else if (!childTicketId) {
-                const childEval = await evaluateTicketForFeedback(Feedback, {
-                  patientName,
-                  rating: numericRating,
-                  complaintSignature: childSig,
-                });
-                childTicketId = childEval.ticketId;
-                childTicketIsFresh = childEval.ticketIsFresh;
-              } else {
-                childTicketIsFresh = true;
-              }
-
-              if (issueSentiment === "negative" && !childTicketId) {
-                childTicketId = newTicketId();
-                childTicketIsFresh = true;
-              }
-
-              const childTopics = filterAiTopicsForTranscript(ai.topics, comments || "");
-              const child = await Feedback.create({
-                ...base,
-                aiSentiment: issueSentiment,
-                department: issue.department || visitDepartment,
-                service: issue.recommendedService || recommendedService,
-                comments: String(comments || "").trim(),
-                aiSummary: issue.issueSummary,
-                aiTopics: childTopics,
-                suggestedAction: issue.suggestedAction,
-                complaintSignature: childSig,
-                ticketId: childTicketId,
-              });
-              let childDoc = child.toObject();
-              splitChildDocs.push(childDoc);
-            }
-          }
-
-          // eslint-disable-next-line no-console
-          console.log("[feedback] AI fields saved to DB", {
-            feedbackId: String(feedback._id),
-            aiSentiment: ai.sentiment,
-            issueCount: issueBundle.issues.length,
-            splitChildren: splitChildDocs.length,
-            ticketOpenedForNegative: Boolean(setFields.ticketId),
-        });
+        if (aiResult.outDoc) outDoc = aiResult.outDoc;
+        if (aiResult.splitChildDocs?.length) splitChildDocs = aiResult.splitChildDocs;
+        if (aiResult.ticketId) ticketId = aiResult.ticketId;
       } catch (aiErr) {
         // eslint-disable-next-line no-console
         console.error("[feedback] AI apply failed", {
@@ -1390,7 +1570,7 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
           message: aiErr?.message || String(aiErr),
         });
       }
-    } else {
+    } else if (!deferAiProcessing) {
       // eslint-disable-next-line no-console
       console.log(
         process.env.OPENROUTER_API_KEY
@@ -1465,9 +1645,48 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
     }
 
     const payload = attachVoicePlaybackUrl(outDoc);
+    const shouldDeferAi =
+      deferAiProcessing &&
+      process.env.OPENROUTER_API_KEY &&
+      String(comments || "").trim();
+
+    if (shouldDeferAi) {
+      setImmediate(() => {
+        runDeferredFeedbackAiPipeline({
+          feedbackId: feedback._id,
+          patientName,
+          comments,
+          visitDepartment,
+          normalizedService,
+          serviceCatalog,
+          numericRating,
+          ticketId,
+          ticketRule,
+          ticketIsFresh,
+          patientRegNo,
+          patientEncounterType,
+          ward,
+          ipNo,
+          visitOrAdmissionDate,
+          submissionMode,
+          botVoiceOverallSentiment,
+          feedbackSource: outDoc.source,
+          feedbackLookupDepartment: feedback.lookupDepartment || "",
+          botConversationAnswers: outDoc.botConversationAnswers,
+        }).catch((deferErr) => {
+          // eslint-disable-next-line no-console
+          console.error("[feedback] deferred AI pipeline failed", {
+            feedbackId: String(feedback._id),
+            message: deferErr?.message || String(deferErr),
+          });
+        });
+      });
+    }
+
     return res.status(201).json({
       ...payload,
       ticketRaised: Boolean(outDoc.ticketId),
+      aiPending: Boolean(shouldDeferAi),
       tmsConfigured: false,
       tmsOutboundEnabled: false,
       tmsSyncHint: null,
@@ -1481,7 +1700,58 @@ app.post("/api/feedback", feedbackSubmitUpload, async (req, res) => {
       feedbackIssues: outDoc.feedbackIssues || [],
     });
   } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("[feedback] create failed", {
+      message: error?.message || String(error),
+    });
     return res.status(500).json({ message: "Failed to create feedback" });
+  }
+});
+
+app.post("/api/feedback/:id/voice-recording", (req, res, next) => {
+  voiceRecordingUpload(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ message: "Voice file is too large (max 60 MB)." });
+      }
+      return res.status(400).json({ message: err.message });
+    }
+    if (err) return next(err);
+    return next();
+  });
+}, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const file = req.file;
+    if (!file?.buffer?.length) {
+      return res.status(400).json({ message: "voiceRecording file is required" });
+    }
+
+    const feedback = await Feedback.findById(id).lean();
+    if (!feedback) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+
+    const rel = await saveFeedbackVoiceRecording(id, file.buffer, file.mimetype || "");
+    await Feedback.updateOne({ _id: id }, { $set: { voiceRecordingRelPath: rel } });
+    if (feedback.submissionGroupId) {
+      await Feedback.updateMany(
+        { submissionGroupId: feedback.submissionGroupId, isSplitChild: true },
+        { $set: { voiceRecordingRelPath: rel } }
+      );
+    }
+
+    return res.json({
+      voiceRecordingRelPath: rel,
+      voiceRecordingUrl: `/uploads/${String(rel).replace(/^\/+/, "")}`,
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("[feedback] voice recording upload failed", {
+      feedbackId: req.params.id,
+      message: error?.message || String(error),
+    });
+    return res.status(500).json({ message: "Failed to save voice recording" });
   }
 });
 
