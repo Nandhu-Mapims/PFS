@@ -45,6 +45,9 @@ import {
   registerBotConversationRoutes,
   saveBotAnswerRecording,
 } from "./botConversation.js";
+import { createPendingAiWorker } from "./pendingAiWorker.js";
+
+let pendingAiWorker = null;
 
 dotenv.config();
 
@@ -250,6 +253,18 @@ async function saveFeedbackVoiceRecording(feedbackId, fileBuffer, mimeHint = "")
   return rel;
 }
 
+/** Split tickets created after voice upload still need the parent recording path. */
+async function propagateVoiceRecordingToGroup(feedbackId, voiceRecordingRelPath) {
+  if (!voiceRecordingRelPath) return 0;
+  const row = await Feedback.findById(feedbackId).select("submissionGroupId").lean();
+  if (!row?.submissionGroupId) return 0;
+  const result = await Feedback.updateMany(
+    { submissionGroupId: row.submissionGroupId, _id: { $ne: feedbackId } },
+    { $set: { voiceRecordingRelPath } }
+  );
+  return result.modifiedCount ?? 0;
+}
+
 function newTicketId() {
   return `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 }
@@ -279,9 +294,40 @@ async function ensureDefaults() {
   await ensureBotConversationConfig();
 }
 
+/** Backfill voice path on split rows when parent already has audio (e.g. upload before AI split). */
+async function repairMissingSplitVoiceRecordings() {
+  const parents = await Feedback.find({
+    voiceRecordingRelPath: { $nin: [null, ""] },
+    submissionGroupId: { $exists: true, $ne: null },
+    isSplitChild: { $ne: true },
+  })
+    .select("_id submissionGroupId voiceRecordingRelPath")
+    .lean();
+
+  let repaired = 0;
+  for (const parent of parents) {
+    const result = await Feedback.updateMany(
+      {
+        submissionGroupId: parent.submissionGroupId,
+        isSplitChild: true,
+        $or: [{ voiceRecordingRelPath: null }, { voiceRecordingRelPath: "" }],
+      },
+      { $set: { voiceRecordingRelPath: parent.voiceRecordingRelPath } }
+    );
+    repaired += result.modifiedCount ?? 0;
+  }
+  if (repaired > 0) {
+    // eslint-disable-next-line no-console
+    console.log("[feedback] repaired split voice recording paths", { count: repaired });
+  }
+}
+
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    openRouterConfigured: Boolean(process.env.OPENROUTER_API_KEY?.trim()),
+  });
 });
 
 app.post("/api/speech-to-text", speechUpload.single("audio"), async (req, res) => {
@@ -1158,6 +1204,23 @@ async function applyPendingAiToFeedback({
     }
   }
 
+  const freshParent = await Feedback.findById(feedbackId)
+    .select("voiceRecordingRelPath submissionGroupId")
+    .lean();
+  if (freshParent?.voiceRecordingRelPath) {
+    const propagated = await propagateVoiceRecordingToGroup(
+      feedbackId,
+      freshParent.voiceRecordingRelPath
+    );
+    if (propagated > 0) {
+      // eslint-disable-next-line no-console
+      console.log("[feedback] propagated voice recording to split rows", {
+        feedbackId: String(feedbackId),
+        count: propagated,
+      });
+    }
+  }
+
   // eslint-disable-next-line no-console
   console.log("[feedback] AI fields saved to DB", {
     feedbackId: String(feedbackId),
@@ -1168,6 +1231,54 @@ async function applyPendingAiToFeedback({
   });
 
   return { outDoc, splitChildDocs, ticketId };
+}
+
+async function reanalyzeFeedbackById(feedbackId) {
+  if (!process.env.OPENROUTER_API_KEY?.trim()) return false;
+
+  const row = await Feedback.findById(feedbackId).lean();
+  if (!row || row.isSplitChild) return false;
+
+  const comments = String(row.comments || "").trim();
+  if (!comments) return false;
+
+  const existing = row.aiSentiment;
+  if (existing === "positive" || existing === "neutral" || existing === "negative") {
+    return false;
+  }
+
+  const serviceCatalog = await loadServiceCatalogForAi();
+  const visitDepartment = sanitizeOptionalLabel(row.lookupDepartment || row.department);
+
+  await runDeferredFeedbackAiPipeline({
+    feedbackId: row._id,
+    patientName: row.patientName,
+    comments,
+    visitDepartment,
+    normalizedService: sanitizeOptionalLabel(row.service) || "",
+    serviceCatalog,
+    numericRating: row.rating,
+    ticketId: row.ticketId,
+    ticketRule: "none",
+    ticketIsFresh: false,
+    patientRegNo: row.patientRegNo || "",
+    patientEncounterType: row.patientEncounterType || "",
+    ward: row.ward || "",
+    ipNo: row.ipNo || "",
+    visitOrAdmissionDate: row.visitOrAdmissionDate || "",
+    submissionMode: row.submissionMode || "standard",
+    botVoiceOverallSentiment: null,
+    feedbackSource: row.source,
+    feedbackLookupDepartment: row.lookupDepartment || "",
+    botConversationAnswers: row.botConversationAnswers || [],
+  });
+
+  const updated = await Feedback.findById(feedbackId).select("aiSentiment").lean();
+  return (
+    updated?.aiSentiment === "positive" ||
+    updated?.aiSentiment === "neutral" ||
+    updated?.aiSentiment === "negative"
+  );
 }
 
 async function runDeferredFeedbackAiPipeline(ctx) {
@@ -1195,30 +1306,37 @@ async function runDeferredFeedbackAiPipeline(ctx) {
   } = ctx;
 
   let pendingAi = null;
-  try {
-    pendingAi = await analyzePatientFeedback(
-      {
-        patientName,
-        patientDepartment: visitDepartment,
-        department: visitDepartment,
-        service: normalizedService,
-        comments: comments || "",
-      },
-      {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      pendingAi = await analyzePatientFeedback(
+        {
+          patientName,
+          patientDepartment: visitDepartment,
+          department: visitDepartment,
+          service: normalizedService,
+          comments: comments || "",
+        },
+        {
+          feedbackId: String(feedbackId),
+          serviceChoices: serviceCatalog.map((d) => ({
+            name: d.name,
+            description: d.description || "",
+          })),
+        }
+      );
+      break;
+    } catch (analyzeErr) {
+      // eslint-disable-next-line no-console
+      console.error("[feedback] deferred OpenRouter analyze failed", {
         feedbackId: String(feedbackId),
-        serviceChoices: serviceCatalog.map((d) => ({
-          name: d.name,
-          description: d.description || "",
-        })),
+        attempt,
+        message: analyzeErr?.message || String(analyzeErr),
+      });
+      if (attempt === 2) {
+        pendingAiWorker?.scheduleRetry(feedbackId);
+        return;
       }
-    );
-  } catch (analyzeErr) {
-    // eslint-disable-next-line no-console
-    console.error("[feedback] deferred OpenRouter analyze failed", {
-      feedbackId: String(feedbackId),
-      message: analyzeErr?.message || String(analyzeErr),
-    });
-    return;
+    }
   }
 
   if (!pendingAi) {
@@ -1226,6 +1344,7 @@ async function runDeferredFeedbackAiPipeline(ctx) {
     console.log("[feedback] deferred AI skipped (no OpenRouter result)", {
       feedbackId: String(feedbackId),
     });
+    pendingAiWorker?.scheduleRetry(feedbackId);
     return;
   }
 
@@ -1259,6 +1378,7 @@ async function runDeferredFeedbackAiPipeline(ctx) {
       feedbackId: String(feedbackId),
       message: aiErr?.message || String(aiErr),
     });
+    pendingAiWorker?.scheduleRetry(feedbackId);
   }
 }
 
@@ -1734,12 +1854,7 @@ app.post("/api/feedback/:id/voice-recording", (req, res, next) => {
 
     const rel = await saveFeedbackVoiceRecording(id, file.buffer, file.mimetype || "");
     await Feedback.updateOne({ _id: id }, { $set: { voiceRecordingRelPath: rel } });
-    if (feedback.submissionGroupId) {
-      await Feedback.updateMany(
-        { submissionGroupId: feedback.submissionGroupId, isSplitChild: true },
-        { $set: { voiceRecordingRelPath: rel } }
-      );
-    }
+    await propagateVoiceRecordingToGroup(id, rel);
 
     return res.json({
       voiceRecordingRelPath: rel,
@@ -2016,10 +2131,22 @@ async function startServer() {
     // eslint-disable-next-line no-console
     console.log(`[feedback] MongoDB connected: ${mongoose.connection.db.databaseName}`);
     await ensureDefaults();
-    app.listen(PORT, () => {
+    await repairMissingSplitVoiceRecordings();
+
+    pendingAiWorker = createPendingAiWorker({
+      reanalyzeFeedbackById,
+      isEnabled: () => Boolean(process.env.OPENROUTER_API_KEY?.trim()),
+    });
+    pendingAiWorker.start();
+
+    const server = app.listen(PORT, () => {
       // eslint-disable-next-line no-console
       console.log(`API running on http://localhost:${PORT}`);
     });
+    server.timeout = 0;
+    server.requestTimeout = 0;
+    server.headersTimeout = 0;
+    server.keepAliveTimeout = 0;
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Unable to start server", error);

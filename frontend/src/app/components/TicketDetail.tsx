@@ -328,10 +328,6 @@ export function TicketDetail() {
                       Your browser does not support audio playback.
                     </audio>
                   </div>
-                ) : displayMode === "voice" ? (
-                  <p className="text-sm text-amber-700 rounded-lg border border-amber-100 bg-amber-50 p-3">
-                    Voice feedback was submitted but no audio file is stored on the server for this ticket.
-                  </p>
                 ) : null}
 
                 {!speechToTextText && !hasVoiceCapture ? (

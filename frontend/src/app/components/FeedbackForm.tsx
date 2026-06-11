@@ -133,11 +133,17 @@ export function FeedbackForm() {
       let voiceUploadWarning: string | undefined;
       if (inputKind === "voice" && voiceRecordingBlob && voiceRecordingBlob.size > 0) {
         setSubmitPhase("voice");
-        try {
-          await uploadFeedbackVoiceRecording(created._id, voiceRecordingBlob);
-        } catch {
-          voiceUploadWarning =
-            "Your feedback was saved. We could not finish sending everything — your words are on record.";
+        let voiceSaved = false;
+        for (let attempt = 0; attempt < 2 && !voiceSaved; attempt++) {
+          try {
+            await uploadFeedbackVoiceRecording(created._id, voiceRecordingBlob);
+            voiceSaved = true;
+          } catch {
+            if (attempt === 1) {
+              voiceUploadWarning =
+                "Your feedback was saved. We could not finish sending everything — your words are on record.";
+            }
+          }
         }
       }
 

@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Bar,
   BarChart,
@@ -26,6 +26,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import type { FeedbackItem } from "../../lib/api";
+import { getApiHealth } from "../../lib/api";
 import { sanitizeOptionalLabel } from "../../lib/fieldSanitize";
 import {
   buildSentimentBuckets,
@@ -68,6 +69,14 @@ export function SubmissionTrendsDashboard({
   filterWindow,
   analytics,
 }: Props) {
+  const [openRouterConfigured, setOpenRouterConfigured] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    void getApiHealth().then((health) => {
+      setOpenRouterConfigured(Boolean(health.openRouterConfigured));
+    });
+  }, []);
+
   const periodLabel = periodDescription(periodFilter, timeFilter, customRange);
   const filteredTotal = submissionRows.length;
 
@@ -226,8 +235,9 @@ export function SubmissionTrendsDashboard({
     <div className="space-y-8">
       {pendingAiSentimentCount > 0 && (
         <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          {pendingAiSentimentCount} submission(s) have no AI sentiment yet. Enable OpenRouter on the
-          API server to classify comments.
+          {openRouterConfigured === false
+            ? `${pendingAiSentimentCount} submission(s) have no AI sentiment yet. Add OPENROUTER_API_KEY to backend/.env and restart the API server.`
+            : `${pendingAiSentimentCount} submission(s) are still waiting for AI classification. The server processes these automatically every minute — refresh shortly.`}
         </p>
       )}
 

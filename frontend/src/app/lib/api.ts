@@ -171,6 +171,15 @@ export function resolveUploadUrl(path: string | null | undefined): string | null
   return `${base}${normalized}`;
 }
 
+export async function getApiHealth(): Promise<{ ok: boolean; openRouterConfigured?: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/api/health`, { cache: "no-store" });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return { ok: false, openRouterConfigured: false };
+  }
+  return body as { ok: boolean; openRouterConfigured?: boolean };
+}
+
 export async function createFeedback(payload: FeedbackPayload): Promise<CreateFeedbackResponse> {
   const { voiceRecording, ...fields } = payload;
 
@@ -229,9 +238,6 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
         "Upload too large. Your spoken text can still be saved — please submit again."
       );
     }
-    if (response.status === 504 || response.status === 502) {
-      throw new Error("Server timed out. Please try submitting again.");
-    }
     throw new Error("Could not save feedback");
   }
 
@@ -260,9 +266,6 @@ export async function uploadFeedbackVoiceRecording(
     }
     if (response.status === 413) {
       throw new Error("Your feedback was saved, but the recording was too large to send.");
-    }
-    if (response.status === 504 || response.status === 502) {
-      throw new Error("Your feedback was saved, but sending took too long. Please try again.");
     }
     throw new Error("Your feedback was saved, but we could not finish sending everything.");
   }
