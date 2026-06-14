@@ -9,6 +9,8 @@ import {
   loadBrandingSettings,
   onBrandingSettingsChange,
 } from "../lib/branding";
+import { FeedbackOutboxStatus } from "./FeedbackOutboxStatus";
+import { MOBILE_NETWORK_BAR_OFFSET_CLASS, NetworkStatusIndicator } from "./NetworkStatusIndicator";
 
 export function Layout() {
   const location = useLocation();
@@ -73,24 +75,30 @@ export function Layout() {
   const appLogo = branding.logoDataUrl || feedbackLogo;
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ backgroundColor: branding.pageBackgroundColor }}>
+    <div
+      className={`min-h-screen flex flex-col ${MOBILE_NETWORK_BAR_OFFSET_CLASS}`}
+      style={{ backgroundColor: branding.pageBackgroundColor }}
+    >
+      <NetworkStatusIndicator variant="mobile-fixed" />
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="w-full max-w-[min(100%,1600px)] mx-auto px-3 sm:px-5 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3 min-w-0">
+        <div className="w-full max-w-[min(100%,1600px)] mx-auto px-3 sm:px-5 py-3 lg:py-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:gap-3">
               <img
                 src={appLogo}
                 alt="MAPIMS feedback system"
-                className="h-11 w-auto max-h-12 max-w-[min(160px,40vw)] shrink-0 object-contain sm:h-12 sm:max-w-[180px]"
+                className="h-10 w-auto max-h-11 max-w-[min(140px,36vw)] shrink-0 object-contain sm:h-11 lg:h-12 lg:max-w-[180px]"
               />
               <div className="min-w-0">
-                <h1 className="text-xl font-semibold text-gray-800">MAPIMS Hospital</h1>
-                <p className="text-sm text-gray-500">Patient Feedback System</p>
+                <h1 className="truncate text-base font-semibold text-gray-800 sm:text-xl">MAPIMS Hospital</h1>
+                <p className="truncate text-xs text-gray-500 sm:text-sm">Patient Feedback System</p>
               </div>
             </div>
-            {(showHeaderActions || (session && !isPatientKioskScreen)) && (
-              <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <NetworkStatusIndicator variant="inline" />
+              {(showHeaderActions || (session && !isPatientKioskScreen)) && (
+                <>
                 {showHeaderActions && (
                   <>
                 {isAdminShell ? (
@@ -280,8 +288,9 @@ export function Layout() {
                     Logout
                   </button>
                 )}
-              </div>
-            )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -292,6 +301,7 @@ export function Layout() {
           showBottomNav ? "pb-24 md:pb-6" : ""
         }`}
       >
+        {isPatientKioskScreen && <FeedbackOutboxStatus />}
         <Outlet />
       </main>
 

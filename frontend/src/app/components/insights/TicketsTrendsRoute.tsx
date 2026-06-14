@@ -9,6 +9,7 @@ export function TicketsTrendsRoute() {
       ticketRows={data.ticketRows}
       periodFilter={data.periodFilter}
       timeFilter={data.timeFilter}
+      encounterFilter={data.encounterFilter}
       customRange={data.customRange}
       filterWindow={data.filterWindow}
     />

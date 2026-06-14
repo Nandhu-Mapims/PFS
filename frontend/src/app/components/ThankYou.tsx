@@ -27,6 +27,7 @@ export function ThankYou() {
     typeof location.state?.voiceUploadWarning === "string"
       ? location.state.voiceUploadWarning
       : "";
+  const offlineQueued = Boolean(location.state?.offlineQueued);
   const session = getSession();
   const isStaffSession = fromStaffSession || session?.role === "staff";
 
@@ -68,6 +69,13 @@ export function ThankYou() {
         <p className="text-lg md:text-xl text-gray-600 mb-9 leading-relaxed">
           Thank you for helping us improve our care
         </p>
+
+        {offlineQueued && (
+          <p className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Your feedback is saved on this device. It will finish uploading automatically when the connection
+            is stable — you can close this page safely.
+          </p>
+        )}
 
         {voiceUploadWarning.trim() && (
           <p className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">

@@ -66,6 +66,8 @@ export function InsightsHub() {
         setPeriodFilter={data.setPeriodFilter}
         timeFilter={data.timeFilter}
         setTimeFilter={data.setTimeFilter}
+        encounterFilter={data.encounterFilter}
+        setEncounterFilter={data.setEncounterFilter}
         customFrom={data.customFrom}
         setCustomFrom={data.setCustomFrom}
         customTo={data.customTo}

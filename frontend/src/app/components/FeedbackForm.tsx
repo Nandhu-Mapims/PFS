@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { createFeedback, uploadFeedbackVoiceRecording } from "../lib/api";
+import {
+  enqueueFeedbackSubmission,
+  newOutboxId,
+  notifyOutboxChanged,
+  saveVoiceDraft,
+  syncAfterEnqueue,
+} from "../lib/feedbackOutbox";
 import { getSession } from "../lib/auth";
 import { usePatientIdentity } from "../lib/usePatientIdentity";
 import {
@@ -40,6 +46,10 @@ export function FeedbackForm() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [primaryColor, setPrimaryColor] = useState("#2A6FDB");
   const prevModeBucketRef = useRef<string | null>(null);
+  const outboxIdRef = useRef<string | null>(null);
+  const draftCommentsRef = useRef("");
+  const draftRatingRef = useRef<number | null>(null);
+  const voiceBlobRef = useRef<Blob | null>(null);
 
   useEffect(() => {
     const bucket = modeParam === "voice" ? "voice" : "type";
@@ -55,6 +65,7 @@ export function FeedbackForm() {
     setVoiceReady(false);
     setVoiceRecordingBlob(null);
     setVoiceRevision((r) => r + 1);
+    outboxIdRef.current = null;
     identity.reset();
   }, [modeParam, identity.reset]);
 
@@ -71,12 +82,34 @@ export function FeedbackForm() {
     });
   }, []);
 
+  const persistVoiceDraft = useCallback(
+    async (transcript: string, inferredRating: number, audioBlob: Blob | null) => {
+      if (!outboxIdRef.current) outboxIdRef.current = newOutboxId();
+      const isStaffSession = getSession()?.role === "staff";
+      await saveVoiceDraft(
+        outboxIdRef.current,
+        {
+          ...identity.getSubmitFields(),
+          rating: inferredRating,
+          comments: transcript.trim(),
+          source: isStaffSession ? "staff" : "patient",
+          submissionMode: "voice",
+        },
+        audioBlob
+      );
+    },
+    [identity]
+  );
+
   const onVoiceSuccess = useCallback((transcript: string, inferredRating: number) => {
+    draftCommentsRef.current = transcript;
+    draftRatingRef.current = inferredRating;
     setComments(transcript);
     setSelectedEmotion(inferredRating);
     setVoiceReady(true);
     setSubmitError(null);
-  }, []);
+    void persistVoiceDraft(transcript, inferredRating, voiceBlobRef.current);
+  }, [persistVoiceDraft]);
 
   const onVoiceCleared = useCallback(() => {
     setVoiceReady(false);
@@ -88,9 +121,18 @@ export function FeedbackForm() {
     setSubmitError(message);
   }, []);
 
-  const onVoiceRecordingReady = useCallback((blob: Blob | null) => {
-    setVoiceRecordingBlob(blob);
-  }, []);
+  const onVoiceRecordingReady = useCallback(
+    (blob: Blob | null) => {
+      voiceBlobRef.current = blob;
+      setVoiceRecordingBlob(blob);
+      const transcript = draftCommentsRef.current.trim();
+      const rating = draftRatingRef.current;
+      if (transcript && rating != null) {
+        void persistVoiceDraft(transcript, rating, blob);
+      }
+    },
+    [persistVoiceDraft]
+  );
 
   const handleSubmit = async () => {
     const identityError = identity.validateForSubmit();
@@ -121,29 +163,45 @@ export function FeedbackForm() {
       setIsSubmitting(true);
       setSubmitPhase("text");
       const isStaffSession = getSession()?.role === "staff";
+      const outboxId = outboxIdRef.current ?? newOutboxId();
+      outboxIdRef.current = outboxId;
 
-      const created = await createFeedback({
+      const payload = {
         ...identity.getSubmitFields(),
         rating: selectedEmotion as number,
         comments: comments.trim(),
-        source: isStaffSession ? "staff" : "patient",
-        submissionMode: inputKind === "voice" ? "voice" : "standard",
+        source: (isStaffSession ? "staff" : "patient") as "staff" | "patient",
+        submissionMode: (inputKind === "voice" ? "voice" : "standard") as "voice" | "standard",
+      };
+
+      await enqueueFeedbackSubmission({
+        id: outboxId,
+        payload,
+        audioBlob: inputKind === "voice" ? voiceBlobRef.current ?? voiceRecordingBlob : null,
+        thankYouState: {
+          rating: selectedEmotion as number,
+          fromStaffSession: isStaffSession,
+        },
       });
 
-      let voiceUploadWarning: string | undefined;
-      if (inputKind === "voice" && voiceRecordingBlob && voiceRecordingBlob.size > 0) {
+      if (inputKind === "voice" && voiceRecordingBlob?.size) {
         setSubmitPhase("voice");
-        let voiceSaved = false;
-        for (let attempt = 0; attempt < 2 && !voiceSaved; attempt++) {
-          try {
-            await uploadFeedbackVoiceRecording(created._id, voiceRecordingBlob);
-            voiceSaved = true;
-          } catch {
-            if (attempt === 1) {
-              voiceUploadWarning =
-                "Your feedback was saved. We could not finish sending everything — your words are on record.";
-            }
-          }
+      }
+
+      const syncResult = await syncAfterEnqueue(outboxId);
+      notifyOutboxChanged();
+
+      let voiceUploadWarning: string | undefined;
+      let offlineQueued = false;
+      let created: Record<string, unknown> = {};
+
+      if (syncResult.kind === "queued") {
+        offlineQueued = true;
+      } else {
+        created = syncResult.response;
+        if (syncResult.kind === "text_only") {
+          voiceUploadWarning =
+            "Your feedback was saved. We could not finish sending everything — your words are on record.";
         }
       }
 
@@ -151,11 +209,12 @@ export function FeedbackForm() {
         state: {
           rating: selectedEmotion,
           fromStaffSession: isStaffSession,
-          aiSummary: created.aiSummary || undefined,
-          aiSentiment: created.aiSentiment || undefined,
-          aiUrgency: created.aiUrgency || undefined,
-          aiTopics: created.aiTopics || undefined,
+          aiSummary: typeof created.aiSummary === "string" ? created.aiSummary : undefined,
+          aiSentiment: created.aiSentiment as "positive" | "neutral" | "negative" | undefined,
+          aiUrgency: created.aiUrgency as string | undefined,
+          aiTopics: Array.isArray(created.aiTopics) ? (created.aiTopics as string[]) : undefined,
           voiceUploadWarning,
+          offlineQueued,
         },
       });
     } catch (err) {

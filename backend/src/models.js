@@ -65,6 +65,8 @@ const feedbackSchema = new mongoose.Schema(
       default: [],
     },
     submissionGroupId: { type: String, default: null, index: true },
+    /** Client-generated id for idempotent offline/outbox retries */
+    clientSubmissionId: { type: String, default: null, sparse: true, unique: true, index: true },
     isSplitChild: { type: Boolean, default: false },
     rating: { type: Number, required: true, min: 1, max: 5 },
     comments: { type: String, default: "", trim: true },

@@ -15,7 +15,9 @@ import {
   type CustomDateRange,
   type PeriodGranularity,
 } from "../lib/insightsFilters";
+import type { EncounterTypeFilter } from "../lib/insightsFilters";
 import type { TicketStatusFilter } from "../lib/ticketFilters";
+import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
 
 const STATUS_OPTIONS: { id: TicketStatusFilter; label: string }[] = [
   { id: "all", label: "All" },
@@ -52,6 +54,8 @@ type TicketFiltersPanelProps = {
   totalCount: number;
   /** Label for result count, e.g. "patients" or "tickets" */
   resultUnit?: string;
+  encounterFilter: EncounterTypeFilter;
+  onEncounterFilterChange: (v: EncounterTypeFilter) => void;
 };
 
 function chipClass(active: boolean) {
@@ -88,6 +92,8 @@ export function TicketFiltersPanel({
   resultCount,
   totalCount,
   resultUnit = "tickets",
+  encounterFilter,
+  onEncounterFilterChange,
 }: TicketFiltersPanelProps) {
   const customRange: CustomDateRange = { from: customFrom, to: customTo };
   const usingCustomRange = hasCustomDateRange(customRange);
@@ -105,6 +111,14 @@ export function TicketFiltersPanel({
   const selectTriggerClass = "h-9 w-full max-w-[220px] rounded-lg text-sm";
 
   return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-gray-200 bg-white shadow-sm px-4 py-4">
+        <EncounterTypeFilterTabs
+          value={encounterFilter}
+          onChange={onEncounterFilterChange}
+          showHint
+        />
+      </div>
     <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
       <button
         type="button"
@@ -336,6 +350,7 @@ export function TicketFiltersPanel({
           </div>
         </div>
       ) : null}
+    </div>
     </div>
   );
 }

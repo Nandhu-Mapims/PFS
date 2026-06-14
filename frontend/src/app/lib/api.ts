@@ -57,6 +57,8 @@ export interface FeedbackPayload {
   ward?: string;
   ipNo?: string;
   visitOrAdmissionDate?: string;
+  /** Idempotent key from offline outbox — safe to retry POST /api/feedback */
+  clientSubmissionId?: string;
 }
 
 export interface PatientLookupMatch {
@@ -201,6 +203,9 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
   };
 
   const fd = new FormData();
+  if (fields.clientSubmissionId) {
+    fd.append("clientSubmissionId", fields.clientSubmissionId);
+  }
   fd.append("patientName", fields.patientName);
   if (fields.department != null && fields.department !== "") {
     fd.append("department", fields.department);

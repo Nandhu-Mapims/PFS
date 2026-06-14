@@ -32,17 +32,18 @@ const DEPT_COLORS = ["#2A6FDB", "#2FBF71", "#8B5CF6", "#F4A261", "#E5533D", "#6B
 
 type Props = Pick<
   InsightsDataState,
-  "ticketRows" | "periodFilter" | "timeFilter" | "customRange" | "filterWindow"
+  "ticketRows" | "periodFilter" | "timeFilter" | "encounterFilter" | "customRange" | "filterWindow"
 >;
 
 export function TicketsTrendsDashboard({
   ticketRows,
   periodFilter,
   timeFilter,
+  encounterFilter,
   customRange,
   filterWindow,
 }: Props) {
-  const periodLabel = periodDescription(periodFilter, timeFilter, customRange);
+  const periodLabel = periodDescription(periodFilter, timeFilter, customRange, encounterFilter);
   const totalTickets = ticketRows.length;
 
   const statusNew = ticketRows.filter((t) => t.status === "New").length;

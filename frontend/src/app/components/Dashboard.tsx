@@ -17,6 +17,8 @@ import {
   type FeedbackItem,
 } from "../lib/api";
 import { displayOptionalLabel, sanitizeOptionalLabel } from "../lib/fieldSanitize";
+import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
+import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
@@ -222,6 +224,7 @@ export function Dashboard() {
   const [filterService, setFilterService] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterCombined, setFilterCombined] = useState("All");
+  const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("department");
   const [error, setError] = useState<string | null>(null);
 
@@ -286,9 +289,16 @@ export function Dashboard() {
         filterDepartment === "All" || dept === filterDepartment;
       const matchesService = filterService === "All" || svc === filterService;
       const matchesStatus = filterStatus === "All" || item.status === filterStatus;
-      return matchesSearch && matchesDepartment && matchesService && matchesStatus;
+      const matchesEncounter = matchesEncounterType(item.patientEncounterType, encounterFilter);
+      return (
+        matchesSearch &&
+        matchesDepartment &&
+        matchesService &&
+        matchesStatus &&
+        matchesEncounter
+      );
     });
-  }, [items, searchTerm, filterDepartment, filterService, filterStatus]);
+  }, [items, searchTerm, filterDepartment, filterService, filterStatus, encounterFilter]);
 
   const departmentSummary = useMemo(() => {
     const map = new Map<string, { count: number; newCount: number }>();
@@ -475,7 +485,12 @@ export function Dashboard() {
       </div>
 
       <Card className="rounded-2xl shadow-sm">
-        <CardContent className="pt-6">
+        <CardContent className="pt-6 space-y-4">
+          <EncounterTypeFilterTabs
+            value={encounterFilter}
+            onChange={setEncounterFilter}
+            showHint
+          />
           <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
             <div className="relative">
               <Search

@@ -1400,6 +1400,25 @@ app.post("/api/feedback", (req, res, next) => {
   });
 }, async (req, res) => {
   try {
+    const clientSubmissionId = String(req.body.clientSubmissionId || "").trim().slice(0, 128);
+    if (clientSubmissionId) {
+      const existing = await Feedback.findOne({ clientSubmissionId }).lean();
+      if (existing) {
+        const outDoc = attachVoicePlaybackUrl(existing);
+        return res.status(200).json({
+          ...outDoc,
+          ticketRaised: Boolean(outDoc.ticketId),
+          aiPending: false,
+          tmsConfigured: false,
+          tmsOutboundEnabled: false,
+          tmsSyncHint: null,
+          splitTickets: [],
+          feedbackIssues: outDoc.feedbackIssues || [],
+          idempotentReplay: true,
+        });
+      }
+    }
+
     const patientName = req.body.patientName;
     let comments = req.body.comments;
     const source = req.body.source;
@@ -1601,6 +1620,7 @@ app.post("/api/feedback", (req, res, next) => {
       ticketId,
       submissionMode,
       botConversationAnswers,
+      ...(clientSubmissionId ? { clientSubmissionId } : {}),
     });
 
     let outDoc = feedback.toObject();
@@ -1850,6 +1870,15 @@ app.post("/api/feedback/:id/voice-recording", (req, res, next) => {
     const feedback = await Feedback.findById(id).lean();
     if (!feedback) {
       return res.status(404).json({ message: "Feedback not found" });
+    }
+
+    if (feedback.voiceRecordingRelPath) {
+      const existingRel = String(feedback.voiceRecordingRelPath);
+      return res.json({
+        voiceRecordingRelPath: existingRel,
+        voiceRecordingUrl: `/uploads/${existingRel.replace(/^\/+/, "")}`,
+        idempotentReplay: true,
+      });
     }
 
     const rel = await saveFeedbackVoiceRecording(id, file.buffer, file.mimetype || "");

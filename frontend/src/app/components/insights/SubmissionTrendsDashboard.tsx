@@ -56,18 +56,18 @@ type Props = Pick<
   | "submissionRows"
   | "periodFilter"
   | "timeFilter"
+  | "encounterFilter"
   | "customRange"
   | "filterWindow"
-  | "analytics"
 >;
 
 export function SubmissionTrendsDashboard({
   submissionRows,
   periodFilter,
   timeFilter,
+  encounterFilter,
   customRange,
   filterWindow,
-  analytics,
 }: Props) {
   const [openRouterConfigured, setOpenRouterConfigured] = useState<boolean | null>(null);
 
@@ -77,8 +77,14 @@ export function SubmissionTrendsDashboard({
     });
   }, []);
 
-  const periodLabel = periodDescription(periodFilter, timeFilter, customRange);
+  const periodLabel = periodDescription(periodFilter, timeFilter, customRange, encounterFilter);
   const filteredTotal = submissionRows.length;
+  const avgRating =
+    filteredTotal > 0
+      ? (
+          submissionRows.reduce((sum, row) => sum + (row.rating ?? 0), 0) / filteredTotal
+        ).toFixed(1)
+      : "—";
 
   const positiveCount = submissionRows.filter((i) => getAiSentimentBucket(i) === "positive").length;
   const neutralCount = submissionRows.filter((i) => getAiSentimentBucket(i) === "neutral").length;
@@ -189,9 +195,19 @@ export function SubmissionTrendsDashboard({
     )
     .slice(0, 3);
 
-  const highComplaintServices = (analytics?.negativeByService ?? [])
-    .slice(0, 3)
-    .map((row) => ({ name: row.service, value: row.count }));
+  const highComplaintServices = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const item of submissionRows) {
+      if (getAiSentimentBucket(item) !== "negative") continue;
+      const name = serviceFromFeedback(item);
+      if (!name) continue;
+      map.set(name, (map.get(name) || 0) + 1);
+    }
+    return [...map.entries()]
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 3);
+  }, [submissionRows]);
 
   const topPerformingDepts = [...departmentVolume]
     .map((d) => {
@@ -282,7 +298,7 @@ export function SubmissionTrendsDashboard({
         />
         <InsightsKpiCard
           label="Avg rating"
-          value={analytics?.totals.averageRating ?? "—"}
+          value={avgRating}
           sub="Star scale 1–5"
         />
       </div>

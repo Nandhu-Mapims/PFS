@@ -36,7 +36,7 @@ import { Badge } from "../ui/badge";
 
 type Props = Pick<
   InsightsDataState,
-  "filteredByPeriod" | "periodFilter" | "timeFilter" | "customRange"
+  "filteredByPeriod" | "periodFilter" | "timeFilter" | "encounterFilter" | "customRange"
 >;
 
 const RANK_STYLES = [
@@ -259,9 +259,10 @@ export function SentimentLeaderboardDashboard({
   filteredByPeriod,
   periodFilter,
   timeFilter,
+  encounterFilter,
   customRange,
 }: Props) {
-  const periodLabel = periodDescription(periodFilter, timeFilter, customRange);
+  const periodLabel = periodDescription(periodFilter, timeFilter, customRange, encounterFilter);
   const [showAllDepartments, setShowAllDepartments] = useState(false);
   const [showAllServices, setShowAllServices] = useState(false);
 

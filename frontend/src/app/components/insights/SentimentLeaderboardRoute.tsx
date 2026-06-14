@@ -9,6 +9,7 @@ export function SentimentLeaderboardRoute() {
       filteredByPeriod={data.filteredByPeriod}
       periodFilter={data.periodFilter}
       timeFilter={data.timeFilter}
+      encounterFilter={data.encounterFilter}
       customRange={data.customRange}
     />
   );
