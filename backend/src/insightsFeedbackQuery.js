@@ -17,6 +17,8 @@ export function buildFeedbackInsightsFilter(query = {}) {
     filter.patientEncounterType = "op";
   } else if (encounter === "ip") {
     filter.patientEncounterType = "ip";
+  } else if (encounter === "op-ip") {
+    filter.patientEncounterType = { $in: ["op", "ip"] };
   } else if (encounter === "name-only") {
     filter.patientEncounterType = { $nin: ["op", "ip"] };
   }
@@ -27,6 +29,6 @@ export function buildFeedbackInsightsFilter(query = {}) {
 export function hasInsightsFilterQuery(query = {}) {
   return (
     (Number.isFinite(Number(query.startMs)) && Number.isFinite(Number(query.endMs))) ||
-    ["op", "ip", "name-only"].includes(String(query.encounter || "").toLowerCase())
+    ["op", "ip", "op-ip", "name-only"].includes(String(query.encounter || "").toLowerCase())
   );
 }

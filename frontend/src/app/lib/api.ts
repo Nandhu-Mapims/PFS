@@ -413,7 +413,7 @@ export async function lookupPatientRecords(payload: {
 export type FeedbackInsightsQuery = {
   startMs: number;
   endMs: number;
-  encounter?: "all" | "op" | "ip" | "name-only";
+  encounter?: "all" | "op" | "ip" | "op-ip" | "name-only";
 };
 
 function feedbackQueryString(query?: FeedbackInsightsQuery): string {

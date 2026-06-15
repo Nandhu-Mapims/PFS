@@ -6,6 +6,7 @@ import {
   encounterTypeLabel,
   matchesEncounterType,
   type EncounterTypeFilter,
+  type PeriodGranularity,
 } from "../../lib/insightsFilters";
 import {
   buildPatientFeedbackGroups,
@@ -14,9 +15,9 @@ import {
 import { getAiSentimentBucket } from "../../lib/sentiment";
 import { FeedbackDetailDialog } from "../FeedbackDetailDialog";
 import {
-  KPI_LABELS,
-  type InsightsKpiKind,
-  rowsForKpi,
+  rowsForSubmissionSelection,
+  titleForSubmissionSelection,
+  type SubmissionSelection,
   visitTypeLabel,
 } from "./insightsKpiDetail";
 import {
@@ -28,10 +29,11 @@ import {
 } from "../ui/dialog";
 
 type Props = {
-  kind: InsightsKpiKind | null;
+  selection: SubmissionSelection | null;
   onClose: () => void;
   submissionRows: FeedbackItem[];
   periodLabel: string;
+  periodFilter: PeriodGranularity;
   /** Matches the dashboard Patient type filter — dialog inherits this instead of defaulting to "all". */
   dashboardEncounterFilter: EncounterTypeFilter;
 };
@@ -85,7 +87,7 @@ function filterGroups(
   );
 }
 
-const ENCOUNTER_OPTIONS: EncounterTypeFilter[] = ["all", "op", "ip", "name-only"];
+const ENCOUNTER_OPTIONS: EncounterTypeFilter[] = ["all", "op-ip", "op", "ip", "name-only"];
 
 function groupComments(group: PatientFeedbackGroup): string {
   const parts = [...new Set(group.items.map((i) => i.comments?.trim()).filter(Boolean))];
@@ -93,10 +95,11 @@ function groupComments(group: PatientFeedbackGroup): string {
 }
 
 export function InsightsKpiDetailDialog({
-  kind,
+  selection,
   onClose,
   submissionRows,
   periodLabel,
+  periodFilter,
   dashboardEncounterFilter,
 }: Props) {
   const [encounter, setEncounter] = useState<EncounterTypeFilter>(dashboardEncounterFilter);
@@ -109,20 +112,21 @@ export function InsightsKpiDetailDialog({
     setDetailOpen(true);
   };
 
-  const open = kind !== null;
-  const label = kind ? KPI_LABELS[kind] : "";
+  const open = selection !== null;
+  const kind = selection?.source === "kpi" ? selection.kind : null;
+  const label = selection ? titleForSubmissionSelection(selection, periodFilter) : "";
   const showEncounterFilters = dashboardEncounterFilter === "all";
 
   useEffect(() => {
-    if (kind !== null) {
+    if (selection !== null) {
       setEncounter(dashboardEncounterFilter);
       setSearch("");
     }
-  }, [kind, dashboardEncounterFilter]);
+  }, [selection, dashboardEncounterFilter]);
 
   const baseRows = useMemo(
-    () => (kind ? rowsForKpi(kind, submissionRows) : []),
-    [kind, submissionRows]
+    () => (selection ? rowsForSubmissionSelection(submissionRows, selection, periodFilter) : []),
+    [selection, submissionRows, periodFilter]
   );
 
   const filteredRows = useMemo(() => {
@@ -146,14 +150,14 @@ export function InsightsKpiDetailDialog({
   };
 
   const handleDownload = () => {
-    if (!kind) return;
+    if (!selection) return;
     const stamp = new Date().toISOString().slice(0, 10);
     const safePeriod = periodLabel.replace(/[^\w\s-]/g, "").replace(/\s+/g, "-").slice(0, 40);
-    const safeKind = kind.replace(/[^\w-]/g, "");
+    const safeTitle = label.replace(/[^\w\s-]/g, "").replace(/\s+/g, "-").slice(0, 40);
 
     if (kind === "patients") {
       downloadExcel(
-        `patients-${safeKind}-${safePeriod}-${stamp}.xlsx`,
+        `patients-${safeTitle}-${safePeriod}-${stamp}.xlsx`,
         [
           "Patient name",
           "UHID",
@@ -187,7 +191,7 @@ export function InsightsKpiDetailDialog({
     }
 
     downloadExcel(
-      `${safeKind}-${safePeriod}-${stamp}.xlsx`,
+      `submissions-${safeTitle}-${safePeriod}-${stamp}.xlsx`,
       [
         "Patient name",
         "UHID",

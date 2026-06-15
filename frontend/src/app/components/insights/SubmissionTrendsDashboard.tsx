@@ -36,17 +36,29 @@ import {
   periodDescription,
   timeSlotLabel,
 } from "../../lib/insightsFilters";
-import { buildDeptServiceSentimentChartData } from "../../lib/deptServiceChart";
+import { buildDeptServiceSentimentChartData, type DeptServiceChartRow } from "../../lib/deptServiceChart";
 import { countPatientFeedbackGroups } from "../../lib/patientFeedbackGroups";
 import { getAiSentimentBucket } from "../../lib/sentiment";
 import { Badge } from "../ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { InsightsKpiCard } from "./InsightsKpiCard";
 import { InsightsKpiDetailDialog } from "./InsightsKpiDetailDialog";
-import { matchesFollowUp, type InsightsKpiKind } from "./insightsKpiDetail";
+import { matchesFollowUp, THEME_RULES, type InsightsKpiKind, type SubmissionChartFilter, type SubmissionSelection } from "./insightsKpiDetail";
 import type { InsightsDataState } from "./useInsightsData";
 
 const DEPT_COLORS = ["#2A6FDB", "#2FBF71", "#8B5CF6", "#F4A261", "#E5533D", "#6B7280"];
+const CHART_CARD = "rounded-2xl shadow-sm border border-gray-100 transition-shadow hover:shadow-md hover:border-blue-200";
+
+type VolumePoint = { key: string; label: string; count: number };
+type SentimentPoint = {
+  key: string;
+  name: string;
+  positive: number;
+  neutral: number;
+  negative: number;
+};
+type HourPoint = { label: string; hour: number; count: number };
+type PiePoint = { name: string; value: number; color: string };
 
 function serviceFromFeedback(item: FeedbackItem): string {
   const fromIssue = item.feedbackIssues?.find((i) =>
@@ -74,7 +86,10 @@ export function SubmissionTrendsDashboard({
   filterWindow,
 }: Props) {
   const [openRouterConfigured, setOpenRouterConfigured] = useState<boolean | null>(null);
-  const [kpiDialog, setKpiDialog] = useState<InsightsKpiKind | null>(null);
+  const [selection, setSelection] = useState<SubmissionSelection | null>(null);
+
+  const openKpi = (kind: InsightsKpiKind) => setSelection({ source: "kpi", kind });
+  const openChart = (filter: SubmissionChartFilter) => setSelection({ source: "chart", filter });
 
   useEffect(() => {
     void getApiHealth().then((health) => {
@@ -113,6 +128,7 @@ export function SubmissionTrendsDashboard({
     () =>
       buildSentimentBuckets(submissionRows, periodFilter, filterWindow, getAiSentimentBucket).map(
         (row) => ({
+          key: row.key,
           name: row.label,
           positive: row.positive,
           neutral: row.neutral,
@@ -172,21 +188,14 @@ export function SubmissionTrendsDashboard({
   }, [submissionRows]);
 
   const categoryData = useMemo(() => {
-    const rules = [
-      { category: "Wait Time", terms: ["wait", "delay", "long time", "queue"] },
-      { category: "Staff Behavior", terms: ["staff", "rude", "nurse", "attitude"] },
-      { category: "Cleanliness", terms: ["clean", "dirty", "hygiene"] },
-      { category: "Treatment Quality", terms: ["doctor", "treatment", "care", "diagnosis"] },
-      { category: "Billing", terms: ["bill", "charge", "payment", "cost"] },
-    ];
-    const counts: Record<string, number> = Object.fromEntries(rules.map((r) => [r.category, 0]));
+    const counts: Record<string, number> = Object.fromEntries(THEME_RULES.map((r) => [r.category, 0]));
     for (const row of submissionRows) {
       const text = (row.comments || "").toLowerCase();
-      for (const rule of rules) {
+      for (const rule of THEME_RULES) {
         if (rule.terms.some((term) => text.includes(term))) counts[rule.category] += 1;
       }
     }
-    return rules.map((r) => ({ category: r.category, count: counts[r.category] || 0 }));
+    return THEME_RULES.map((r) => ({ category: r.category, count: counts[r.category] || 0 }));
   }, [submissionRows]);
 
   const topIssues = [...categoryData].sort((a, b) => b.count - a.count).slice(0, 3);
@@ -251,6 +260,35 @@ export function SubmissionTrendsDashboard({
 
   const deptServiceChartHeight = Math.max(360, deptServiceChartData.length * 38);
 
+  const openPeriod = (point: VolumePoint) => {
+    if (!point.count) return;
+    openChart({ type: "period", key: point.key });
+  };
+
+  const openPeriodSentiment = (
+    point: SentimentPoint,
+    sentiment: "positive" | "neutral" | "negative",
+    count: number
+  ) => {
+    if (!count) return;
+    openChart({ type: "period-sentiment", key: point.key, sentiment });
+  };
+
+  const openDeptService = (
+    row: DeptServiceChartRow,
+    sentiment: "positive" | "negative",
+    count: number
+  ) => {
+    if (!count) return;
+    openChart({
+      type: "dept-service",
+      department: row.department,
+      service: row.service,
+      isDepartment: row.isDepartment,
+      sentiment,
+    });
+  };
+
   return (
     <div className="space-y-8">
       {pendingAiSentimentCount > 0 && (
@@ -263,7 +301,7 @@ export function SubmissionTrendsDashboard({
 
       <p className="text-sm text-muted-foreground">
         <span className="font-medium text-gray-700">{periodLabel}</span> — submissions count every
-        row (split tickets included). Patients are grouped separately (one visit = one patient).
+        row (split tickets included). Click any metric, chart, or action item to view details.
       </p>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
@@ -272,14 +310,14 @@ export function SubmissionTrendsDashboard({
           value={filteredTotal}
           sub="All rows · click to view"
           icon={<TrendingUp size={16} className="text-blue-600" />}
-          onClick={() => setKpiDialog("submissions")}
+          onClick={() => openKpi("submissions")}
         />
         <InsightsKpiCard
           label="Patients"
           value={patientCount}
           sub={`Unique patients · click to view`}
           icon={<Users size={16} className="text-indigo-600" />}
-          onClick={() => setKpiDialog("patients")}
+          onClick={() => openKpi("patients")}
         />
         <InsightsKpiCard
           label="Positive (AI)"
@@ -287,14 +325,14 @@ export function SubmissionTrendsDashboard({
           sub={`${pct(positiveCount)} · click to view`}
           valueClass="text-emerald-600"
           icon={<ThumbsUp size={16} className="text-emerald-600" />}
-          onClick={() => setKpiDialog("positive")}
+          onClick={() => openKpi("positive")}
         />
         <InsightsKpiCard
           label="Neutral (AI)"
           value={neutralCount}
           sub={`${pct(neutralCount)} · click to view`}
           valueClass="text-amber-600"
-          onClick={() => setKpiDialog("neutral")}
+          onClick={() => openKpi("neutral")}
         />
         <InsightsKpiCard
           label="Negative (AI)"
@@ -302,7 +340,7 @@ export function SubmissionTrendsDashboard({
           sub={`${pct(negativeCount)} · click to view`}
           valueClass="text-red-600"
           icon={<ThumbsDown size={16} className="text-red-600" />}
-          onClick={() => setKpiDialog("negative")}
+          onClick={() => openKpi("negative")}
         />
         <InsightsKpiCard
           label="Needs follow-up"
@@ -310,12 +348,13 @@ export function SubmissionTrendsDashboard({
           sub="Unresolved · click to view"
           valueClass="text-red-600"
           icon={<MessageSquareWarning size={16} className="text-red-600" />}
-          onClick={() => setKpiDialog("follow-up")}
+          onClick={() => openKpi("follow-up")}
         />
         <InsightsKpiCard
           label="Avg rating"
           value={avgRating}
-          sub="Star scale 1–5"
+          sub="All submissions · click to view"
+          onClick={() => openKpi("submissions")}
         />
       </div>
 
@@ -333,11 +372,15 @@ export function SubmissionTrendsDashboard({
               title="Complaint themes"
               icon={<AlertTriangle size={16} className="text-red-600" />}
               items={topIssues.map((i) => ({ label: i.category, value: i.count }))}
+              onItemClick={(label) => openChart({ type: "theme", category: label })}
             />
             <ActionList
               title="Departments needing attention"
               icon={<Building2 size={16} className="text-amber-600" />}
               items={highComplaintDepartments.map((d) => ({ label: d.name, value: d.value }))}
+              onItemClick={(name) =>
+                openChart({ type: "visit-department", name, sentiment: "negative" })
+              }
             />
             <ActionList
               title="Services needing attention"
@@ -346,6 +389,7 @@ export function SubmissionTrendsDashboard({
                 label: s.name,
                 value: `${s.value} neg.`,
               }))}
+              onItemClick={(name) => openChart({ type: "service", name, sentiment: "negative" })}
             />
             <div className="rounded-xl border border-white bg-white/80 p-4 shadow-sm">
               <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-800">
@@ -353,9 +397,15 @@ export function SubmissionTrendsDashboard({
                 Strongest departments & services
               </h4>
               <p className="text-xs font-medium text-gray-500 mb-1">Departments</p>
-              <RatioList items={topPerformingDepts} />
+              <RatioList
+                items={topPerformingDepts}
+                onItemClick={(name) => openChart({ type: "visit-department", name, sentiment: "positive" })}
+              />
               <p className="text-xs font-medium text-gray-500 mb-1 mt-3">Services</p>
-              <RatioList items={topPerformingServices} />
+              <RatioList
+                items={topPerformingServices}
+                onItemClick={(name) => openChart({ type: "service", name, sentiment: "positive" })}
+              />
             </div>
           </div>
         </CardContent>
@@ -366,12 +416,11 @@ export function SubmissionTrendsDashboard({
           <BarChart3 size={20} className="text-[#2A6FDB]" />
           Department & service sentiment
         </h2>
-        <Card className="rounded-2xl shadow-sm border border-gray-100">
+        <Card className={CHART_CARD}>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">Department & service — positive vs negative</CardTitle>
             <CardDescription>
-              Bold rows = department AI assigned to handle the complaint. Indented rows = TMS
-              service name, or a short issue summary when no catalog service matched.
+              Click a bar segment to view submissions. Bold rows = department; indented = service.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -391,13 +440,34 @@ export function SubmissionTrendsDashboard({
                   <YAxis type="category" dataKey="label" width={200} tick={{ fontSize: 11 }} />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="positive" fill="#10b981" name="Positive" stackId="mix" />
+                  <Bar
+                    dataKey="positive"
+                    fill="#10b981"
+                    name="Positive"
+                    stackId="mix"
+                    cursor="pointer"
+                    onClick={(d) =>
+                      openDeptService(
+                        d.payload as DeptServiceChartRow,
+                        "positive",
+                        Number(d.value) || 0
+                      )
+                    }
+                  />
                   <Bar
                     dataKey="negative"
                     fill="#ef4444"
                     name="Negative"
                     stackId="mix"
                     radius={[0, 6, 6, 0]}
+                    cursor="pointer"
+                    onClick={(d) =>
+                      openDeptService(
+                        d.payload as DeptServiceChartRow,
+                        "negative",
+                        Number(d.value) || 0
+                      )
+                    }
                   />
                 </BarChart>
               </ResponsiveContainer>
@@ -417,15 +487,16 @@ export function SubmissionTrendsDashboard({
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendLineCard
             title="Submission volume"
-            description={`One point per ${periodFilter === "weekly" ? "week" : periodFilter === "yearly" ? "month" : "day"} · ${periodLabel}`}
+            description={`One point per ${periodFilter === "weekly" ? "week" : periodFilter === "yearly" ? "month" : "day"} · ${periodLabel} · click a point`}
             empty={volumeChartData.length === 0}
             emptyText="No submissions for this period."
             data={volumeChartData}
+            onPointClick={openPeriod}
           />
-          <Card className="rounded-2xl shadow-sm border border-gray-100">
+          <Card className={CHART_CARD}>
             <CardHeader className="pb-2">
               <CardTitle className="text-lg">Sentiment trend</CardTitle>
-              <CardDescription>Positive, neutral, negative per period</CardDescription>
+              <CardDescription>Click a bar segment to view submissions</CardDescription>
             </CardHeader>
             <CardContent>
               {sentimentChartData.length === 0 ? (
@@ -438,9 +509,49 @@ export function SubmissionTrendsDashboard({
                     <YAxis allowDecimals={false} />
                     <Tooltip />
                     <Legend />
-                    <Bar dataKey="positive" fill="#10b981" name="Positive" stackId="t" />
-                    <Bar dataKey="neutral" fill="#f59e0b" name="Neutral" stackId="t" />
-                    <Bar dataKey="negative" fill="#ef4444" name="Negative" stackId="t" radius={[6, 6, 0, 0]} />
+                    <Bar
+                      dataKey="positive"
+                      fill="#10b981"
+                      name="Positive"
+                      stackId="t"
+                      cursor="pointer"
+                      onClick={(d) =>
+                        openPeriodSentiment(
+                          d.payload as SentimentPoint,
+                          "positive",
+                          (d.payload as SentimentPoint).positive
+                        )
+                      }
+                    />
+                    <Bar
+                      dataKey="neutral"
+                      fill="#f59e0b"
+                      name="Neutral"
+                      stackId="t"
+                      cursor="pointer"
+                      onClick={(d) =>
+                        openPeriodSentiment(
+                          d.payload as SentimentPoint,
+                          "neutral",
+                          (d.payload as SentimentPoint).neutral
+                        )
+                      }
+                    />
+                    <Bar
+                      dataKey="negative"
+                      fill="#ef4444"
+                      name="Negative"
+                      stackId="t"
+                      radius={[6, 6, 0, 0]}
+                      cursor="pointer"
+                      onClick={(d) =>
+                        openPeriodSentiment(
+                          d.payload as SentimentPoint,
+                          "negative",
+                          (d.payload as SentimentPoint).negative
+                        )
+                      }
+                    />
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -448,10 +559,12 @@ export function SubmissionTrendsDashboard({
           </Card>
         </div>
         <div className="grid gap-6 lg:grid-cols-2">
-          <Card className="rounded-2xl shadow-sm border border-gray-100">
+          <Card className={CHART_CARD}>
             <CardHeader className="pb-2">
               <CardTitle className="text-lg">By time of day</CardTitle>
-              <CardDescription>When patients submitted · {periodLabel}</CardDescription>
+              <CardDescription>
+                When patients submitted · {periodLabel} · click a bar
+              </CardDescription>
             </CardHeader>
             <CardContent>
               {filteredTotal === 0 ? (
@@ -463,17 +576,27 @@ export function SubmissionTrendsDashboard({
                     <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={2} />
                     <YAxis allowDecimals={false} />
                     <Tooltip />
-                    <Bar dataKey="count" fill="#8B5CF6" name="Submissions" radius={[4, 4, 0, 0]} />
+                    <Bar
+                      dataKey="count"
+                      fill="#8B5CF6"
+                      name="Submissions"
+                      radius={[4, 4, 0, 0]}
+                      cursor="pointer"
+                      onClick={(d) => {
+                        const point = d.payload as HourPoint;
+                        if (point?.count) openChart({ type: "hour", hour: point.hour });
+                      }}
+                    />
                   </BarChart>
                 </ResponsiveContainer>
               )}
             </CardContent>
           </Card>
-          <Card className="rounded-2xl shadow-sm border border-gray-100">
+          <Card className={CHART_CARD}>
             <CardHeader className="pb-2">
               <CardTitle className="text-lg">Volume by visit department (EMR)</CardTitle>
               <CardDescription>
-                Where the patient was seen (UHID lookup) · {periodLabel}
+                Where the patient was seen · {periodLabel} · click a slice
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -494,6 +617,10 @@ export function SubmissionTrendsDashboard({
                       }
                       outerRadius={90}
                       dataKey="value"
+                      cursor="pointer"
+                      onClick={(d) => {
+                        if (d?.name) openChart({ type: "visit-department", name: String(d.name) });
+                      }}
                     >
                       {departmentVolume.map((entry) => (
                         <Cell key={entry.name} fill={entry.color} />
@@ -505,11 +632,11 @@ export function SubmissionTrendsDashboard({
               )}
             </CardContent>
           </Card>
-          <Card className="rounded-2xl shadow-sm border border-gray-100">
+          <Card className={CHART_CARD}>
             <CardHeader className="pb-2">
               <CardTitle className="text-lg">Complaints routed by AI</CardTitle>
               <CardDescription>
-                Department assigned per issue (e.g. House Keeping for bathroom) · {periodLabel}
+                Department assigned per issue · {periodLabel} · click a slice
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -530,6 +657,10 @@ export function SubmissionTrendsDashboard({
                       }
                       outerRadius={90}
                       dataKey="value"
+                      cursor="pointer"
+                      onClick={(d) => {
+                        if (d?.name) openChart({ type: "routing-department", name: String(d.name) });
+                      }}
                     >
                       {routingDepartmentVolume.map((entry) => (
                         <Cell key={entry.name} fill={entry.color} />
@@ -546,10 +677,10 @@ export function SubmissionTrendsDashboard({
 
       <section className="space-y-4">
         <h2 className="text-lg font-semibold text-gray-900">Complaint themes</h2>
-        <Card className="rounded-2xl shadow-sm border border-gray-100">
+        <Card className={CHART_CARD}>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">Categories in comments</CardTitle>
-            <CardDescription>Keyword themes in patient feedback text</CardDescription>
+            <CardDescription>Keyword themes · click a bar to view</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
@@ -558,7 +689,16 @@ export function SubmissionTrendsDashboard({
                 <XAxis type="number" allowDecimals={false} />
                 <YAxis dataKey="category" type="category" width={130} tick={{ fontSize: 11 }} />
                 <Tooltip />
-                <Bar dataKey="count" fill="#2563eb" radius={[0, 8, 8, 0]} />
+                <Bar
+                  dataKey="count"
+                  fill="#2563eb"
+                  radius={[0, 8, 8, 0]}
+                  cursor="pointer"
+                  onClick={(d) => {
+                    const category = String((d.payload as { category: string })?.category || "");
+                    if (category) openChart({ type: "theme", category });
+                  }}
+                />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -566,10 +706,11 @@ export function SubmissionTrendsDashboard({
       </section>
 
       <InsightsKpiDetailDialog
-        kind={kpiDialog}
-        onClose={() => setKpiDialog(null)}
+        selection={selection}
+        onClose={() => setSelection(null)}
         submissionRows={submissionRows}
         periodLabel={periodLabel}
+        periodFilter={periodFilter}
         dashboardEncounterFilter={encounterFilter}
       />
     </div>
@@ -582,15 +723,17 @@ function TrendLineCard({
   empty,
   emptyText,
   data,
+  onPointClick,
 }: {
   title: string;
   description: string;
   empty: boolean;
   emptyText: string;
-  data: Array<{ label: string; count: number }>;
+  data: VolumePoint[];
+  onPointClick?: (point: VolumePoint) => void;
 }) {
   return (
-    <Card className="rounded-2xl shadow-sm border border-gray-100">
+    <Card className={CHART_CARD}>
       <CardHeader className="pb-2">
         <CardTitle className="text-lg">{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
@@ -610,8 +753,32 @@ function TrendLineCard({
                 dataKey="count"
                 stroke="#2563eb"
                 strokeWidth={3}
-                dot={{ fill: "#2563eb", r: 4 }}
                 name="Submissions"
+                dot={(props) => {
+                  const { cx, cy, payload } = props as {
+                    cx?: number;
+                    cy?: number;
+                    payload?: VolumePoint;
+                  };
+                  if (cx == null || cy == null || !payload) return null;
+                  return (
+                    <circle
+                      cx={cx}
+                      cy={cy}
+                      r={payload.count > 0 ? 5 : 3}
+                      fill="#2563eb"
+                      style={{ cursor: payload.count > 0 ? "pointer" : "default" }}
+                      onClick={() => onPointClick?.(payload)}
+                    />
+                  );
+                }}
+                activeDot={{
+                  r: 7,
+                  onClick: (_e, payload) => {
+                    const point = (payload as { payload?: VolumePoint })?.payload;
+                    if (point) onPointClick?.(point);
+                  },
+                }}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -625,10 +792,12 @@ function ActionList({
   title,
   icon,
   items,
+  onItemClick,
 }: {
   title: string;
   icon: ReactNode;
   items: Array<{ label: string; value: string | number }>;
+  onItemClick?: (label: string) => void;
 }) {
   return (
     <div className="rounded-xl border border-white bg-white/80 p-4 shadow-sm">
@@ -638,9 +807,15 @@ function ActionList({
       </h4>
       <ul className="space-y-2">
         {items.map((item) => (
-          <li key={item.label} className="flex justify-between text-sm gap-2">
-            <span className="truncate">{item.label}</span>
-            <Badge variant="outline">{item.value}</Badge>
+          <li key={item.label}>
+            <button
+              type="button"
+              onClick={() => onItemClick?.(item.label)}
+              className="flex w-full justify-between text-sm gap-2 rounded-lg px-1 py-0.5 text-left hover:bg-amber-50/80 transition-colors"
+            >
+              <span className="truncate">{item.label}</span>
+              <Badge variant="outline">{item.value}</Badge>
+            </button>
           </li>
         ))}
         {items.length === 0 && <li className="text-muted-foreground text-sm">—</li>}
@@ -649,13 +824,25 @@ function ActionList({
   );
 }
 
-function RatioList({ items }: { items: Array<{ name: string; ratio: number }> }) {
+function RatioList({
+  items,
+  onItemClick,
+}: {
+  items: Array<{ name: string; ratio: number }>;
+  onItemClick?: (name: string) => void;
+}) {
   return (
     <ul className="space-y-1.5">
       {items.map((item) => (
-        <li key={item.name} className="flex justify-between text-sm gap-2">
-          <span className="truncate">{item.name}</span>
-          <span className="font-semibold text-emerald-600 shrink-0">{item.ratio}%</span>
+        <li key={item.name}>
+          <button
+            type="button"
+            onClick={() => onItemClick?.(item.name)}
+            className="flex w-full justify-between text-sm gap-2 rounded px-1 py-0.5 text-left hover:bg-emerald-50/80 transition-colors"
+          >
+            <span className="truncate">{item.name}</span>
+            <span className="font-semibold text-emerald-600 shrink-0">{item.ratio}%</span>
+          </button>
         </li>
       ))}
       {items.length === 0 && <li className="text-muted-foreground text-sm">—</li>}

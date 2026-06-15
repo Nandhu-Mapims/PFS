@@ -158,3 +158,19 @@ export function buildDeptServiceSentimentChartData(
 
   return rows;
 }
+
+/** Whether a feedback row contributes to a dept/service chart row for the given sentiment. */
+export function feedbackMatchesDeptServiceRow(
+  item: FeedbackItem,
+  row: Pick<DeptServiceChartRow, "department" | "service" | "isDepartment">,
+  sentiment: "positive" | "negative"
+): boolean {
+  if (item.isSplitChild) return false;
+  for (const slice of slicesFromFeedback(item)) {
+    if (slice.sentiment !== sentiment) continue;
+    if (slice.department !== row.department) continue;
+    if (row.isDepartment) return true;
+    if (slice.service === row.service) return true;
+  }
+  return false;
+}

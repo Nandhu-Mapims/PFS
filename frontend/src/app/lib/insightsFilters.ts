@@ -1,7 +1,7 @@
 export type PeriodGranularity = "daily" | "weekly" | "yearly";
 export type TimeOfDaySlot = "all" | "morning" | "afternoon" | "evening" | "night";
-/** OP/IP from UHID lookup; name-only = no UHID / no visit type. */
-export type EncounterTypeFilter = "all" | "op" | "ip" | "name-only";
+/** OP/IP from UHID lookup; name-only = no UHID / no visit type; op-ip = both visit types. */
+export type EncounterTypeFilter = "all" | "op" | "ip" | "op-ip" | "name-only";
 
 export function feedbackEncounterKind(
   encounterType: string | null | undefined
@@ -87,6 +87,7 @@ export function timeSlotLabel(slot: TimeOfDaySlot): string {
 export function encounterTypeLabel(filter: EncounterTypeFilter): string {
   if (filter === "op") return "OP only";
   if (filter === "ip") return "IP only";
+  if (filter === "op-ip") return "OP + IP";
   if (filter === "name-only") return "Name-only";
   return "All patient types";
 }
@@ -98,6 +99,7 @@ export function matchesEncounterType(
   if (filter === "all") return true;
   const kind = feedbackEncounterKind(encounterType);
   if (filter === "name-only") return kind === "other";
+  if (filter === "op-ip") return kind === "op" || kind === "ip";
   return kind === filter;
 }
 
