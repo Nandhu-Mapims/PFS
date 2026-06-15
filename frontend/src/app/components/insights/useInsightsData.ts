@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  getFeedback,
-  getFeedbackAnalytics,
-  type FeedbackAnalytics,
-  type FeedbackItem,
-} from "../../lib/api";
+import { getFeedback, type FeedbackItem } from "../../lib/api";
 import {
   feedbackRowsWithTicket,
   filterItemsInWindow,
@@ -17,7 +12,6 @@ import {
 
 export function useInsightsData() {
   const [items, setItems] = useState<FeedbackItem[]>([]);
-  const [analytics, setAnalytics] = useState<FeedbackAnalytics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [periodFilter, setPeriodFilter] = useState<PeriodGranularity>("weekly");
@@ -25,27 +19,6 @@ export function useInsightsData() {
   const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-
-  const loadData = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      const [feedbackRows, analyticsData] = await Promise.all([
-        getFeedback(),
-        getFeedbackAnalytics(),
-      ]);
-      setItems(feedbackRows);
-      setAnalytics(analyticsData);
-    } catch {
-      setError("Failed to load insights. Check that the API and database are running.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadData();
-  }, [loadData]);
 
   const customRange = useMemo(
     () => ({ from: customFrom, to: customTo }),
@@ -56,6 +29,27 @@ export function useInsightsData() {
     () => resolveFilterWindow(periodFilter, customRange),
     [periodFilter, customFrom, customTo, customRange]
   );
+
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const feedbackRows = await getFeedback({
+        startMs: filterWindow.start.getTime(),
+        endMs: filterWindow.end.getTime(),
+        encounter: encounterFilter,
+      });
+      setItems(feedbackRows);
+    } catch {
+      setError("Failed to load insights. Check that the API and database are running.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [filterWindow, encounterFilter]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const filteredByPeriod = useMemo(
     () => filterItemsInWindow(items, filterWindow, timeFilter, encounterFilter),
@@ -80,7 +74,6 @@ export function useInsightsData() {
   };
 
   return {
-    analytics,
     isLoading,
     error,
     loadData,

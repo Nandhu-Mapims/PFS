@@ -410,8 +410,26 @@ export async function lookupPatientRecords(payload: {
   return body as { frmDate: string; toDate: string; matches: PatientLookupMatch[] };
 }
 
-export async function getFeedback(): Promise<FeedbackItem[]> {
-  const response = await fetch(`${API_BASE_URL}/api/feedback`, {
+export type FeedbackInsightsQuery = {
+  startMs: number;
+  endMs: number;
+  encounter?: "all" | "op" | "ip" | "name-only";
+};
+
+function feedbackQueryString(query?: FeedbackInsightsQuery): string {
+  if (!query) return "";
+  const params = new URLSearchParams();
+  params.set("startMs", String(query.startMs));
+  params.set("endMs", String(query.endMs));
+  if (query.encounter && query.encounter !== "all") {
+    params.set("encounter", query.encounter);
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export async function getFeedback(query?: FeedbackInsightsQuery): Promise<FeedbackItem[]> {
+  const response = await fetch(`${API_BASE_URL}/api/feedback${feedbackQueryString(query)}`, {
     cache: "no-store",
   });
 

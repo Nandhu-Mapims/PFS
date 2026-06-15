@@ -126,6 +126,9 @@ const feedbackSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+feedbackSchema.index({ createdAt: -1 });
+feedbackSchema.index({ createdAt: -1, patientEncounterType: 1 });
+
 const botQuestionSchema = new mongoose.Schema(
   {
     order: { type: Number, required: true },

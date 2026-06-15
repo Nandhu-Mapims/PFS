@@ -42,6 +42,8 @@ import { getAiSentimentBucket } from "../../lib/sentiment";
 import { Badge } from "../ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { InsightsKpiCard } from "./InsightsKpiCard";
+import { InsightsKpiDetailDialog } from "./InsightsKpiDetailDialog";
+import { matchesFollowUp, type InsightsKpiKind } from "./insightsKpiDetail";
 import type { InsightsDataState } from "./useInsightsData";
 
 const DEPT_COLORS = ["#2A6FDB", "#2FBF71", "#8B5CF6", "#F4A261", "#E5533D", "#6B7280"];
@@ -72,6 +74,7 @@ export function SubmissionTrendsDashboard({
   filterWindow,
 }: Props) {
   const [openRouterConfigured, setOpenRouterConfigured] = useState<boolean | null>(null);
+  const [kpiDialog, setKpiDialog] = useState<InsightsKpiKind | null>(null);
 
   useEffect(() => {
     void getApiHealth().then((health) => {
@@ -96,12 +99,7 @@ export function SubmissionTrendsDashboard({
   const neutralCount = submissionRows.filter((i) => getAiSentimentBucket(i) === "neutral").length;
   const negativeCount = submissionRows.filter((i) => getAiSentimentBucket(i) === "negative").length;
   const pendingAiSentimentCount = submissionRows.filter((i) => getAiSentimentBucket(i) === null).length;
-  const criticalCount = submissionRows.filter((i) => {
-    if (i.status === "Resolved") return false;
-    if (i.aiUrgency === "high" || i.aiSentiment === "negative") return true;
-    if (!i.aiAnalyzedAt && (i.rating ?? 0) <= 2) return true;
-    return false;
-  }).length;
+  const criticalCount = submissionRows.filter(matchesFollowUp).length;
 
   const pct = (value: number) =>
     filteredTotal ? `${((value / filteredTotal) * 100).toFixed(1)}% of filtered` : "0%";
@@ -272,41 +270,47 @@ export function SubmissionTrendsDashboard({
         <InsightsKpiCard
           label="Submissions"
           value={filteredTotal}
-          sub="All rows incl. split tickets"
+          sub="All rows · click to view"
           icon={<TrendingUp size={16} className="text-blue-600" />}
+          onClick={() => setKpiDialog("submissions")}
         />
         <InsightsKpiCard
           label="Patients"
           value={patientCount}
-          sub={`Unique patients · ${filteredTotal} submission rows`}
+          sub={`Unique patients · click to view`}
           icon={<Users size={16} className="text-indigo-600" />}
+          onClick={() => setKpiDialog("patients")}
         />
         <InsightsKpiCard
           label="Positive (AI)"
           value={positiveCount}
-          sub={pct(positiveCount)}
+          sub={`${pct(positiveCount)} · click to view`}
           valueClass="text-emerald-600"
           icon={<ThumbsUp size={16} className="text-emerald-600" />}
+          onClick={() => setKpiDialog("positive")}
         />
         <InsightsKpiCard
           label="Neutral (AI)"
           value={neutralCount}
-          sub={pct(neutralCount)}
+          sub={`${pct(neutralCount)} · click to view`}
           valueClass="text-amber-600"
+          onClick={() => setKpiDialog("neutral")}
         />
         <InsightsKpiCard
           label="Negative (AI)"
           value={negativeCount}
-          sub={pct(negativeCount)}
+          sub={`${pct(negativeCount)} · click to view`}
           valueClass="text-red-600"
           icon={<ThumbsDown size={16} className="text-red-600" />}
+          onClick={() => setKpiDialog("negative")}
         />
         <InsightsKpiCard
           label="Needs follow-up"
           value={criticalCount}
-          sub="Unresolved negative / low rating"
+          sub="Unresolved · click to view"
           valueClass="text-red-600"
           icon={<MessageSquareWarning size={16} className="text-red-600" />}
+          onClick={() => setKpiDialog("follow-up")}
         />
         <InsightsKpiCard
           label="Avg rating"
@@ -560,6 +564,14 @@ export function SubmissionTrendsDashboard({
           </CardContent>
         </Card>
       </section>
+
+      <InsightsKpiDetailDialog
+        kind={kpiDialog}
+        onClose={() => setKpiDialog(null)}
+        submissionRows={submissionRows}
+        periodLabel={periodLabel}
+        dashboardEncounterFilter={encounterFilter}
+      />
     </div>
   );
 }

@@ -46,6 +46,7 @@ import {
   saveBotAnswerRecording,
 } from "./botConversation.js";
 import { createPendingAiWorker } from "./pendingAiWorker.js";
+import { buildFeedbackInsightsFilter } from "./insightsFeedbackQuery.js";
 
 let pendingAiWorker = null;
 
@@ -1899,10 +1900,11 @@ app.post("/api/feedback/:id/voice-recording", (req, res, next) => {
   }
 });
 
-app.get("/api/feedback", async (_req, res) => {
+app.get("/api/feedback", async (req, res) => {
   try {
+    const mongoFilter = buildFeedbackInsightsFilter(req.query);
     // Sort by insertion time from ObjectId to avoid skew from synthetic createdAt values.
-    const feedback = await Feedback.find().sort({ _id: -1 }).lean();
+    const feedback = await Feedback.find(mongoFilter).sort({ _id: -1 }).lean();
     return res.json(await enrichFeedbackListWithGroupDonor(feedback));
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch feedback" });
