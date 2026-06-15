@@ -1,0 +1,7 @@
+# Local npm dev: expose MongoDB on the host so backend/.env can use localhost:27017
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d mongodb
+
+services:
+  mongodb:
+    ports:
+      - "27017:27017"

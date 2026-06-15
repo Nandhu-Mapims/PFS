@@ -29,7 +29,9 @@ import {
   YAxis,
 } from "recharts";
 import { useLocation, useNavigate } from "react-router";
+import * as XLSX from "xlsx";
 import { RecentFeedbackBySentiment } from "./RecentFeedbackBySentiment";
+import { countPatientFeedbackGroups } from "../lib/patientFeedbackGroups";
 
 const ratingLabel: Record<number, string> = {
   1: "Very Poor",
@@ -146,7 +148,14 @@ export function AdminPage() {
     });
   }, []);
 
-  const averageRating = analytics?.totals.averageRating ?? 0;
+  const totalSubmissions = items.length;
+  const patientCount = useMemo(() => countPatientFeedbackGroups(items), [items]);
+  const averageRating = useMemo(() => {
+    if (!items.length) return 0;
+    const parents = items.filter((row) => !row.isSplitChild);
+    const base = parents.length ? parents : items;
+    return Number((base.reduce((sum, row) => sum + row.rating, 0) / base.length).toFixed(1));
+  }, [items]);
 
   const feedbackLink = useMemo(() => {
     const envBase = (
@@ -330,56 +339,33 @@ export function AdminPage() {
   );
   const negativeDepartmentData = analytics?.negativeByDepartment ?? [];
   const trendData = analytics?.submissionsByDay ?? [];
-  function escapeCsv(value: string): string {
-    const normalized = value.replace(/"/g, '""');
-    return `"${normalized}"`;
+  function downloadExcel(rows: FeedbackItem[], fileName: string) {
+    const data = rows.map((item) => ({
+      patientName: item.patientName,
+      UHID: item.patientRegNo?.trim() || "",
+      department: item.department || "",
+      rating: item.rating,
+      status: item.status,
+      aiSentiment: item.aiSentiment || "",
+      source: item.source,
+      comments: item.comments || "",
+      createdAt: new Date(item.createdAt).toISOString(),
+    }));
+    const sheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, "Feedback");
+    XLSX.writeFile(workbook, fileName);
   }
 
-  function downloadCsv(rows: FeedbackItem[], fileName: string) {
-    const header = [
-      "patientName",
-      "department",
-      "rating",
-      "status",
-      "aiSentiment",
-      "source",
-      "comments",
-      "createdAt",
-    ];
-    const lines = rows.map((item) =>
-      [
-        escapeCsv(item.patientName),
-        escapeCsv(item.department || ""),
-        String(item.rating),
-        escapeCsv(item.status),
-        escapeCsv(item.aiSentiment || ""),
-        escapeCsv(item.source),
-        escapeCsv(item.comments || ""),
-        escapeCsv(new Date(item.createdAt).toISOString()),
-      ].join(",")
-    );
-    // Excel sometimes mis-detects UTF-8 CSV encoding and shows garbage (e.g. '@' for Tamil).
-    // Adding UTF-8 BOM + CRLF improves compatibility when users open the CSV directly.
-    const csv = [header.join(","), ...lines].join("\r\n");
-    const bom = "\uFEFF";
-    const blob = new Blob([bom, csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = fileName;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function downloadAllFeedbackCsv() {
+  function downloadAllFeedbackExcel() {
     if (!items.length) return;
-    downloadCsv(items, "feedback-all-data.csv");
+    downloadExcel(items, "feedback-all-data.xlsx");
   }
 
-  function downloadFilteredFeedbackCsv(rows: FeedbackItem[]) {
+  function downloadFilteredFeedbackExcel(rows: FeedbackItem[]) {
     if (!rows.length) return;
     const stamp = new Date().toISOString().slice(0, 10);
-    downloadCsv(rows, `feedback-filtered-${stamp}.csv`);
+    downloadExcel(rows, `feedback-filtered-${stamp}.xlsx`);
   }
 
   return (
@@ -409,10 +395,18 @@ export function AdminPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 sm:gap-4 mb-6">
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#2A6FDB]">
-          <p className="text-gray-600 text-sm mb-1 font-medium">Total Submissions</p>
-          <p className="text-3xl font-bold text-gray-800">{analytics?.totals.all ?? 0}</p>
+          <p className="text-gray-600 text-sm mb-1 font-medium">Submissions (all time)</p>
+          <p className="text-3xl font-bold text-gray-800">{totalSubmissions}</p>
+          <p className="text-xs text-gray-500 mt-1">All rows incl. split tickets</p>
+        </div>
+        <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-indigo-500">
+          <p className="text-gray-600 text-sm mb-1 font-medium">Patients (all time)</p>
+          <p className="text-3xl font-bold text-gray-800">{patientCount}</p>
+          <p className="text-xs text-gray-500 mt-1">
+            Unique patients · from {totalSubmissions} submission rows
+          </p>
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#2FBF71]">
           <p className="text-gray-600 text-sm mb-1 font-medium">Average Rating</p>
@@ -421,13 +415,13 @@ export function AdminPage() {
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#F4A261]">
           <p className="text-gray-600 text-sm mb-1 font-medium">Negative (AI)</p>
           <p className="text-3xl font-bold text-gray-800">
-            {analytics?.totals.negative ?? 0}
+            {items.filter((i) => i.aiSentiment === "negative").length}
           </p>
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#7C3AED]">
           <p className="text-gray-600 text-sm mb-1 font-medium">AI Channel Submissions</p>
           <p className="text-3xl font-bold text-gray-800">
-            {analytics?.totals.aiTickets ?? 0}
+            {items.filter((i) => i.source === "ai").length}
           </p>
         </div>
       </div>
@@ -557,8 +551,8 @@ export function AdminPage() {
         error={error}
         isDeleteMode={isDeleteMode}
         onRefresh={() => void loadData({ silent: true })}
-        onDownloadAll={downloadAllFeedbackCsv}
-        onDownloadRange={downloadFilteredFeedbackCsv}
+        onDownloadAll={downloadAllFeedbackExcel}
+        onDownloadRange={downloadFilteredFeedbackExcel}
         onDeleteItem={isDeleteMode ? (item) => void handleDeleteFeedback(item) : undefined}
       />
     </div>

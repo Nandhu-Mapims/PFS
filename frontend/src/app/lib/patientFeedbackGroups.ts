@@ -137,6 +137,11 @@ export function buildPatientFeedbackGroups(items: FeedbackItem[]): PatientFeedba
   return groups.sort((a, b) => b.representative._id.localeCompare(a.representative._id));
 }
 
+/** Unique patients (grouped by visit/session — split tickets count as one submission). */
+export function countPatientFeedbackGroups(items: FeedbackItem[]): number {
+  return buildPatientFeedbackGroups(items).length;
+}
+
 export function groupHasSplitIssues(group: PatientFeedbackGroup): boolean {
   return overviewSplitIssueRows(group).length > 1;
 }

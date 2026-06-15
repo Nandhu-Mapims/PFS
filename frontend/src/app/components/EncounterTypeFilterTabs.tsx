@@ -4,6 +4,7 @@ const OPTIONS: { id: EncounterTypeFilter; label: string }[] = [
   { id: "all", label: "ALL" },
   { id: "op", label: "OP" },
   { id: "ip", label: "IP" },
+  { id: "name-only", label: "Name-only" },
 ];
 
 type Props = {
@@ -25,7 +26,7 @@ export function EncounterTypeFilterTabs({
         <p className="text-sm font-semibold text-gray-800">Patient type</p>
         {showHint ? (
           <p className="text-xs text-muted-foreground mt-0.5">
-            All = OP + IP + name-only · OP/IP = UHID visit type only
+            All types · OP/IP = UHID visit · Name-only = no UHID
           </p>
         ) : null}
       </div>
@@ -35,7 +36,7 @@ export function EncounterTypeFilterTabs({
             key={opt.id}
             type="button"
             onClick={() => onChange(opt.id)}
-            className={`flex-1 sm:flex-none px-5 py-2 rounded-lg text-sm font-semibold transition-all ${
+            className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
               value === opt.id
                 ? "bg-[#2A6FDB] text-white shadow-sm"
                 : "text-gray-600 hover:bg-white"

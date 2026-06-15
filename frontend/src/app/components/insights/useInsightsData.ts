@@ -6,7 +6,6 @@ import {
   type FeedbackItem,
 } from "../../lib/api";
 import {
-  feedbackRowsForAnalytics,
   feedbackRowsWithTicket,
   filterItemsInWindow,
   resolveFilterWindow,
@@ -63,10 +62,7 @@ export function useInsightsData() {
     [items, filterWindow, timeFilter, encounterFilter]
   );
 
-  const submissionRows = useMemo(
-    () => feedbackRowsForAnalytics(filteredByPeriod),
-    [filteredByPeriod]
-  );
+  const submissionRows = useMemo(() => filteredByPeriod, [filteredByPeriod]);
 
   const ticketRows = useMemo(
     () => feedbackRowsWithTicket(filteredByPeriod),

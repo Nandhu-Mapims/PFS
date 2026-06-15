@@ -101,6 +101,8 @@ export function PatientGroupedFeedbackTable({
     });
   };
 
+  const isGroupOpen = (group: PatientFeedbackGroup) => expanded.has(group.groupKey);
+
   if (!groups.length) {
     return <p className="p-6 text-gray-600">{emptyMessage}</p>;
   }
@@ -110,7 +112,7 @@ export function PatientGroupedFeedbackTable({
       <div className="md:hidden space-y-3 p-2">
         {groups.map((group) => {
           const splitOverview = isOverviewSplitGroup(group, variant);
-          const isOpen = splitOverview || expanded.has(group.groupKey);
+          const isOpen = isGroupOpen(group);
           const multi = splitOverview || group.items.length > 1;
           const sentiment = overviewSentimentForGroup(group, variant);
           return (
@@ -176,7 +178,7 @@ export function PatientGroupedFeedbackTable({
         <tbody className="divide-y divide-gray-100">
           {groups.map((group) => {
             const splitOverview = isOverviewSplitGroup(group, variant);
-            const isOpen = splitOverview || expanded.has(group.groupKey);
+            const isOpen = isGroupOpen(group);
             const multi = splitOverview || group.items.length > 1;
             const sentiment = overviewSentimentForGroup(group, variant);
 

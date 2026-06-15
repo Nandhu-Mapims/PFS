@@ -24,6 +24,7 @@ import {
   ThumbsDown,
   ThumbsUp,
   TrendingUp,
+  Users,
 } from "lucide-react";
 import type { FeedbackItem } from "../../lib/api";
 import { getApiHealth } from "../../lib/api";
@@ -36,6 +37,7 @@ import {
   timeSlotLabel,
 } from "../../lib/insightsFilters";
 import { buildDeptServiceSentimentChartData } from "../../lib/deptServiceChart";
+import { countPatientFeedbackGroups } from "../../lib/patientFeedbackGroups";
 import { getAiSentimentBucket } from "../../lib/sentiment";
 import { Badge } from "../ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
@@ -79,6 +81,10 @@ export function SubmissionTrendsDashboard({
 
   const periodLabel = periodDescription(periodFilter, timeFilter, customRange, encounterFilter);
   const filteredTotal = submissionRows.length;
+  const patientCount = useMemo(
+    () => countPatientFeedbackGroups(submissionRows),
+    [submissionRows]
+  );
   const avgRating =
     filteredTotal > 0
       ? (
@@ -258,16 +264,22 @@ export function SubmissionTrendsDashboard({
       )}
 
       <p className="text-sm text-muted-foreground">
-        Patient feedback sessions (one bot or voice visit = one submission, even when split into
-        multiple tickets later).
+        <span className="font-medium text-gray-700">{periodLabel}</span> — submissions count every
+        row (split tickets included). Patients are grouped separately (one visit = one patient).
       </p>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
         <InsightsKpiCard
           label="Submissions"
           value={filteredTotal}
-          sub="In selected period"
+          sub="All rows incl. split tickets"
           icon={<TrendingUp size={16} className="text-blue-600" />}
+        />
+        <InsightsKpiCard
+          label="Patients"
+          value={patientCount}
+          sub={`Unique patients · ${filteredTotal} submission rows`}
+          icon={<Users size={16} className="text-indigo-600" />}
         />
         <InsightsKpiCard
           label="Positive (AI)"
@@ -394,7 +406,8 @@ export function SubmissionTrendsDashboard({
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-lg font-semibold text-gray-900">Submission volume & trends</h2>
           <p className="text-xs text-muted-foreground">
-            {filteredTotal} submission(s) · {timeSlotLabel(timeFilter)}
+            {filteredTotal} submissions (incl. split) · {patientCount} patients ·{" "}
+            {timeSlotLabel(timeFilter)}
           </p>
         </div>
         <div className="grid gap-6 lg:grid-cols-2">

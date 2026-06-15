@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.js",
+    "dev:stable": "node src/index.js",
     "start": "node src/index.js",
     "seed": "node scripts/seedUsers.js",
     "seed-mock": "node scripts/seedMockData.js",

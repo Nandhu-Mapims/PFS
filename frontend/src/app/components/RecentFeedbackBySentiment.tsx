@@ -1,9 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import type { FeedbackItem } from "../lib/api";
+import { getTotalPages, paginateSlice } from "../lib/pagination";
 import { getAiSentimentBucket } from "../lib/sentiment";
 import { ticketDepartment, ticketService, uniqueSorted } from "../lib/ticketFilters";
+import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
+import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
 import { FeedbackDetailDialog } from "./FeedbackDetailDialog";
+import { ListPagination } from "./ListPagination";
 import { PatientGroupedFeedbackTable } from "./PatientGroupedFeedbackTable";
 import { buildPatientFeedbackGroups } from "../lib/patientFeedbackGroups";
 import {
@@ -25,7 +29,7 @@ const ratingLabel: Record<number, string> = {
 type AiSentimentFilter = "all" | "positive" | "negative" | "neutral" | "pending";
 type StatusFilter = "all" | FeedbackItem["status"];
 
-const ROW_LIMIT = 25;
+const DEFAULT_PAGE_SIZE = 25;
 
 type RecentFeedbackBySentimentProps = {
   items: FeedbackItem[];
@@ -62,8 +66,11 @@ export function RecentFeedbackBySentiment({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [serviceFilter, setServiceFilter] = useState("all");
+  const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [detailItem, setDetailItem] = useState<FeedbackItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
@@ -93,6 +100,8 @@ export function RecentFeedbackBySentiment({
       const svc = ticketService(item);
       if (serviceFilter !== "all" && svc !== serviceFilter) return false;
 
+      if (!matchesEncounterType(item.patientEncounterType, encounterFilter)) return false;
+
       if (fromDate || toDate) {
         const created = new Date(item.createdAt);
         if (fromDate) {
@@ -106,17 +115,32 @@ export function RecentFeedbackBySentiment({
       }
       return true;
     });
-  }, [sorted, sentimentFilter, statusFilter, departmentFilter, serviceFilter, fromDate, toDate]);
+  }, [sorted, sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter, fromDate, toDate]);
 
   const patientGroups = useMemo(() => buildPatientFeedbackGroups(filtered), [filtered]);
-  const visibleGroups = patientGroups.slice(0, ROW_LIMIT);
-  const visibleRowCount = visibleGroups.reduce((n, g) => n + g.items.length, 0);
+
+  useEffect(() => {
+    setPage(1);
+  }, [sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter, fromDate, toDate, pageSize]);
+
+  const totalPages = getTotalPages(patientGroups.length, pageSize);
+  const safePage = Math.min(Math.max(1, page), totalPages);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+
+  const visibleGroups = useMemo(
+    () => paginateSlice(patientGroups, safePage, pageSize),
+    [patientGroups, safePage, pageSize]
+  );
 
   const hasActiveFilters =
     sentimentFilter !== "all" ||
     statusFilter !== "all" ||
     departmentFilter !== "all" ||
     serviceFilter !== "all" ||
+    encounterFilter !== "all" ||
     Boolean(fromDate || toDate);
 
   const clearFilters = () => {
@@ -124,6 +148,7 @@ export function RecentFeedbackBySentiment({
     setStatusFilter("all");
     setDepartmentFilter("all");
     setServiceFilter("all");
+    setEncounterFilter("all");
     setFromDate("");
     setToDate("");
   };
@@ -171,12 +196,9 @@ export function RecentFeedbackBySentiment({
               {isRefreshing ? "Refreshing…" : "Refresh"}
             </button>
             <span className="text-xs text-gray-500 tabular-nums">
-              {visibleGroups.length} patient{visibleGroups.length !== 1 ? "s" : ""}
-              {visibleRowCount !== filtered.length ? ` · ${visibleRowCount} rows shown` : ""}
-              {patientGroups.length !== visibleGroups.length
-                ? ` of ${patientGroups.length} patients`
-                : ""}
-              {filtered.length !== items.length ? ` (${items.length} total)` : ""}
+              {filtered.length} submission{filtered.length !== 1 ? "s" : ""} (incl. split) ·{" "}
+              {patientGroups.length} patient{patientGroups.length !== 1 ? "s" : ""}
+              {filtered.length !== items.length ? ` · ${items.length} total in system` : ""}
             </span>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -186,7 +208,7 @@ export function RecentFeedbackBySentiment({
               onClick={() => onDownloadRange(filtered)}
               className="h-9 px-3 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
-              Download filtered (CSV)
+              Download filtered (Excel)
             </button>
             <button
               type="button"
@@ -194,10 +216,16 @@ export function RecentFeedbackBySentiment({
               onClick={onDownloadAll}
               className="h-9 px-3 rounded-lg bg-[#2A6FDB] text-white text-sm font-semibold hover:bg-[#1e5bbd] disabled:opacity-50"
             >
-              Download all (CSV)
+              Download all (Excel)
             </button>
           </div>
         </div>
+
+        <EncounterTypeFilterTabs
+          value={encounterFilter}
+          onChange={setEncounterFilter}
+          showHint
+        />
 
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
@@ -318,13 +346,26 @@ export function RecentFeedbackBySentiment({
       ) : !visibleGroups.length ? (
         <p className="p-6 text-gray-600">No rows match the selected filters.</p>
       ) : (
-        <PatientGroupedFeedbackTable
-          groups={visibleGroups}
-          variant="overview"
-          onViewItem={openDetail}
-          onDeleteItem={onDeleteItem}
-          emptyMessage="No feedback to show."
-        />
+        <>
+          <PatientGroupedFeedbackTable
+            groups={visibleGroups}
+            variant="overview"
+            onViewItem={openDetail}
+            onDeleteItem={onDeleteItem}
+            emptyMessage="No feedback to show."
+          />
+          <ListPagination
+            page={safePage}
+            pageSize={pageSize}
+            totalItems={patientGroups.length}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+            itemLabel="patients"
+          />
+        </>
       )}
     </div>
   );

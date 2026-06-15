@@ -16,6 +16,9 @@ function figmaAssetResolver() {
   }
 }
 
+const apiProxyTarget =
+  process.env.VITE_API_PROXY?.trim() || "http://127.0.0.1:5000";
+
 export default defineConfig({
   plugins: [
     figmaAssetResolver(),
@@ -33,14 +36,16 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "http://localhost:5000",
-        timeout: 0,
-        proxyTimeout: 0,
+        target: apiProxyTarget,
+        changeOrigin: true,
+        timeout: 120_000,
+        proxyTimeout: 120_000,
       },
       "/uploads": {
-        target: "http://localhost:5000",
-        timeout: 0,
-        proxyTimeout: 0,
+        target: apiProxyTarget,
+        changeOrigin: true,
+        timeout: 120_000,
+        proxyTimeout: 120_000,
       },
     },
   },

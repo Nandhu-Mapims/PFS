@@ -1964,16 +1964,18 @@ function counterToSortedList(counter, keyName) {
 app.get("/api/analytics", async (_req, res) => {
   try {
     const rows = await Feedback.find().lean();
+    const sessions = rows.filter((item) => !item.isSplitChild);
 
     const totals = {
+      /** Every feedback row, including split issue tickets. */
       all: rows.length,
       positive: rows.filter((item) => item.aiSentiment === "positive").length,
       neutral: rows.filter((item) => item.aiSentiment === "neutral").length,
       negative: rows.filter((item) => item.aiSentiment === "negative").length,
       aiTickets: rows.filter((item) => item.source === "ai").length,
-      averageRating: rows.length
+      averageRating: sessions.length
         ? Number(
-            (rows.reduce((sum, item) => sum + item.rating, 0) / rows.length).toFixed(1)
+            (sessions.reduce((sum, item) => sum + item.rating, 0) / sessions.length).toFixed(1)
           )
         : 0,
     };
