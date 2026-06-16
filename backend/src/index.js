@@ -1458,7 +1458,8 @@ app.post("/api/feedback", (req, res, next) => {
         comments = buildBotCommentsFromAnswers(botConversationAnswers);
       }
     }
-    const deferAiProcessing = submissionMode === "voice" || submissionMode === "standard";
+    const deferAiProcessing =
+      submissionMode === "voice" || submissionMode === "standard" || submissionMode === "bot";
     const rawEncounter = String(req.body.patientEncounterType || "").toLowerCase().trim();
     const patientEncounterType = ["op", "ip"].includes(rawEncounter) ? rawEncounter : "";
     const patientRegNo = String(req.body.patientRegNo || "").trim().slice(0, 80);
@@ -1507,15 +1508,13 @@ app.post("/api/feedback", (req, res, next) => {
     let usedVoiceRatingForBot = false;
     let botVoiceOverallSentiment = null;
 
-    // Re-introduce the older "7 OpenRouter requests" behavior for bot sessions:
-    // 1) Infer overall rating/sentiment from the combined bot transcripts
-    // 2) Infer sentiment for each of the 5 bot answers
-    // 3) Run the full OpenRouter analysis once to create issues/tickets.
+    // Bot: infer overall rating/sentiment once; full issue analysis runs in deferred pipeline.
     if (
       submissionMode === "bot" &&
       process.env.OPENROUTER_API_KEY &&
       botConversationAnswers.length > 0
     ) {
+      // Quick overall rating/sentiment from combined bot transcripts (full issue analysis is deferred).
       try {
         const combinedTranscript = botConversationAnswers
           .map((a) => String(a.transcript || "").trim())
@@ -1534,18 +1533,6 @@ app.post("/api/feedback", (req, res, next) => {
         }
       } catch {
         // Keep defaults if voice rating inference fails.
-      }
-
-      // Per-answer sentiment (sets answerSentiment on each stored answer).
-      for (const ans of botConversationAnswers) {
-        try {
-          const out = await inferRatingFromVoiceTranscript(String(ans.transcript || "").trim());
-          if (out?.sentiment && ["positive", "neutral", "negative"].includes(out.sentiment)) {
-            ans.answerSentiment = out.sentiment;
-          }
-        } catch {
-          // Keep whatever sentiment is already present for that answer.
-        }
       }
     }
     if (

@@ -82,6 +82,8 @@ export function FeedbackForm() {
     });
   }, []);
 
+  const getSubmitFields = identity.getSubmitFields;
+
   const persistVoiceDraft = useCallback(
     async (transcript: string, inferredRating: number, audioBlob: Blob | null) => {
       if (!outboxIdRef.current) outboxIdRef.current = newOutboxId();
@@ -89,7 +91,7 @@ export function FeedbackForm() {
       await saveVoiceDraft(
         outboxIdRef.current,
         {
-          ...identity.getSubmitFields(),
+          ...getSubmitFields(),
           rating: inferredRating,
           comments: transcript.trim(),
           source: isStaffSession ? "staff" : "patient",
@@ -98,7 +100,7 @@ export function FeedbackForm() {
         audioBlob
       );
     },
-    [identity]
+    [getSubmitFields]
   );
 
   const onVoiceSuccess = useCallback((transcript: string, inferredRating: number) => {
@@ -248,7 +250,13 @@ export function FeedbackForm() {
         >
           {inputKind === "voice" ? (
             identity.identificationMode === "name" ? (
-              "Please enter your name before speaking."
+              identity.nameReady ? (
+                <>Ready to listen, {identity.resolvedPatientName}. Tap below to share your experience.</>
+              ) : (
+                "Please enter your name before speaking."
+              )
+            ) : identity.identityReady ? (
+              "Visit confirmed from EMR. Tap below to share your experience."
             ) : (
               "Look up your registration number and confirm your visit from EMR before speaking."
             )

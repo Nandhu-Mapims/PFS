@@ -89,6 +89,13 @@ export function FeedbackVoiceSection({
   const archiveChunksRef = useRef<BlobPart[]>([]);
   const archiveMimeRef = useRef<string>("audio/webm");
 
+  const onVoiceRecordingReadyRef = useRef(onVoiceRecordingReady);
+  const onVoiceErrorRef = useRef(onVoiceError);
+  onVoiceRecordingReadyRef.current = onVoiceRecordingReady;
+  onVoiceErrorRef.current = onVoiceError;
+
+  const [liveTranscript, setLiveTranscript] = useState("");
+
   const stopArchiveRecorderAsync = useCallback(
     async (notify: boolean) => {
       const ar = archiveRecorderRef.current;
@@ -208,6 +215,7 @@ export function FeedbackVoiceSection({
     const t = coerceTranscriptText(raw).trim();
     transcriptsBySegmentRef.current.set(segmentIdx, t);
     setSegmentsDoneUi((n) => n + 1);
+    setLiveTranscript(mergeSegments(transcriptsBySegmentRef.current));
   }, [speechLanguageCode]);
 
   const attachRecorderCallbacks = useCallback((recorder: MediaRecorder) => {
@@ -353,14 +361,15 @@ export function FeedbackVoiceSection({
     mediaRecorderRef.current = null;
     setRecordingState("idle");
     setLocalTranscript("");
+    setLiveTranscript("");
     setSegmentsDoneUi(0);
     nextSegmentIdxRef.current = 0;
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
     finishingSessionRef.current = false;
-    onVoiceError(null);
-    onVoiceRecordingReady?.(null);
-  }, [resetRevision, stopTracks, onVoiceError, clearCountdownTimer, clearSegmentTimer, onVoiceRecordingReady]);
+    onVoiceErrorRef.current(null);
+    onVoiceRecordingReadyRef.current?.(null);
+  }, [resetRevision, stopTracks, clearCountdownTimer, clearSegmentTimer]);
 
   const finishRecordingPipeline = useCallback(async () => {
     if (finishingSessionRef.current) return;
@@ -433,8 +442,9 @@ export function FeedbackVoiceSection({
 
     onVoiceError(null);
     onVoiceCleared();
-    onVoiceRecordingReady?.(null);
+    onVoiceRecordingReadyRef.current?.(null);
     setLocalTranscript("");
+    setLiveTranscript("");
     nextSegmentIdxRef.current = 0;
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
@@ -500,15 +510,21 @@ export function FeedbackVoiceSection({
     setSecondsRemaining(maxRecordingSeconds);
     setRecordingState("idle");
     setLocalTranscript("");
+    setLiveTranscript("");
     setSegmentsDoneUi(0);
     onVoiceCleared();
     onVoiceError(null);
-    onVoiceRecordingReady?.(null);
+    onVoiceRecordingReadyRef.current?.(null);
     nextSegmentIdxRef.current = 0;
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
     finishingSessionRef.current = false;
   };
+
+  const displayTranscript =
+    localTranscript.trim() ||
+    liveTranscript.trim() ||
+    (recordingState === "processing" ? "Understanding your feedback…" : "");
 
   return (
     <div className="mb-8">
@@ -550,7 +566,12 @@ export function FeedbackVoiceSection({
                 Take your time — tap <span className="font-semibold text-gray-800">Done</span> when you
                 finish speaking.
               </p>
-              {segmentsDoneUi > 0 && (
+              {segmentsDoneUi > 0 && liveTranscript.trim() && (
+                <p className="mt-3 text-sm text-gray-700 leading-relaxed px-2">
+                  {liveTranscript.trim()}
+                </p>
+              )}
+              {segmentsDoneUi > 0 && !liveTranscript.trim() && (
                 <p className="mt-2 text-xs font-medium" style={{ color: primaryColor }}>
                   {segmentsDoneUi} part{segmentsDoneUi === 1 ? "" : "s"} sent for transcription…
                 </p>
@@ -637,11 +658,11 @@ export function FeedbackVoiceSection({
         </div>
       </div>
 
-      {(localTranscript || recordingState === "completed") && (
+      {(displayTranscript || recordingState === "completed" || recordingState === "processing") && (
         <div className="animate-in fade-in slide-in-from-bottom duration-300">
           <p className="text-sm font-semibold text-gray-600 mb-2">What we heard</p>
           <div className="bg-[#F5F7FA] rounded-2xl p-5 md:p-6 border-2 border-gray-200 min-h-[100px] mb-4">
-            <p className="text-base md:text-lg text-gray-700 leading-relaxed">{localTranscript}</p>
+            <p className="text-base md:text-lg text-gray-700 leading-relaxed">{displayTranscript}</p>
           </div>
           {recordingState === "completed" && (
             <p className="text-center">
