@@ -67,7 +67,7 @@ export function AdminPage() {
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [brandLogoDataUrl, setBrandLogoDataUrl] = useState<string | null>(null);
 
-  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+  const loadData = useCallback(async (opts?: { silent?: boolean; includeAnalytics?: boolean }) => {
     try {
       if (opts?.silent) {
         setIsRefreshing(true);
@@ -75,12 +75,17 @@ export function AdminPage() {
         setIsLoading(true);
       }
       setError(null);
-      const [feedbackData, analyticsData] = await Promise.all([
-        getFeedback(),
-        getFeedbackAnalytics(),
-      ]);
-      setItems(feedbackData);
-      setAnalytics(analyticsData);
+      const includeAnalytics = opts?.includeAnalytics ?? !opts?.silent;
+      if (includeAnalytics) {
+        const [feedbackData, analyticsData] = await Promise.all([
+          getFeedback(),
+          getFeedbackAnalytics(),
+        ]);
+        setItems(feedbackData);
+        setAnalytics(analyticsData);
+      } else {
+        setItems(await getFeedback());
+      }
     } catch {
       setError("Failed to load feedback. Please check API and database.");
     } finally {
@@ -117,11 +122,11 @@ export function AdminPage() {
   useEffect(() => {
     function refreshWhenVisible() {
       if (document.visibilityState === "visible") {
-        void loadData({ silent: true });
+        void loadData({ silent: true, includeAnalytics: false });
       }
     }
     function onFocus() {
-      void loadData({ silent: true });
+      void loadData({ silent: true, includeAnalytics: false });
     }
     document.addEventListener("visibilitychange", refreshWhenVisible);
     window.addEventListener("focus", onFocus);
@@ -133,8 +138,8 @@ export function AdminPage() {
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      void loadData({ silent: true });
-    }, 5000);
+      void loadData({ silent: true, includeAnalytics: false });
+    }, 30000);
     return () => window.clearInterval(interval);
   }, [loadData]);
 
@@ -550,7 +555,7 @@ export function AdminPage() {
         isRefreshing={isRefreshing}
         error={error}
         isDeleteMode={isDeleteMode}
-        onRefresh={() => void loadData({ silent: true })}
+        onRefresh={() => void loadData({ silent: true, includeAnalytics: false })}
         onDownloadAll={downloadAllFeedbackExcel}
         onDownloadRange={downloadFilteredFeedbackExcel}
         onDeleteItem={isDeleteMode ? (item) => void handleDeleteFeedback(item) : undefined}

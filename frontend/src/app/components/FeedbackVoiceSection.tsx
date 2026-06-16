@@ -526,6 +526,11 @@ export function FeedbackVoiceSection({
     liveTranscript.trim() ||
     (recordingState === "processing" ? "Understanding your feedback…" : "");
 
+  const showTranscriptPanel =
+    recordingState === "processing" ||
+    recordingState === "completed" ||
+    (recordingState === "recording" && Boolean(liveTranscript.trim()));
+
   return (
     <div className="mb-8">
       <div className="flex flex-col items-center gap-8 mb-8">

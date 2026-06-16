@@ -70,6 +70,8 @@ export function AdminSettingsPage() {
   const [brandLogoDataUrl, setBrandLogoDataUrl] = useState<string | null>(null);
   const [voiceMaxSeconds, setVoiceMaxSeconds] = useState(120);
   const [botThinkSeconds, setBotThinkSeconds] = useState(3);
+  const [botSkipIntro, setBotSkipIntro] = useState(false);
+  const [botSkipThinkCountdown, setBotSkipThinkCountdown] = useState(false);
   const [logoError, setLogoError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [bannerMessage, setBannerMessage] = useState<string | null>(null);
@@ -84,6 +86,8 @@ export function AdminSettingsPage() {
       setBrandLogoDataUrl(next.logoDataUrl);
       setVoiceMaxSeconds(next.voiceRecordingMaxSeconds);
       setBotThinkSeconds(next.botThinkSeconds);
+      setBotSkipIntro(next.botSkipIntro);
+      setBotSkipThinkCountdown(next.botSkipThinkCountdown);
     });
     const unsubscribe = onBrandingSettingsChange(() => {
       const updated = getBrandingSettings();
@@ -93,6 +97,8 @@ export function AdminSettingsPage() {
       setBrandLogoDataUrl(updated.logoDataUrl);
       setVoiceMaxSeconds(updated.voiceRecordingMaxSeconds);
       setBotThinkSeconds(updated.botThinkSeconds);
+      setBotSkipIntro(updated.botSkipIntro);
+      setBotSkipThinkCountdown(updated.botSkipThinkCountdown);
     });
     return () => {
       alive = false;
@@ -125,6 +131,8 @@ export function AdminSettingsPage() {
         logoDataUrl: brandLogoDataUrl,
         voiceRecordingMaxSeconds: Math.round(secs),
         botThinkSeconds: Math.round(think),
+        botSkipIntro,
+        botSkipThinkCountdown,
       });
       setBannerMessage("Settings saved. Patient screens update immediately.");
     } catch {
@@ -172,6 +180,8 @@ export function AdminSettingsPage() {
       setBrandLogoDataUrl(defaults.logoDataUrl);
       setVoiceMaxSeconds(defaults.voiceRecordingMaxSeconds);
       setBotThinkSeconds(defaults.botThinkSeconds);
+      setBotSkipIntro(defaults.botSkipIntro);
+      setBotSkipThinkCountdown(defaults.botSkipThinkCountdown);
       setLogoError(null);
       setBannerMessage("Settings reset to defaults.");
     } catch {
@@ -286,31 +296,58 @@ export function AdminSettingsPage() {
             </p>
           </div>
 
-          <div className="rounded-lg border border-gray-200 p-4 bg-gray-50 space-y-3">
+          <div className="rounded-lg border border-gray-200 p-4 bg-gray-50 space-y-4">
             <div>
               <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
                 <Bot className="w-5 h-5 text-[#2A6FDB]" />
                 AI Voice Guide (bot conversation)
               </h3>
-              <p className="text-sm font-semibold text-gray-800 mt-2">Think time before each answer</p>
-              <p className="text-xs text-gray-500 mt-1">
+            </div>
+
+            <div className="space-y-2 border-b border-gray-200 pb-4">
+              <p className="text-sm font-semibold text-gray-800">Introduction audio</p>
+              <p className="text-xs text-gray-500">
+                Tamil welcome message played before the first question.
+              </p>
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={botSkipIntro}
+                  onChange={(e) => setBotSkipIntro(e.target.checked)}
+                />
+                Skip intro — go straight to questions
+              </label>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-gray-800">Think time before each answer</p>
+              <p className="text-xs text-gray-500">
                 After each question plays, patients see “சிறிது நேரம் யோசியுங்கள்…” with a countdown
                 before the microphone opens.
               </p>
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={botSkipThinkCountdown}
+                  onChange={(e) => setBotSkipThinkCountdown(e.target.checked)}
+                />
+                Skip think countdown — start recording immediately
+              </label>
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  step={1}
+                  value={botThinkSeconds}
+                  disabled={botSkipThinkCountdown}
+                  onChange={(e) => setBotThinkSeconds(Number(e.target.value))}
+                  className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-lg font-semibold tabular-nums disabled:bg-gray-100 disabled:text-gray-400"
+                />
+                <span className="text-sm text-gray-600">seconds (1–30)</span>
+              </div>
+              <p className="text-xs text-gray-500">Default: 3 seconds.</p>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <input
-                type="number"
-                min={1}
-                max={30}
-                step={1}
-                value={botThinkSeconds}
-                onChange={(e) => setBotThinkSeconds(Number(e.target.value))}
-                className="w-28 px-3 py-2 border border-gray-300 rounded-lg text-lg font-semibold tabular-nums"
-              />
-              <span className="text-sm text-gray-600">seconds (1–30)</span>
-            </div>
-            <p className="text-xs text-gray-500">Default: 3 seconds.</p>
           </div>
 
           <div className="rounded-lg border border-gray-200 p-4 bg-gray-50">

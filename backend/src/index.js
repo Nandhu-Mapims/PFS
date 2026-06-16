@@ -121,6 +121,8 @@ function attachVoicePlaybackUrl(doc) {
 
 const DEFAULT_VOICE_RECORDING_MAX_SECONDS = 120;
 const DEFAULT_BOT_THINK_SECONDS = 3;
+const DEFAULT_BOT_SKIP_INTRO = false;
+const DEFAULT_BOT_SKIP_THINK_COUNTDOWN = false;
 
 function normalizeVoiceRecordingMaxSeconds(value) {
   const n = Number(value);
@@ -143,6 +145,8 @@ function serializeBrandingSettings(doc) {
       logoDataUrl: null,
       voiceRecordingMaxSeconds: DEFAULT_VOICE_RECORDING_MAX_SECONDS,
       botThinkSeconds: DEFAULT_BOT_THINK_SECONDS,
+      botSkipIntro: DEFAULT_BOT_SKIP_INTRO,
+      botSkipThinkCountdown: DEFAULT_BOT_SKIP_THINK_COUNTDOWN,
     };
   }
   return {
@@ -152,6 +156,8 @@ function serializeBrandingSettings(doc) {
     logoDataUrl: doc.logoDataUrl ?? null,
     voiceRecordingMaxSeconds: normalizeVoiceRecordingMaxSeconds(doc.voiceRecordingMaxSeconds),
     botThinkSeconds: normalizeBotThinkSeconds(doc.botThinkSeconds),
+    botSkipIntro: Boolean(doc.botSkipIntro ?? doc.botSkipIntroAndCountdown),
+    botSkipThinkCountdown: Boolean(doc.botSkipThinkCountdown ?? doc.botSkipIntroAndCountdown),
   };
 }
 
@@ -289,6 +295,8 @@ async function ensureDefaults() {
       logoDataUrl: null,
       voiceRecordingMaxSeconds: DEFAULT_VOICE_RECORDING_MAX_SECONDS,
       botThinkSeconds: DEFAULT_BOT_THINK_SECONDS,
+      botSkipIntro: DEFAULT_BOT_SKIP_INTRO,
+      botSkipThinkCountdown: DEFAULT_BOT_SKIP_THINK_COUNTDOWN,
     });
   }
 
@@ -296,6 +304,36 @@ async function ensureDefaults() {
 }
 
 /** Backfill voice path on split rows when parent already has audio (e.g. upload before AI split). */
+/** Mongoose used to default clientSubmissionId to null — only one row could exist per unique sparse index. */
+async function repairClientSubmissionIds() {
+  const cleared = await Feedback.updateMany(
+    { $or: [{ clientSubmissionId: null }, { clientSubmissionId: "" }] },
+    { $unset: { clientSubmissionId: "" } }
+  );
+  if (cleared.modifiedCount > 0) {
+    // eslint-disable-next-line no-console
+    console.log("[feedback] cleared null clientSubmissionId values", {
+      count: cleared.modifiedCount,
+    });
+  }
+  try {
+    const indexes = await Feedback.collection.indexes();
+    const existing = indexes.find((idx) => idx.name === "clientSubmissionId_1");
+    const hasPartial = Boolean(existing?.partialFilterExpression);
+    if (existing && !hasPartial) {
+      await Feedback.collection.dropIndex("clientSubmissionId_1");
+      // eslint-disable-next-line no-console
+      console.log("[feedback] dropped legacy clientSubmissionId index");
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[feedback] could not inspect clientSubmissionId index", {
+      message: err?.message || String(err),
+    });
+  }
+  await Feedback.syncIndexes();
+}
+
 async function repairMissingSplitVoiceRecordings() {
   const parents = await Feedback.find({
     voiceRecordingRelPath: { $nin: [null, ""] },
@@ -1952,7 +1990,21 @@ function counterToSortedList(counter, keyName) {
 
 app.get("/api/analytics", async (_req, res) => {
   try {
-    const rows = await Feedback.find().lean();
+    const rows = await Feedback.find(
+      {},
+      {
+        isSplitChild: 1,
+        aiSentiment: 1,
+        source: 1,
+        rating: 1,
+        status: 1,
+        lookupDepartment: 1,
+        department: 1,
+        service: 1,
+        feedbackIssues: 1,
+        createdAt: 1,
+      }
+    ).lean();
     const sessions = rows.filter((item) => !item.isSplitChild);
 
     const totals = {
@@ -2081,6 +2133,8 @@ app.get("/api/branding", async (_req, res) => {
         logoDataUrl: null,
         voiceRecordingMaxSeconds: DEFAULT_VOICE_RECORDING_MAX_SECONDS,
         botThinkSeconds: DEFAULT_BOT_THINK_SECONDS,
+        botSkipIntro: DEFAULT_BOT_SKIP_INTRO,
+      botSkipThinkCountdown: DEFAULT_BOT_SKIP_THINK_COUNTDOWN,
       });
       return res.json(serializeBrandingSettings(branding));
     }
@@ -2099,6 +2153,8 @@ app.put("/api/branding", async (req, res) => {
       logoDataUrl,
       voiceRecordingMaxSeconds,
       botThinkSeconds,
+      botSkipIntro,
+      botSkipThinkCountdown,
     } = req.body;
     if (!primaryColor || !pageBackgroundColor) {
       return res
@@ -2115,6 +2171,8 @@ app.put("/api/branding", async (req, res) => {
         logoDataUrl: typeof logoDataUrl === "string" ? logoDataUrl : null,
         voiceRecordingMaxSeconds: normalizeVoiceRecordingMaxSeconds(voiceRecordingMaxSeconds),
         botThinkSeconds: normalizeBotThinkSeconds(botThinkSeconds),
+        botSkipIntro: Boolean(botSkipIntro),
+        botSkipThinkCountdown: Boolean(botSkipThinkCountdown),
       },
       { upsert: true, new: true, runValidators: true }
     ).lean();
@@ -2136,6 +2194,8 @@ app.delete("/api/branding", async (_req, res) => {
         logoDataUrl: null,
         voiceRecordingMaxSeconds: DEFAULT_VOICE_RECORDING_MAX_SECONDS,
         botThinkSeconds: DEFAULT_BOT_THINK_SECONDS,
+        botSkipIntro: DEFAULT_BOT_SKIP_INTRO,
+      botSkipThinkCountdown: DEFAULT_BOT_SKIP_THINK_COUNTDOWN,
       },
       { upsert: true, new: true, runValidators: true }
     ).lean();
@@ -2151,6 +2211,7 @@ async function startServer() {
     // eslint-disable-next-line no-console
     console.log(`[feedback] MongoDB connected: ${mongoose.connection.db.databaseName}`);
     await ensureDefaults();
+    await repairClientSubmissionIds();
     await repairMissingSplitVoiceRecordings();
 
     pendingAiWorker = createPendingAiWorker({

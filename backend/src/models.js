@@ -65,8 +65,8 @@ const feedbackSchema = new mongoose.Schema(
       default: [],
     },
     submissionGroupId: { type: String, default: null, index: true },
-    /** Client-generated id for idempotent offline/outbox retries */
-    clientSubmissionId: { type: String, default: null, sparse: true, unique: true, index: true },
+    /** Client-generated id for idempotent offline/outbox retries (omit when unused). */
+    clientSubmissionId: { type: String, trim: true },
     isSplitChild: { type: Boolean, default: false },
     rating: { type: Number, required: true, min: 1, max: 5 },
     comments: { type: String, default: "", trim: true },
@@ -128,6 +128,15 @@ const feedbackSchema = new mongoose.Schema(
 
 feedbackSchema.index({ createdAt: -1 });
 feedbackSchema.index({ createdAt: -1, patientEncounterType: 1 });
+feedbackSchema.index(
+  { clientSubmissionId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      clientSubmissionId: { $exists: true, $type: "string", $gt: "" },
+    },
+  }
+);
 
 const botQuestionSchema = new mongoose.Schema(
   {
@@ -161,6 +170,10 @@ const brandingSchema = new mongoose.Schema(
     voiceRecordingMaxSeconds: { type: Number, default: 120, min: 15, max: 600 },
     /** Countdown after each bot question before recording (AI Voice Guide). */
     botThinkSeconds: { type: Number, default: 3, min: 1, max: 30 },
+    /** When true, skip bot intro audio before questions. */
+    botSkipIntro: { type: Boolean, default: false },
+    /** When true, skip think countdown before each answer recording. */
+    botSkipThinkCountdown: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

@@ -11,9 +11,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import {
   getFeedback,
-  getFeedbackAnalytics,
   updateFeedbackStatus,
-  type FeedbackAnalytics,
   type FeedbackItem,
 } from "../lib/api";
 import { displayOptionalLabel, sanitizeOptionalLabel } from "../lib/fieldSanitize";
@@ -217,7 +215,6 @@ function SummaryStrip({
 
 export function Dashboard() {
   const [items, setItems] = useState<FeedbackItem[]>([]);
-  const [analytics, setAnalytics] = useState<FeedbackAnalytics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterDepartment, setFilterDepartment] = useState("All");
@@ -233,12 +230,8 @@ export function Dashboard() {
       try {
         setIsLoading(true);
         setError(null);
-        const [data, analyticsData] = await Promise.all([
-          getFeedback(),
-          getFeedbackAnalytics(),
-        ]);
+        const data = await getFeedback();
         setItems(data);
-        setAnalytics(analyticsData);
       } catch {
         setError("Failed to load staff queue.");
       } finally {
@@ -251,30 +244,21 @@ export function Dashboard() {
 
   const departments = useMemo(() => {
     const keys = new Set<string>();
-    for (const row of analytics?.submissionsByDepartment ?? []) {
-      if (row.department) keys.add(row.department);
-    }
     for (const item of items) {
       const k = departmentKey(item);
       if (k) keys.add(k);
     }
     return ["All", ...[...keys].sort((a, b) => a.localeCompare(b))];
-  }, [items, analytics]);
+  }, [items]);
 
   const services = useMemo(() => {
     const keys = new Set<string>();
-    for (const row of [
-      ...(analytics?.positiveByService ?? []),
-      ...(analytics?.negativeByService ?? []),
-    ]) {
-      if (row.service) keys.add(row.service);
-    }
     for (const item of items) {
       const k = serviceKey(item);
       if (k) keys.add(k);
     }
     return ["All", ...[...keys].sort((a, b) => a.localeCompare(b))];
-  }, [items, analytics]);
+  }, [items]);
 
   const filteredItems = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();

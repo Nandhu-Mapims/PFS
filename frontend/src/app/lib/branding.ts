@@ -14,6 +14,8 @@ const DEFAULT_BRANDING: BrandingSettings = {
   logoDataUrl: null,
   voiceRecordingMaxSeconds: 120,
   botThinkSeconds: 3,
+  botSkipIntro: false,
+  botSkipThinkCountdown: false,
 };
 
 function clampVoiceMaxSeconds(value: unknown): number {
@@ -50,6 +52,10 @@ export async function loadBrandingSettings(): Promise<BrandingSettings> {
       logoDataUrl: fetched.logoDataUrl || null,
       voiceRecordingMaxSeconds: clampVoiceMaxSeconds(fetched.voiceRecordingMaxSeconds),
       botThinkSeconds: clampBotThinkSeconds(fetched.botThinkSeconds),
+      botSkipIntro: Boolean(fetched.botSkipIntro ?? fetched.botSkipIntroAndCountdown),
+      botSkipThinkCountdown: Boolean(
+        fetched.botSkipThinkCountdown ?? fetched.botSkipIntroAndCountdown
+      ),
     });
   } catch {
     return brandingCache;

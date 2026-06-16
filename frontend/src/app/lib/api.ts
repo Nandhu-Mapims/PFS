@@ -86,6 +86,10 @@ export interface BrandingSettings {
   voiceRecordingMaxSeconds: number;
   /** Seconds to think after each bot question before recording (1–30). */
   botThinkSeconds: number;
+  /** When true, bot intro audio is skipped. */
+  botSkipIntro: boolean;
+  /** When true, think countdown before each answer is skipped. */
+  botSkipThinkCountdown: boolean;
 }
 
 export interface CreateFeedbackResponse extends FeedbackItem {
