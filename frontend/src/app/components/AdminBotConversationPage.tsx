@@ -9,6 +9,7 @@ import {
   type BotConversationConfig,
   type BotConversationQuestion,
 } from "../lib/api";
+import { patientRoutes } from "../lib/patientRoutes";
 
 const MAX_QUESTIONS = 30;
 
@@ -203,7 +204,7 @@ export function AdminBotConversationPage() {
           <code className="text-xs bg-gray-100 px-1 rounded">uploads/feedback-voice/ai_voice/</code>
         </p>
         <p className="text-sm text-[#2A6FDB] mt-2 font-medium">
-          Patient link: <span className="font-mono">/feedback/bot</span>
+          Patient link: <span className="font-mono">{patientRoutes.bot}</span>
         </p>
       </div>
 

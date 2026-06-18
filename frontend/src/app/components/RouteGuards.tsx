@@ -1,5 +1,6 @@
 import { Navigate, Outlet, useLocation } from "react-router";
 import { getSession } from "../lib/auth";
+import { patientRoutes } from "../lib/patientRoutes";
 
 export function StaffGuard() {
   const location = useLocation();
@@ -20,7 +21,7 @@ export function AdminGuard() {
   }
 
   if (session.role !== "admin") {
-    return <Navigate to="/feedback" replace />;
+    return <Navigate to={patientRoutes.home} replace />;
   }
 
   return <Outlet />;

@@ -20,8 +20,15 @@ export function createPendingAiWorker({ reanalyzeFeedbackById, isEnabled }) {
     return Feedback.find({
       isSplitChild: { $ne: true },
       _id: { $lte: cutoffOid },
-      $or: [{ aiSentiment: null }, { aiSentiment: { $exists: false } }, { aiSentiment: "" }],
-      comments: { $type: "string", $ne: "" },
+      $and: [
+        { $or: [{ aiSentiment: null }, { aiSentiment: { $exists: false } }, { aiSentiment: "" }] },
+        {
+          $or: [
+            { comments: { $type: "string", $ne: "" } },
+            { staffRemarks: { $type: "string", $ne: "" } },
+          ],
+        },
+      ],
     })
       .sort({ _id: 1 })
       .limit(limit)

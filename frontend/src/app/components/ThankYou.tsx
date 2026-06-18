@@ -2,6 +2,7 @@ import { useNavigate, useLocation } from "react-router";
 import { Check, Home } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getSession } from "../lib/auth";
+import { patientRoutes } from "../lib/patientRoutes";
 import {
   getBrandingSettings,
   loadBrandingSettings,
@@ -122,7 +123,7 @@ export function ThankYou() {
 
         <button
           type="button"
-          onClick={() => navigate(isStaffSession ? "/feedback" : "/welcome")}
+          onClick={() => navigate(patientRoutes.home)}
           className="w-full text-white text-xl md:text-2xl py-5 md:py-6 rounded-2xl font-bold shadow-lg hover:shadow-xl hover:scale-[1.01] transition-all duration-200 flex items-center justify-center gap-3"
           style={{ backgroundColor: primaryColor }}
           onMouseLeave={(e) => {

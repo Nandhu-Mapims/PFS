@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 import { fileURLToPath } from "url";
 import path from "path";
 import { analyzePatientFeedback } from "../src/openRouterAnalysis.js";
+import { combineFeedbackTextForAi } from "../src/feedbackText.js";
 import { filterAiTopicsForTranscript } from "../src/aiTopicsFilter.js";
 import { aiSentimentOnly } from "../src/botConversation.js";
 
@@ -43,8 +44,15 @@ async function main() {
   const serviceCatalog = await loadServiceCatalog();
 
   const rows = await Feedback.find({
-    $or: [{ aiSentiment: null }, { aiSentiment: { $exists: false } }, { aiSentiment: "" }],
-    comments: { $type: "string", $ne: "" },
+    $and: [
+      { $or: [{ aiSentiment: null }, { aiSentiment: { $exists: false } }, { aiSentiment: "" }] },
+      {
+        $or: [
+          { comments: { $type: "string", $ne: "" } },
+          { staffRemarks: { $type: "string", $ne: "" } },
+        ],
+      },
+    ],
   }).lean();
 
   // eslint-disable-next-line no-console
@@ -54,8 +62,8 @@ async function main() {
   let failed = 0;
 
   for (const row of rows) {
-    const comments = String(row.comments || "").trim();
-    if (!comments) continue;
+    const commentsForAi = combineFeedbackTextForAi(row.comments, row.staffRemarks);
+    if (!commentsForAi) continue;
 
     try {
       const ai = await analyzePatientFeedback(
@@ -64,7 +72,7 @@ async function main() {
           patientDepartment: row.lookupDepartment || row.department,
           department: row.lookupDepartment || row.department,
           service: row.service,
-          comments,
+          comments: commentsForAi,
         },
         {
           feedbackId: String(row._id),
@@ -84,7 +92,7 @@ async function main() {
           $set: {
             aiSentiment: sentiment,
             aiUrgency: ai.urgency,
-            aiTopics: filterAiTopicsForTranscript(ai.topics, comments),
+            aiTopics: filterAiTopicsForTranscript(ai.topics, commentsForAi),
             aiSummary: ai.summary,
             aiAnalyzedAt: new Date(),
           },

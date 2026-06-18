@@ -11,9 +11,10 @@ import {
   type BotConversationQuestion,
   transcribeVoiceRecording,
 } from "../lib/api";
-import { getSession } from "../lib/auth";
+import { getSession, isInternalUser } from "../lib/auth";
 import { usePatientIdentity } from "../lib/usePatientIdentity";
 import { PatientIdentitySection } from "./PatientIdentitySection";
+import { StaffRemarksInput } from "./StaffRemarksInput";
 import {
   getBrandingSettings,
   loadBrandingSettings,
@@ -67,6 +68,7 @@ export function BotConversationFeedback() {
     blobs: Blob[];
   } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [staffRemarks, setStaffRemarks] = useState("");
   const [statusHint, setStatusHint] = useState<string | null>(null);
   const [isPlayingPrompt, setIsPlayingPrompt] = useState(false);
 
@@ -228,12 +230,14 @@ export function BotConversationFeedback() {
         .map((a) => `Q: ${a.questionText}\nA: ${a.transcript}`)
         .join("\n\n");
       const session = getSession();
+      const internalSubmit = isInternalUser(session);
       try {
         const created = await createBotFeedback({
           ...identity.getSubmitFields(),
           rating: 3,
           comments: mergedComments,
-          source: session?.role === "staff" ? "staff" : "patient",
+          ...(staffRemarks.trim() ? { staffRemarks: staffRemarks.trim() } : {}),
+          source: internalSubmit ? "staff" : "patient",
           submissionMode: "bot",
           conversationAnswers: finalAnswers,
           answerAudioBlobs: finalBlobs,
@@ -241,7 +245,7 @@ export function BotConversationFeedback() {
         setPendingSubmit(null);
         navigate("/thank-you", {
           state: {
-            fromStaffSession: session?.role === "staff",
+            fromStaffSession: internalSubmit,
             aiSummary: created.aiSummary || undefined,
             aiSentiment: created.aiSentiment || undefined,
             aiTopics: created.aiTopics || undefined,
@@ -252,7 +256,7 @@ export function BotConversationFeedback() {
         setSubmitError(e instanceof Error ? e.message : "Could not submit feedback");
       }
     },
-    [navigate, identity]
+    [navigate, identity, staffRemarks]
   );
 
   const finishRecording = useCallback(async () => {
@@ -544,6 +548,16 @@ export function BotConversationFeedback() {
               <p className="mb-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3 text-center">
                 {submitError}
               </p>
+            ) : null}
+
+            {isInternalUser(getSession()) ? (
+              <StaffRemarksInput
+                value={staffRemarks}
+                onChange={setStaffRemarks}
+                primaryColor={primaryColor}
+                username={getSession()?.username || "staff"}
+                roleLabel={getSession()?.role === "hod" ? "HOD" : "Staff"}
+              />
             ) : null}
 
             <button

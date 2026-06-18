@@ -175,6 +175,15 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
             </>
           )}
 
+          {item.staffRemarks?.trim() ? (
+            <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <h3 className="text-sm font-bold text-amber-900 uppercase tracking-wide mb-2">
+                Staff remarks
+              </h3>
+              <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{item.staffRemarks.trim()}</p>
+            </section>
+          ) : null}
+
         </div>
       </DialogContent>
     </Dialog>

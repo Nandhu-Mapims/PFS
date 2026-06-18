@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { AudioLines, Bot, Keyboard } from "lucide-react";
+import { patientRoutes } from "./patientRoutes";
 
 export type FeedbackModeChoice = {
   id: "bot" | "voice" | "type";
@@ -16,20 +17,20 @@ export const feedbackModeChoices: FeedbackModeChoice[] = [
     icon: Bot,
     title: "AI Voice Guide",
     subtitle: "Tamil Q&A",
-    path: "/feedback/bot",
+    path: patientRoutes.bot,
   },
   {
     id: "voice",
     icon: AudioLines,
     title: "Voice feedback",
     subtitle: "Speak freely",
-    path: "/feedback/give?mode=voice",
+    path: patientRoutes.giveVoice,
   },
   {
     id: "type",
     icon: Keyboard,
     title: "Rate & share",
     subtitle: "Stars + comments",
-    path: "/feedback/give",
+    path: patientRoutes.give,
   },
 ];

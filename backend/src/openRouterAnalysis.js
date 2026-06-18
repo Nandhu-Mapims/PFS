@@ -282,7 +282,7 @@ export async function analyzePatientFeedback(input, options = {}) {
       { role: "user", content: userContent },
     ],
     temperature: 0.2,
-    max_tokens: 512,
+    max_tokens: 1024,
   });
 
   let parsed = null;
@@ -347,6 +347,7 @@ export async function analyzePatientFeedback(input, options = {}) {
     ? parsed.issues
         .map((row) => normalizeIssueFromAi(row, serviceChoices, emrDepartment))
         .filter((row) => row.issueSummary || row.department || row.recommendedService)
+        .slice(0, 8)
     : [];
 
   if (issues.length === 0) {

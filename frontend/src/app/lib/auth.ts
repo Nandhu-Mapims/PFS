@@ -1,8 +1,11 @@
-export type UserRole = "admin" | "staff";
+export type UserRole = "admin" | "staff" | "hod";
 
 export interface SessionUser {
+  _id: string;
   username: string;
   role: UserRole;
+  departmentId?: string | null;
+  departmentName?: string | null;
 }
 
 const SESSION_KEY = "feedback_auth_session";
@@ -21,10 +24,13 @@ export async function login(
     if (!response.ok) {
       return null;
     }
-    const data = (await response.json()) as { username: string; role: UserRole };
+    const data = (await response.json()) as SessionUser;
     const session: SessionUser = {
+      _id: data._id,
       username: data.username,
       role: data.role,
+      departmentId: data.departmentId ?? null,
+      departmentName: data.departmentName ?? null,
     };
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
     return session;
@@ -45,4 +51,8 @@ export function getSession(): SessionUser | null {
 
 export function logout(): void {
   localStorage.removeItem(SESSION_KEY);
+}
+
+export function isInternalUser(session: SessionUser | null): boolean {
+  return session?.role === "staff" || session?.role === "hod";
 }

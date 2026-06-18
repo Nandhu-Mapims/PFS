@@ -3,13 +3,30 @@ import {
   createHospitalDepartment,
   deleteHospitalDepartment,
   getHospitalDepartments,
+  getUsers,
   updateHospitalDepartment,
   type Department,
+  type UserRow,
 } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 
+function hodForDepartment(dept: Department, hodUsers: UserRow[]): UserRow | null {
+  const deptKey = dept.name.trim().toLowerCase();
+  return (
+    hodUsers.find((u) => {
+      if (!u.departmentId || typeof u.departmentId !== "object") return false;
+      if ("_id" in u.departmentId && u.departmentId._id === dept._id) return true;
+      if ("name" in u.departmentId && u.departmentId.name.trim().toLowerCase() === deptKey) {
+        return true;
+      }
+      return false;
+    }) ?? null
+  );
+}
+
 export function AdminHospitalDepartmentsPage() {
   const [list, setList] = useState<Department[]>([]);
+  const [hodUsers, setHodUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -25,7 +42,9 @@ export function AdminHospitalDepartmentsPage() {
     try {
       setLoading(true);
       setError(null);
-      setList(await getHospitalDepartments());
+      const [departments, users] = await Promise.all([getHospitalDepartments(), getUsers()]);
+      setList(departments);
+      setHodUsers(users.filter((u) => u.role === "hod"));
     } catch {
       setError("Could not load departments.");
     } finally {
@@ -158,7 +177,9 @@ export function AdminHospitalDepartmentsPage() {
         <CardHeader className="border-b border-gray-100 bg-gray-50/50">
           <CardTitle className="text-lg">All departments</CardTitle>
           <CardDescription>
-            {loading ? "Loading…" : `${list.length} department(s) in database`}
+            {loading
+              ? "Loading…"
+              : `${list.length} department(s). HOD is applied automatically from Admin → Users (role HOD + matching department).`}
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -170,71 +191,82 @@ export function AdminHospitalDepartmentsPage() {
             </p>
           ) : (
             <ul className="divide-y divide-gray-100">
-              {list.map((dept) => (
-                <li key={dept._id} className="p-6 hover:bg-gray-50/80 transition-colors">
-                  {editingId === dept._id ? (
-                    <div className="space-y-4">
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <input
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          className="p-3 border-2 border-gray-200 rounded-xl w-full"
-                          placeholder="Department name"
-                        />
-                        <input
-                          value={editDescription}
-                          onChange={(e) => setEditDescription(e.target.value)}
-                          className="p-3 border-2 border-gray-200 rounded-xl w-full"
-                          placeholder="Description"
-                        />
+              {list.map((dept) => {
+                const hod = hodForDepartment(dept, hodUsers);
+                return (
+                  <li key={dept._id} className="p-6 hover:bg-gray-50/80 transition-colors">
+                    {editingId === dept._id ? (
+                      <div className="space-y-4">
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <input
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="p-3 border-2 border-gray-200 rounded-xl w-full"
+                            placeholder="Department name"
+                          />
+                          <input
+                            value={editDescription}
+                            onChange={(e) => setEditDescription(e.target.value)}
+                            className="p-3 border-2 border-gray-200 rounded-xl w-full"
+                            placeholder="Description"
+                          />
+                        </div>
+                        <div className="flex gap-3">
+                          <button
+                            type="button"
+                            onClick={() => void onSaveEdit(dept._id)}
+                            className="px-4 py-2 bg-[#2A6FDB] text-white rounded-lg text-sm font-semibold"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={onCancelEdit}
+                            className="px-4 py-2 border rounded-lg text-sm"
+                          >
+                            Cancel
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex gap-3">
-                        <button
-                          type="button"
-                          onClick={() => void onSaveEdit(dept._id)}
-                          className="px-4 py-2 bg-[#2A6FDB] text-white rounded-lg text-sm font-semibold"
-                        >
-                          Save
-                        </button>
-                        <button
-                          type="button"
-                          onClick={onCancelEdit}
-                          className="px-4 py-2 border rounded-lg text-sm"
-                        >
-                          Cancel
-                        </button>
+                    ) : (
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <h3 className="text-lg font-semibold text-gray-900">{dept.name}</h3>
+                          {dept.description ? (
+                            <p className="text-sm text-gray-600 mt-1">{dept.description}</p>
+                          ) : (
+                            <p className="text-sm text-gray-400 mt-1 italic">No description</p>
+                          )}
+                          <p className="text-sm text-gray-600 mt-2">
+                            HOD:{" "}
+                            {hod ? (
+                              <span className="font-semibold text-gray-900">{hod.username}</span>
+                            ) : (
+                              <span className="text-gray-400 italic">Not assigned — create HOD user for this department in Users</span>
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 gap-3">
+                          <button
+                            type="button"
+                            onClick={() => onStartEdit(dept)}
+                            className="text-sm font-semibold text-[#2A6FDB] hover:underline"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void onDelete(dept._id, dept.name)}
+                            className="text-sm font-semibold text-red-600 hover:underline"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="min-w-0">
-                        <h3 className="text-lg font-semibold text-gray-900">{dept.name}</h3>
-                        {dept.description ? (
-                          <p className="text-sm text-gray-600 mt-1">{dept.description}</p>
-                        ) : (
-                          <p className="text-sm text-gray-400 mt-1 italic">No description</p>
-                        )}
-                      </div>
-                      <div className="flex shrink-0 gap-3">
-                        <button
-                          type="button"
-                          onClick={() => onStartEdit(dept)}
-                          className="text-sm font-semibold text-[#2A6FDB] hover:underline"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void onDelete(dept._id, dept.name)}
-                          className="text-sm font-semibold text-red-600 hover:underline"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </li>
-              ))}
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </CardContent>

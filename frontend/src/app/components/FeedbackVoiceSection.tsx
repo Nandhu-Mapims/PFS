@@ -47,6 +47,11 @@ export interface FeedbackVoiceSectionProps {
   onVoiceError: (message: string | null) => void;
   /** Full-session recording blob for server upload (parallel to segmented transcription). */
   onVoiceRecordingReady?: (blob: Blob | null) => void;
+  /** Compact UI for staff remark capture (no patient rating needed). */
+  variant?: "default" | "staffRemarks";
+  /** Skip OpenRouter rating inference (staff notes only need transcript). */
+  skipRatingInference?: boolean;
+  maxRecordingSecondsOverride?: number;
 }
 
 export function FeedbackVoiceSection({
@@ -57,7 +62,11 @@ export function FeedbackVoiceSection({
   onVoiceCleared,
   onVoiceError,
   onVoiceRecordingReady,
+  variant = "default",
+  skipRatingInference = false,
+  maxRecordingSecondsOverride,
 }: FeedbackVoiceSectionProps) {
+  const isStaffRemarks = variant === "staffRemarks";
   const [speechLanguageCode, setSpeechLanguageCode] =
     useState<SpeechLanguageCode>("unknown");
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
@@ -145,17 +154,19 @@ export function FeedbackVoiceSection({
 
   useEffect(() => {
     void loadBrandingSettings().then((b) => {
-      setMaxRecordingSeconds(b.voiceRecordingMaxSeconds);
-      setSecondsRemaining(b.voiceRecordingMaxSeconds);
+      const seconds = maxRecordingSecondsOverride ?? b.voiceRecordingMaxSeconds;
+      setMaxRecordingSeconds(seconds);
+      setSecondsRemaining(seconds);
     });
     return onBrandingSettingsChange(() => {
       const b = getBrandingSettings();
-      setMaxRecordingSeconds(b.voiceRecordingMaxSeconds);
+      const seconds = maxRecordingSecondsOverride ?? b.voiceRecordingMaxSeconds;
+      setMaxRecordingSeconds(seconds);
       if (recordingStateRef.current !== "recording") {
-        setSecondsRemaining(b.voiceRecordingMaxSeconds);
+        setSecondsRemaining(seconds);
       }
     });
-  }, []);
+  }, [maxRecordingSecondsOverride]);
 
   const clearSegmentTimer = useCallback(() => {
     if (segmentTimerRef.current) {
@@ -414,13 +425,15 @@ export function FeedbackVoiceSection({
     setLocalTranscript(cleaned);
 
     let rating = 3;
-    try {
-      const inferred = await inferVoiceRatingFromTranscript(cleaned);
-      if (Number.isFinite(inferred.rating)) {
-        rating = Math.min(5, Math.max(1, Math.round(inferred.rating)));
+    if (!skipRatingInference) {
+      try {
+        const inferred = await inferVoiceRatingFromTranscript(cleaned);
+        if (Number.isFinite(inferred.rating)) {
+          rating = Math.min(5, Math.max(1, Math.round(inferred.rating)));
+        }
+      } catch {
+        rating = 3;
       }
-    } catch {
-      rating = 3;
     }
 
     onVoiceSuccess(cleaned, rating);
@@ -428,7 +441,7 @@ export function FeedbackVoiceSection({
     setRecordingState("completed");
     setSegmentsDoneUi(0);
     finishingSessionRef.current = false;
-  }, [finalizeCurrentSegment, clearCountdownTimer, clearSegmentTimer, onVoiceError, onVoiceSuccess, stopArchiveRecorderAsync, stopTracks]);
+  }, [finalizeCurrentSegment, clearCountdownTimer, clearSegmentTimer, onVoiceError, onVoiceSuccess, skipRatingInference, stopArchiveRecorderAsync, stopTracks]);
 
   finishRecordingPipelineRef.current = () => {
     void finishRecordingPipeline();
@@ -532,8 +545,8 @@ export function FeedbackVoiceSection({
     (recordingState === "recording" && Boolean(liveTranscript.trim()));
 
   return (
-    <div className="mb-8">
-      <div className="flex flex-col items-center gap-8 mb-8">
+    <div className={isStaffRemarks ? "mb-2" : "mb-8"}>
+      <div className={`flex flex-col items-center ${isStaffRemarks ? "gap-4 mb-4" : "gap-8 mb-8"}`}>
         <div className="w-full max-w-sm">
           <label className="mb-2 block text-sm font-semibold text-gray-700">
             Speech language
@@ -554,9 +567,9 @@ export function FeedbackVoiceSection({
         </div>
 
         <div className="text-center min-h-[56px]">
-          <p className="text-xl md:text-2xl font-bold text-gray-800 mb-1">
-            {recordingState === "idle" && "We're ready to listen"}
-            {recordingState === "recording" && "We're listening…"}
+          <p className={`font-bold text-gray-800 mb-1 ${isStaffRemarks ? "text-base" : "text-xl md:text-2xl"}`}>
+            {recordingState === "idle" && (isStaffRemarks ? "Tap to record staff note" : "We're ready to listen")}
+            {recordingState === "recording" && (isStaffRemarks ? "Recording staff note…" : "We're listening…")}
             {recordingState === "processing" && "One moment…"}
             {recordingState === "completed" && "Done"}
           </p>
@@ -631,7 +644,9 @@ export function FeedbackVoiceSection({
           {recordingState === "processing" ? (
             <div className="flex items-center justify-center gap-3 rounded-2xl border border-gray-200 bg-gray-50 px-6 py-5 text-gray-600">
               <Loader size={28} className="animate-spin shrink-0" />
-              <span className="text-base font-medium">Understanding your feedback…</span>
+              <span className="text-base font-medium">
+                {isStaffRemarks ? "Transcribing staff note…" : "Understanding your feedback…"}
+              </span>
             </div>
           ) : recordingState === "recording" ? (
             <button
@@ -656,8 +671,14 @@ export function FeedbackVoiceSection({
               }`}
               style={micIsPrimary ? { backgroundColor: primaryColor } : undefined}
             >
-              <AudioLines size={28} strokeWidth={2} />
-              {recordingState === "completed" ? "Feedback received" : "Share your experience"}
+              <AudioLines size={isStaffRemarks ? 22 : 28} strokeWidth={2} />
+              {recordingState === "completed"
+                ? isStaffRemarks
+                  ? "Note recorded"
+                  : "Feedback received"
+                : isStaffRemarks
+                  ? "Record staff note"
+                  : "Share your experience"}
             </button>
           )}
         </div>
@@ -665,7 +686,9 @@ export function FeedbackVoiceSection({
 
       {(displayTranscript || recordingState === "completed" || recordingState === "processing") && (
         <div className="animate-in fade-in slide-in-from-bottom duration-300">
-          <p className="text-sm font-semibold text-gray-600 mb-2">What we heard</p>
+          <p className="text-sm font-semibold text-gray-600 mb-2">
+            {isStaffRemarks ? "Staff remark transcript" : "What we heard"}
+          </p>
           <div className="bg-[#F5F7FA] rounded-2xl p-5 md:p-6 border-2 border-gray-200 min-h-[100px] mb-4">
             <p className="text-base md:text-lg text-gray-700 leading-relaxed">{displayTranscript}</p>
           </div>

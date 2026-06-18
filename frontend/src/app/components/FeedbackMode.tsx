@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Heart } from "lucide-react";
 import { getSession } from "../lib/auth";
+import { patientRoutes } from "../lib/patientRoutes";
 import {
   getBrandingSettings,
   loadBrandingSettings,
@@ -63,7 +64,7 @@ export function FeedbackMode() {
         {session && (
           <button
             type="button"
-            onClick={() => navigate("/welcome")}
+            onClick={() => navigate(patientRoutes.home)}
             className="text-sm font-medium underline-offset-4 hover:underline"
             style={{ color: primaryColor }}
           >

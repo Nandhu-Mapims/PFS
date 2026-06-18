@@ -30,16 +30,25 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: LoginPage },
       { path: "login", Component: LoginPage },
+
       { path: "welcome", Component: Welcome },
       { path: "feedback/give", Component: FeedbackForm },
       { path: "feedback/bot", Component: BotConversationFeedback },
       { path: "feedback", Component: FeedbackMode },
+      { path: "paper-upload", Component: PaperUpload },
+      { path: "thank-you", Component: ThankYou },
       { path: "feedback-mode", element: <Navigate to="/feedback" replace /> },
       { path: "feedback-form", element: <Navigate to="/feedback/give" replace /> },
       { path: "voice-feedback", element: <Navigate to="/feedback/give?mode=voice" replace /> },
       { path: "bot-feedback", element: <Navigate to="/feedback/bot" replace /> },
-      { path: "paper-upload", Component: PaperUpload },
-      { path: "thank-you", Component: ThankYou },
+
+      { path: "userfeed", element: <Navigate to="/welcome" replace /> },
+      { path: "userfeed/mode", element: <Navigate to="/feedback" replace /> },
+      { path: "userfeed/give", element: <Navigate to="/feedback/give" replace /> },
+      { path: "userfeed/bot", element: <Navigate to="/feedback/bot" replace /> },
+      { path: "userfeed/paper", element: <Navigate to="/paper-upload" replace /> },
+      { path: "userfeed/thank-you", element: <Navigate to="/thank-you" replace /> },
+
       {
         Component: StaffGuard,
         children: [
@@ -78,6 +87,9 @@ export const router = createBrowserRouter([
           { path: "admin/departments", Component: AdminHospitalDepartmentsPage },
           { path: "admin/services", Component: AdminServicesPage },
           { path: "admin/users", Component: AdminUsersPage },
+          { path: "admin/usercreation", element: <Navigate to="/admin/users" replace /> },
+          { path: "usercreation", element: <Navigate to="/admin/users" replace /> },
+          { path: "manage/access", element: <Navigate to="/admin/users" replace /> },
           { path: "admin/tickets", Component: AdminTicketsPage },
           { path: "admin/tickets/delete", Component: AdminTicketsPage },
           { path: "admin/settings", Component: AdminSettingsPage },

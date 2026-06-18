@@ -83,6 +83,13 @@ function sentimentClass(sentiment: ReturnType<typeof getAiSentimentBucket> | "mi
   return "bg-gray-100 text-gray-600";
 }
 
+function assigneeSummary(items: FeedbackItem[]): string {
+  const names = [...new Set(items.map((i) => i.assignedToUsername?.trim()).filter(Boolean))] as string[];
+  if (names.length === 0) return "Unassigned";
+  if (names.length === 1) return names[0];
+  return names.join(", ");
+}
+
 export function PatientGroupedFeedbackTable({
   groups,
   variant,
@@ -147,6 +154,9 @@ export function PatientGroupedFeedbackTable({
                   Rating
                 </th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600">Status</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 hidden md:table-cell">
+                  Assignee
+                </th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 hidden lg:table-cell">
                   Submitted
                 </th>
@@ -293,6 +303,9 @@ function GroupRows({
             <span className="inline-flex px-2 py-0.5 rounded-md text-xs font-semibold bg-gray-100 text-gray-700">
               {group.statusLabel}
             </span>
+          </td>
+          <td className="px-4 py-3 text-xs text-gray-600 hidden md:table-cell max-w-[140px]">
+            <span className="line-clamp-2">{assigneeSummary(group.items)}</span>
           </td>
           <td className="px-4 py-3 text-xs text-gray-500 hidden lg:table-cell whitespace-nowrap">
             {new Date(group.latestCreatedAt).toLocaleDateString()}
@@ -612,7 +625,7 @@ function BotAnswerRow({
               {sentiment ?? "—"}
             </span>
           </td>
-          <td colSpan={3} className="px-4 py-2" />
+          <td colSpan={4} className="px-4 py-2" />
         </>
       ) : (
         <>
@@ -687,6 +700,9 @@ function ChildRow({
             {item.rating} · {ratingLabel[item.rating]}
           </td>
           <td className="px-4 py-2 text-xs">{item.status}</td>
+          <td className="px-4 py-2 text-xs text-gray-600 hidden md:table-cell">
+            {item.assignedToUsername?.trim() || "Unassigned"}
+          </td>
           <td className="px-4 py-2 text-xs text-gray-500 hidden lg:table-cell">
             {new Date(item.createdAt).toLocaleDateString()}
           </td>

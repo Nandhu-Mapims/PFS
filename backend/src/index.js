@@ -20,6 +20,7 @@ import {
   resolveServiceHeuristic,
 } from "./feedbackIssueProcessing.js";
 import { sanitizeOptionalLabel } from "./fieldSanitize.js";
+import { combineFeedbackTextForAi } from "./feedbackText.js";
 import { filterAiTopicsForTranscript } from "./aiTopicsFilter.js";
 import {
   lookupPatientRecords,
@@ -442,13 +443,22 @@ app.post("/api/auth/login", async (req, res) => {
     if (!username || !password) {
       return res.status(400).json({ message: "username and password required" });
     }
-    const user = await User.findOne({ username: String(username).trim().toLowerCase() }).lean();
+    const user = await User.findOne({ username: String(username).trim().toLowerCase() })
+      .populate("departmentId", "name")
+      .lean();
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
+    const dept =
+      user.departmentId && typeof user.departmentId === "object"
+        ? user.departmentId
+        : null;
     return res.json({
+      _id: String(user._id),
       username: user.username,
       role: user.role,
+      departmentId: dept?._id ? String(dept._id) : user.departmentId ? String(user.departmentId) : null,
+      departmentName: dept?.name || null,
     });
   } catch (error) {
     return res.status(500).json({ message: "Login failed" });
@@ -497,12 +507,22 @@ function normalizeServicesPayload(services) {
 
 /** Hospital departments in MongoDB (staff assignment, EMR analytics labels). */
 async function listHospitalDepartmentsFromDb() {
-  const rows = await Department.find().sort({ name: 1 }).lean();
+  const rows = await Department.find()
+    .populate("hodUserId", "username role")
+    .sort({ name: 1 })
+    .lean();
   return rows.map((row) => ({
     _id: String(row._id),
     name: row.name,
     description: row.description || "",
     services: Array.isArray(row.services) ? row.services : [],
+    hodUserId: row.hodUserId
+      ? {
+          _id: String(row.hodUserId._id),
+          username: row.hodUserId.username,
+          role: row.hodUserId.role,
+        }
+      : null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
@@ -726,7 +746,7 @@ app.patch("/api/departments/:id", async (req, res) => {
 
 app.patch("/api/hospital-departments/:id", async (req, res) => {
   try {
-    const { name, description, services } = req.body;
+    const { name, description, services, hodUserId } = req.body;
     if (!name || !String(name).trim()) {
       return res.status(400).json({ message: "name is required" });
     }
@@ -737,12 +757,41 @@ app.patch("/api/hospital-departments/:id", async (req, res) => {
     if (Array.isArray(services)) {
       update.services = normalizeServicesPayload(services);
     }
+    if (hodUserId !== undefined) {
+      if (!hodUserId) {
+        update.hodUserId = null;
+      } else if (mongoose.Types.ObjectId.isValid(String(hodUserId))) {
+        const hodUser = await User.findById(hodUserId).lean();
+        if (!hodUser || hodUser.role !== "hod") {
+          return res.status(400).json({ message: "HOD must be a user with role hod" });
+        }
+        update.hodUserId = String(hodUserId);
+      } else {
+        return res.status(400).json({ message: "Invalid hodUserId" });
+      }
+    }
     const updated = await Department.findByIdAndUpdate(req.params.id, update, {
       new: true,
       runValidators: true,
-    }).lean();
+    })
+      .populate("hodUserId", "username role")
+      .lean();
     if (!updated) return res.status(404).json({ message: "Not found" });
-    return res.json(updated);
+    return res.json({
+      _id: String(updated._id),
+      name: updated.name,
+      description: updated.description || "",
+      services: Array.isArray(updated.services) ? updated.services : [],
+      hodUserId: updated.hodUserId
+        ? {
+            _id: String(updated.hodUserId._id),
+            username: updated.hodUserId.username,
+            role: updated.hodUserId.role,
+          }
+        : null,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    });
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: "Department name already exists" });
@@ -770,13 +819,16 @@ app.post("/api/users", async (req, res) => {
     if (!username || !password || !role) {
       return res.status(400).json({ message: "username, password, and role are required" });
     }
-    if (!["admin", "staff"].includes(role)) {
+    if (!["admin", "staff", "hod"].includes(role)) {
       return res.status(400).json({ message: "Invalid role" });
     }
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(String(password), salt);
     const deptOk =
       departmentId && mongoose.Types.ObjectId.isValid(String(departmentId));
+    if ((role === "staff" || role === "hod") && !deptOk) {
+      return res.status(400).json({ message: "departmentId is required for staff and HOD" });
+    }
     const doc = await User.create({
       username: String(username).trim().toLowerCase(),
       passwordHash,
@@ -804,8 +856,13 @@ app.patch("/api/users/:id", async (req, res) => {
     if (!username || !role) {
       return res.status(400).json({ message: "username and role are required" });
     }
-    if (!["admin", "staff"].includes(role)) {
+    if (!["admin", "staff", "hod"].includes(role)) {
       return res.status(400).json({ message: "Invalid role" });
+    }
+    const deptOk =
+      departmentId && mongoose.Types.ObjectId.isValid(String(departmentId));
+    if ((role === "staff" || role === "hod") && !deptOk) {
+      return res.status(400).json({ message: "departmentId is required for staff and HOD" });
     }
 
     const update = {
@@ -1278,8 +1335,8 @@ async function reanalyzeFeedbackById(feedbackId) {
   const row = await Feedback.findById(feedbackId).lean();
   if (!row || row.isSplitChild) return false;
 
-  const comments = String(row.comments || "").trim();
-  if (!comments) return false;
+  const commentsForAi = combineFeedbackTextForAi(row.comments, row.staffRemarks);
+  if (!commentsForAi) return false;
 
   const existing = row.aiSentiment;
   if (existing === "positive" || existing === "neutral" || existing === "negative") {
@@ -1292,7 +1349,7 @@ async function reanalyzeFeedbackById(feedbackId) {
   await runDeferredFeedbackAiPipeline({
     feedbackId: row._id,
     patientName: row.patientName,
-    comments,
+    comments: commentsForAi,
     visitDepartment,
     normalizedService: sanitizeOptionalLabel(row.service) || "",
     serviceCatalog,
@@ -1461,6 +1518,7 @@ app.post("/api/feedback", (req, res, next) => {
     const patientName = req.body.patientName;
     let comments = req.body.comments;
     const source = req.body.source;
+    const staffRemarks = String(req.body.staffRemarks || "").trim().slice(0, 2000);
     let rating = Number(req.body.rating);
     const rawSubmissionMode = String(req.body.submissionMode || "").toLowerCase().trim();
     const voiceFile = req.files?.voiceRecording?.[0];
@@ -1496,6 +1554,7 @@ app.post("/api/feedback", (req, res, next) => {
         comments = buildBotCommentsFromAnswers(botConversationAnswers);
       }
     }
+    const commentsForAi = combineFeedbackTextForAi(comments, staffRemarks);
     const deferAiProcessing =
       submissionMode === "voice" || submissionMode === "standard" || submissionMode === "bot";
     const rawEncounter = String(req.body.patientEncounterType || "").toLowerCase().trim();
@@ -1558,7 +1617,9 @@ app.post("/api/feedback", (req, res, next) => {
           .map((a) => String(a.transcript || "").trim())
           .filter(Boolean)
           .join(" ");
-        const overall = await inferRatingFromVoiceTranscript(combinedTranscript);
+        const overall = await inferRatingFromVoiceTranscript(
+          combineFeedbackTextForAi(combinedTranscript, staffRemarks)
+        );
         if (overall?.rating >= 1 && overall?.rating <= 5) {
           numericRating = overall.rating;
           usedVoiceRatingForBot = true;
@@ -1576,7 +1637,7 @@ app.post("/api/feedback", (req, res, next) => {
     if (
       !deferAiProcessing &&
       process.env.OPENROUTER_API_KEY &&
-      String(comments || "").trim()
+      commentsForAi
     ) {
       try {
         pendingAi = await analyzePatientFeedback(
@@ -1585,7 +1646,7 @@ app.post("/api/feedback", (req, res, next) => {
             patientDepartment: visitDepartment,
             department: visitDepartment,
             service: normalizedService,
-            comments: comments || "",
+            comments: commentsForAi,
           },
           {
             feedbackId: "submit",
@@ -1617,7 +1678,7 @@ app.post("/api/feedback", (req, res, next) => {
     const complaintSignature = buildComplaintSignature(
       visitDepartment,
       normalizedService,
-      comments || ""
+      commentsForAi
     );
 
     const initialTicket = await evaluateTicketForFeedback(Feedback, {
@@ -1641,6 +1702,7 @@ app.post("/api/feedback", (req, res, next) => {
       service: normalizedService,
       rating: numericRating,
       comments: comments || "",
+      staffRemarks,
       source: ["patient", "staff", "ai"].includes(source) ? source : "patient",
       complaintSignature,
       ticketId,
@@ -1669,7 +1731,7 @@ app.post("/api/feedback", (req, res, next) => {
       !deferAiProcessing &&
       !pendingAi &&
       process.env.OPENROUTER_API_KEY &&
-      String(comments || "").trim()
+      commentsForAi
     ) {
       try {
         pendingAi = await analyzePatientFeedback(
@@ -1678,7 +1740,7 @@ app.post("/api/feedback", (req, res, next) => {
             patientDepartment: visitDepartment,
             department: visitDepartment,
             service: normalizedService,
-            comments: comments || "",
+            comments: commentsForAi,
           },
           {
             feedbackId: String(feedback._id),
@@ -1707,7 +1769,7 @@ app.post("/api/feedback", (req, res, next) => {
           feedbackId: feedback._id,
           pendingAi,
           patientName,
-          comments,
+          comments: commentsForAi,
           visitDepartment,
           normalizedService,
           serviceCatalog,
@@ -1814,14 +1876,14 @@ app.post("/api/feedback", (req, res, next) => {
     const shouldDeferAi =
       deferAiProcessing &&
       process.env.OPENROUTER_API_KEY &&
-      String(comments || "").trim();
+      commentsForAi;
 
     if (shouldDeferAi) {
       setImmediate(() => {
         runDeferredFeedbackAiPipeline({
           feedbackId: feedback._id,
           patientName,
-          comments,
+          comments: commentsForAi,
           visitDepartment,
           normalizedService,
           serviceCatalog,
@@ -1990,21 +2052,7 @@ function counterToSortedList(counter, keyName) {
 
 app.get("/api/analytics", async (_req, res) => {
   try {
-    const rows = await Feedback.find(
-      {},
-      {
-        isSplitChild: 1,
-        aiSentiment: 1,
-        source: 1,
-        rating: 1,
-        status: 1,
-        lookupDepartment: 1,
-        department: 1,
-        service: 1,
-        feedbackIssues: 1,
-        createdAt: 1,
-      }
-    ).lean();
+    const rows = await Feedback.find().lean();
     const sessions = rows.filter((item) => !item.isSplitChild);
 
     const totals = {
@@ -2105,6 +2153,49 @@ app.patch("/api/feedback/:id/status", async (req, res) => {
     return res.json(attachVoicePlaybackUrl(updated));
   } catch (error) {
     return res.status(500).json({ message: "Failed to update feedback status" });
+  }
+});
+
+app.patch("/api/feedback/:id/assign", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid feedback id" });
+    }
+
+    let assignFields = {
+      assignedToUserId: null,
+      assignedToUsername: "",
+      assignedAt: null,
+    };
+
+    if (userId) {
+      if (!mongoose.Types.ObjectId.isValid(String(userId))) {
+        return res.status(400).json({ message: "Invalid user id" });
+      }
+      const user = await User.findById(userId).select("username role").lean();
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      if (user.role !== "hod") {
+        return res.status(400).json({ message: "Tickets can only be assigned to HOD users" });
+      }
+      assignFields = {
+        assignedToUserId: user._id,
+        assignedToUsername: user.username,
+        assignedAt: new Date(),
+      };
+    }
+
+    const updated = await Feedback.findByIdAndUpdate(id, { $set: assignFields }, { new: true }).lean();
+    if (!updated) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+    return res.json(attachVoicePlaybackUrl(updated));
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to update ticket assignment" });
   }
 });
 

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
-import { Home, BarChart3, Building2, ClipboardList, Settings, UserRound } from "lucide-react";
+import { Home, BarChart3, Building2, ClipboardList, Settings, UserRound, Users } from "lucide-react";
 import { getSession, logout } from "../lib/auth";
+import { isUserFeedPath, patientRoutes } from "../lib/patientRoutes";
 import feedbackLogo from "./image/feedback_logo.png";
 import {
   applyBrandingTheme,
@@ -19,17 +20,17 @@ export function Layout() {
 
   const session = getSession();
   const isAdmin = session?.role === "admin";
+  const isHod = session?.role === "hod";
   const path = location.pathname;
-  const isPatientFeedbackArea = path === "/feedback" || path.startsWith("/feedback/");
-  const isPatientKioskScreen =
-    path === "/welcome" || path === "/thank-you" || isPatientFeedbackArea;
+  const isPatientKioskScreen = isUserFeedPath(path);
   const isStaffRoute =
-    path.includes("staff") ||
+    !isPatientKioskScreen &&
+    (path.includes("staff") ||
     path.includes("dashboard") ||
     path.includes("management") ||
     path.includes("analytics") ||
     path.includes("ticket") ||
-    path.includes("admin");
+    path.includes("admin"));
   const showHeaderActions = Boolean(session) && isStaffRoute;
   const onInsightsArea =
     path.startsWith("/management") ||
@@ -41,6 +42,7 @@ export function Layout() {
 
   const showBottomNav =
     Boolean(session) &&
+    !isHod &&
     (onInsightsArea ||
       [
         "/dashboard",
@@ -48,8 +50,8 @@ export function Layout() {
         "/admin",
         "/admin/departments",
         "/admin/services",
-        "/admin/tickets",
         "/admin/users",
+        "/admin/tickets",
         "/admin/settings",
         "/admin/bot-conversation",
       ].includes(path));
@@ -97,10 +99,8 @@ export function Layout() {
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
               <NetworkStatusIndicator variant="inline" />
-              {(showHeaderActions || (session && !isPatientKioskScreen)) && (
+              {!isPatientKioskScreen && showHeaderActions && (
                 <>
-                {showHeaderActions && (
-                  <>
                 {isAdminShell ? (
                   <nav
                     className="hidden md:inline-flex flex-wrap items-center gap-1 rounded-xl border border-gray-200 bg-gray-100/80 p-1 shadow-sm"
@@ -166,20 +166,6 @@ export function Layout() {
                     <button
                       type="button"
                       role="tab"
-                      aria-selected={path.startsWith("/admin/tickets")}
-                      onClick={() => navigate("/admin/tickets")}
-                      className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
-                        path.startsWith("/admin/tickets")
-                          ? "bg-white shadow-sm"
-                          : "text-gray-600 hover:text-gray-900"
-                      }`}
-                      style={path.startsWith("/admin/tickets") ? activePrimaryStyle : undefined}
-                    >
-                      Tickets
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
                       aria-selected={path === "/admin/users"}
                       onClick={() => navigate("/admin/users")}
                       className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
@@ -190,6 +176,20 @@ export function Layout() {
                       style={path === "/admin/users" ? activePrimaryStyle : undefined}
                     >
                       Users
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={path.startsWith("/admin/tickets")}
+                      onClick={() => navigate("/admin/tickets")}
+                      className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
+                        path.startsWith("/admin/tickets")
+                          ? "bg-white shadow-sm"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                      style={path.startsWith("/admin/tickets") ? activePrimaryStyle : undefined}
+                    >
+                      Tickets
                     </button>
                     <button
                       type="button"
@@ -242,11 +242,11 @@ export function Layout() {
                       Operations
                     </button>
                   </>
-                ) : (
+                ) : isHod ? null : (
                   <>
                     <button
                       type="button"
-                      onClick={() => navigate("/feedback")}
+                      onClick={() => navigate(patientRoutes.home)}
                       className="px-4 py-2 text-white rounded-lg transition-all duration-200"
                       style={activePrimaryBackgroundStyle}
                     >
@@ -265,31 +265,29 @@ export function Layout() {
                     </button>
                   </>
                 )}
-                {!isAdminShell && (
+                {!isAdminShell && !isHod && (
                   <button
                     type="button"
-                    onClick={() => navigate("/welcome")}
+                    onClick={() => navigate(patientRoutes.home)}
                     className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-all duration-200"
                   >
                     Patient View
                   </button>
                 )}
-                  </>
-                )}
-                {session && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      logout();
-                      navigate("/login");
-                    }}
-                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-all duration-200"
-                  >
-                    Logout
-                  </button>
-                )}
                 </>
               )}
+              {session ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    logout();
+                    navigate("/login");
+                  }}
+                  className="px-3 sm:px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-all duration-200 text-sm font-medium"
+                >
+                  Logout
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -363,7 +361,7 @@ export function Layout() {
                   }`}
                   style={path === "/admin/users" ? activePrimaryStyle : undefined}
                 >
-                  <UserRound size={22} />
+                  <Users size={22} />
                   <span className="text-[10px] sm:text-xs">Users</span>
                 </button>
                 <button
@@ -410,18 +408,18 @@ export function Layout() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => navigate("/feedback")}
+                  onClick={() => navigate(patientRoutes.home)}
                   className={`flex flex-col items-center gap-1 px-4 py-2 ${
-                    isPatientFeedbackArea ? "" : "text-gray-500"
+                    isPatientKioskScreen ? "" : "text-gray-500"
                   }`}
-                  style={isPatientFeedbackArea ? activePrimaryStyle : undefined}
+                  style={isPatientKioskScreen ? activePrimaryStyle : undefined}
                 >
                   <ClipboardList size={24} />
                   <span className="text-xs">Feedback</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => navigate("/welcome")}
+                  onClick={() => navigate(patientRoutes.home)}
                   className="flex flex-col items-center gap-1 px-4 py-2 text-gray-500"
                 >
                   <UserRound size={24} />

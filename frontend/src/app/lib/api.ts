@@ -45,6 +45,7 @@ export interface FeedbackPayload {
   service?: string;
   rating: number;
   comments: string;
+  staffRemarks?: string;
   source?: "patient" | "staff" | "ai";
   /** When set, multipart upload stores audio under this feedback (voice flow). */
   voiceRecording?: Blob | null;
@@ -133,6 +134,10 @@ export interface FeedbackItem extends Omit<FeedbackPayload, "voiceRecording"> {
   isSplitChild?: boolean;
   /** Set when split ticket borrows bot Q&A from parent submission */
   botVoiceSourceFeedbackId?: string | null;
+  staffRemarks?: string;
+  assignedToUserId?: string | null;
+  assignedToUsername?: string;
+  assignedAt?: string | null;
 }
 
 export interface SentimentCountRow {
@@ -219,6 +224,7 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
   }
   fd.append("rating", String(fields.rating));
   fd.append("comments", fields.comments ?? "");
+  if (fields.staffRemarks?.trim()) fd.append("staffRemarks", fields.staffRemarks.trim());
   if (fields.source) fd.append("source", fields.source);
   fd.append(
     "submissionMode",
@@ -367,6 +373,7 @@ export async function createBotFeedback(
   if (fields.service) fd.append("service", fields.service);
   fd.append("rating", String(fields.rating));
   fd.append("comments", fields.comments ?? "");
+  if (fields.staffRemarks?.trim()) fd.append("staffRemarks", fields.staffRemarks.trim());
   if (fields.source) fd.append("source", fields.source);
   fd.append("submissionMode", "bot");
   fd.append("conversationAnswers", JSON.stringify(conversationAnswers));
@@ -472,6 +479,22 @@ export async function updateFeedbackStatus(
   return response.json();
 }
 
+export async function assignFeedbackTicket(
+  id: string,
+  userId: string | null
+): Promise<FeedbackItem> {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/${id}/assign`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not update assignment");
+  }
+  return body as FeedbackItem;
+}
+
 export async function deleteFeedback(id: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/feedback/${id}`, {
     method: "DELETE",
@@ -518,7 +541,9 @@ export interface Department {
   name: string;
   description?: string;
   services?: DepartmentService[];
+  hodUserId?: { _id: string; username: string; role: string } | null;
   createdAt: string;
+  updatedAt?: string;
 }
 
 /** Hospital departments stored in MongoDB (staff assignment, local catalog). */
@@ -614,6 +639,7 @@ export async function updateHospitalDepartment(
     name: string;
     description?: string;
     services?: DepartmentService[];
+    hodUserId?: string | null;
   }
 ): Promise<Department> {
   const response = await fetch(`${API_BASE_URL}/api/hospital-departments/${id}`, {
@@ -680,7 +706,7 @@ export async function updateDepartment(
 export interface UserRow {
   _id: string;
   username: string;
-  role: "admin" | "staff";
+  role: "admin" | "staff" | "hod";
   departmentId?: { _id: string; name: string } | null;
 }
 
@@ -693,7 +719,7 @@ export async function getUsers(): Promise<UserRow[]> {
 export async function createUser(payload: {
   username: string;
   password: string;
-  role: "admin" | "staff";
+  role: "admin" | "staff" | "hod";
   departmentId?: string | null;
 }): Promise<UserRow> {
   const response = await fetch(`${API_BASE_URL}/api/users`, {
@@ -712,7 +738,7 @@ export async function updateUser(
   id: string,
   payload: {
     username: string;
-    role: "admin" | "staff";
+    role: "admin" | "staff" | "hod";
     departmentId?: string | null;
     password?: string;
   }

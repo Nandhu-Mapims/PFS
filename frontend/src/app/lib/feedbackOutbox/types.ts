@@ -23,6 +23,7 @@ export type OutboxPayload = Pick<
   | "ward"
   | "ipNo"
   | "visitOrAdmissionDate"
+  | "staffRemarks"
 >;
 
 export interface FeedbackOutboxEntry {

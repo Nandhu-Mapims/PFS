@@ -7,7 +7,7 @@ import {
   saveVoiceDraft,
   syncAfterEnqueue,
 } from "../lib/feedbackOutbox";
-import { getSession } from "../lib/auth";
+import { getSession, isInternalUser } from "../lib/auth";
 import { usePatientIdentity } from "../lib/usePatientIdentity";
 import {
   getBrandingSettings,
@@ -16,6 +16,7 @@ import {
 } from "../lib/branding";
 import { FeedbackVoiceSection } from "./FeedbackVoiceSection";
 import { PatientIdentitySection } from "./PatientIdentitySection";
+import { StaffRemarksInput } from "./StaffRemarksInput";
 
 type InputKind = "voice" | "type";
 
@@ -41,6 +42,7 @@ export function FeedbackForm() {
   const identity = usePatientIdentity();
 
   const [comments, setComments] = useState("");
+  const [staffRemarks, setStaffRemarks] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<"idle" | "text" | "voice">("idle");
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -68,6 +70,9 @@ export function FeedbackForm() {
     outboxIdRef.current = null;
     identity.reset();
   }, [modeParam, identity.reset]);
+
+  const session = getSession();
+  const internalSubmit = isInternalUser(session);
 
   const selectedEmotionData = emotions.find((e) => e.id === selectedEmotion);
   const primaryTint = `${primaryColor}1A`;
@@ -164,7 +169,7 @@ export function FeedbackForm() {
       setSubmitError(null);
       setIsSubmitting(true);
       setSubmitPhase("text");
-      const isStaffSession = getSession()?.role === "staff";
+      const isStaffSession = internalSubmit;
       const outboxId = outboxIdRef.current ?? newOutboxId();
       outboxIdRef.current = outboxId;
 
@@ -172,6 +177,7 @@ export function FeedbackForm() {
         ...identity.getSubmitFields(),
         rating: selectedEmotion as number,
         comments: comments.trim(),
+        ...(staffRemarks.trim() ? { staffRemarks: staffRemarks.trim() } : {}),
         source: (isStaffSession ? "staff" : "patient") as "staff" | "patient",
         submissionMode: (inputKind === "voice" ? "voice" : "standard") as "voice" | "standard",
       };
@@ -357,6 +363,16 @@ export function FeedbackForm() {
               </div>
             )}
           </>
+        )}
+
+        {internalSubmit && (
+          <StaffRemarksInput
+            value={staffRemarks}
+            onChange={setStaffRemarks}
+            primaryColor={primaryColor}
+            username={session?.username || "staff"}
+            roleLabel={session?.role === "hod" ? "HOD" : "Staff"}
+          />
         )}
 
         <button

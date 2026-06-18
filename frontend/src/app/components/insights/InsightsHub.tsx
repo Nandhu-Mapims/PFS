@@ -1,5 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import { Navigate, Outlet, useLocation } from "react-router";
+import { getSession } from "../../lib/auth";
 import { InsightsPeriodFilterBar } from "./InsightsPeriodFilterBar";
 import { InsightsViewTabs } from "./InsightsViewTabs";
 import { useInsightsData } from "./useInsightsData";
@@ -11,6 +12,10 @@ function insightsBasePath(pathname: string): string {
 
 export function InsightsHub() {
   const location = useLocation();
+  const session = getSession();
+  if (session?.role === "hod") {
+    return <Navigate to="/dashboard" replace />;
+  }
   const basePath = insightsBasePath(location.pathname);
   const data = useInsightsData();
 

@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { login } from "../lib/auth";
+import { login, type UserRole } from "../lib/auth";
 import feedbackLogo from "./image/feedback_logo.png";
 
 export function LoginPage() {
@@ -12,9 +12,13 @@ export function LoginPage() {
 
   const nextPath = (location.state as { from?: string } | null)?.from;
 
-  function continueAfterLogin(role: "admin" | "staff") {
+  function continueAfterLogin(role: UserRole) {
     if (role === "admin") {
       navigate("/admin", { replace: true });
+      return;
+    }
+    if (role === "hod") {
+      navigate(nextPath || "/dashboard", { replace: true });
       return;
     }
     navigate(nextPath || "/feedback", { replace: true });
@@ -44,7 +48,7 @@ export function LoginPage() {
         </div>
         <h2 className="text-3xl font-bold text-gray-800 mb-2 text-center">Mapims feedback system</h2>
         <p className="text-gray-500 mb-6">
-          Login as Admin or Staff to manage feedback.
+          Login as Admin, Staff, or HOD to manage feedback.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -56,7 +60,7 @@ export function LoginPage() {
               type="text"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="admin / staff"
+              placeholder="admin / staff / hod"
               className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-[#2A6FDB] outline-none"
             />
           </div>

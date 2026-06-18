@@ -53,17 +53,18 @@ export function buildFeedbackAnalysisUserPrompt(params) {
   const svc = serviceNamesPipe(serviceChoices);
   const svcLine = svc ? `<svc>${esc(svc)}</svc>` : `<svc/>`;
 
-  return `<j>Analyze patient feedback→JSON; ground all fields in patient text</j>
+  return `<j>Analyze patient feedback→JSON; ground all fields in patient text and any [Staff note] lines</j>
 <ctx n="${esc(patientName)}" dept="${esc(emrDepartment || "-")}" hint="${esc(serviceHint || "-")}"/>
 <txt>${esc(comments || "")}</txt>
 ${svcLine}
 <r>
+[Staff note] lines are from staff who collected feedback on behalf of the patient—include them in sentiment, topics, issues, and summary.
 rating:integer 1-5 from overall tone (ta/en); 5 praise 4 good 3 mixed 2 poor 1 very poor; align with sentiment.
 sentiment+urgency from txt; vague→neutral.
 topics:1-5 English tags from txt only; no Wait/Nurse/Bill/Food unless said.
 ta:காத்து=air/AC not wait;பாத்ரூம்→Cleanliness/Housekeeping; wait tag only if wait/காத்திருப்பு.
 recommendedService: exact name from svc pipe or "".
-issues:1 if one problem else split only clear multi-service; no fake extra issues;
+issues: list every distinct problem, complaint, concern, or praise area explicitly mentioned in txt (patient answers + [Staff note]); split into separate issues when topics, departments, or services clearly differ; include minor issues if the patient or staff stated them; do not invent issues absent from txt; pure praise→one positive issue; mixed feedback with multiple topics→multiple issues; cap at 8 issues.
 each issue sentiment must match ONLY that issueSummary text (positive praise→positive even if another Q was negative).
 Bot txt has Q:/A: blocks: rate each A separately; do not copy overall negative to a positive answer.
 each:{department,recommendedService,issueSummary,suggestedAction,sentiment per issue}.

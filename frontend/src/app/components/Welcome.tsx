@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router";
 import { Heart } from "lucide-react";
 import {
   getBrandingSettings,
@@ -9,7 +8,6 @@ import {
 import { FeedbackModeCards } from "./FeedbackModeCards";
 
 export function Welcome() {
-  const navigate = useNavigate();
   const [primaryColor, setPrimaryColor] = useState("#2A6FDB");
   const [accentColor, setAccentColor] = useState("#2FBF71");
 
@@ -56,16 +54,6 @@ export function Welcome() {
         <p className="text-sm text-gray-500 mb-6">
           Hospital staff helping a patient use the same options above.
         </p>
-
-        <div className="pt-6 border-t border-gray-200">
-          <button
-            type="button"
-            onClick={() => navigate("/login")}
-            className="text-gray-400 hover:text-[#2A6FDB] text-sm transition-colors"
-          >
-            Staff Access →
-          </button>
-        </div>
       </div>
     </div>
   );

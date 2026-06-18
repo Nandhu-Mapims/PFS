@@ -8,13 +8,14 @@ import {
   type UserRow,
   updateUser,
 } from "../lib/api";
+import type { UserRole } from "../lib/auth";
 
 export function AdminUsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"admin" | "staff">("staff");
+  const [role, setRole] = useState<UserRole>("staff");
   const [departmentId, setDepartmentId] = useState("");
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +41,10 @@ export function AdminUsersPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if ((role === "staff" || role === "hod") && !departmentId) {
+      setError("Department is required for staff and HOD accounts.");
+      return;
+    }
     try {
       setError(null);
       if (editingUserId) {
@@ -107,7 +112,7 @@ export function AdminUsersPage() {
   return (
     <div className="w-full">
       <h2 className="text-3xl font-bold text-gray-800 mb-2">Users</h2>
-      <p className="text-gray-600 mb-8">Create staff or admin accounts (passwords stored securely on the server).</p>
+      <p className="text-gray-600 mb-8">Create admin, staff, or HOD accounts (passwords stored securely on the server).</p>
 
       <div className="bg-white rounded-xl shadow-md p-6 mb-8">
         <h3 className="text-lg font-semibold text-gray-800 mb-4">
@@ -141,20 +146,22 @@ export function AdminUsersPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
             <select
               value={role}
-              onChange={(e) => setRole(e.target.value as "admin" | "staff")}
+              onChange={(e) => setRole(e.target.value as UserRole)}
               className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-[#2A6FDB] outline-none bg-white"
             >
               <option value="staff">Staff</option>
+              <option value="hod">HOD (Head of Department)</option>
               <option value="admin">Admin</option>
             </select>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Department (optional, for staff)
+              Department {role === "staff" || role === "hod" ? "(required)" : "(optional)"}
             </label>
             <select
               value={departmentId}
               onChange={(e) => setDepartmentId(e.target.value)}
+              required={role === "staff" || role === "hod"}
               className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-[#2A6FDB] outline-none bg-white"
             >
               <option value="">— None —</option>

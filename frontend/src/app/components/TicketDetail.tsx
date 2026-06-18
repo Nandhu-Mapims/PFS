@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import {
   ArrowLeft,
@@ -11,10 +11,13 @@ import {
   Mic,
 } from "lucide-react";
 import {
+  assignFeedbackTicket,
   deleteFeedback,
   getFeedbackById,
+  getUsers,
   resolveUploadUrl,
   type FeedbackItem,
+  type UserRow,
   updateFeedbackStatus,
 } from "../lib/api";
 import { BotConversationFeedbackSection } from "./BotConversationFeedbackSection";
@@ -25,20 +28,95 @@ import {
   feedbackModeLabel,
 } from "../lib/feedbackDisplay";
 import { getSession } from "../lib/auth";
+import { ticketDepartment } from "../lib/ticketFilters";
+
+function userDepartmentName(user: UserRow): string {
+  if (user.departmentId && typeof user.departmentId === "object" && "name" in user.departmentId) {
+    return user.departmentId.name.trim();
+  }
+  return "";
+}
+
+function sortHodAssignees(
+  hods: UserRow[],
+  ticket: FeedbackItem | null,
+  defaultHodId: string | null
+): UserRow[] {
+  const ticketDept = ticket ? ticketDepartment(ticket).trim().toLowerCase() : "";
+  return [...hods].sort((a, b) => {
+    const rank = (u: UserRow) => {
+      if (defaultHodId && u._id === defaultHodId) return 0;
+      if (ticketDept && userDepartmentName(u).toLowerCase() === ticketDept) return 1;
+      return 2;
+    };
+    const diff = rank(a) - rank(b);
+    return diff !== 0 ? diff : a.username.localeCompare(b.username);
+  });
+}
+
+function defaultHodForTicket(hodUsers: UserRow[], ticket: FeedbackItem | null): string | null {
+  if (!ticket) return null;
+  const ticketDept = ticketDepartment(ticket).trim().toLowerCase();
+  if (!ticketDept) return null;
+
+  const fromUserDept = hodUsers.find(
+    (u) => userDepartmentName(u).trim().toLowerCase() === ticketDept
+  );
+  return fromUserDept?._id ?? null;
+}
+
+function feedbackSourceLabel(source: string | undefined): string {
+  if (source === "staff") return "Patient (collected at desk)";
+  if (source === "ai") return "AI channel";
+  return "Patient";
+}
 
 export function TicketDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const { id } = useParams();
   const [ticket, setTicket] = useState<FeedbackItem | null>(null);
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const assignSuggestDone = useRef<string | null>(null);
+  const [assigneeId, setAssigneeId] = useState<string>("");
   const [status, setStatus] = useState<FeedbackItem["status"]>("New");
-  const [notes, setNotes] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const session = getSession();
   const isAdmin = session?.role === "admin";
+  const isHod = session?.role === "hod";
+  const canUpdateStatus = isHod;
   const showDeleteAction = location.pathname.includes("/delete");
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void getUsers()
+      .then((userRows) => setUsers(userRows.filter((u) => u.role === "hod")))
+      .catch(() => setUsers([]));
+  }, [isAdmin]);
+
+  const hodUsers = users;
+
+  const defaultHodId = useMemo(
+    () => defaultHodForTicket(hodUsers, ticket),
+    [hodUsers, ticket]
+  );
+
+  const hodAssignees = useMemo(
+    () => sortHodAssignees(hodUsers, ticket, defaultHodId),
+    [hodUsers, ticket, defaultHodId]
+  );
+
+  const currentAssigneeIsHod = useMemo(() => {
+    if (!ticket?.assignedToUserId) return true;
+    return hodUsers.some((h) => h._id === ticket.assignedToUserId);
+  }, [ticket, hodUsers]);
+
+  const defaultHodUser = useMemo(
+    () => hodAssignees.find((u) => u._id === defaultHodId) ?? null,
+    [hodAssignees, defaultHodId]
+  );
 
   useEffect(() => {
     async function loadTicket() {
@@ -53,6 +131,9 @@ export function TicketDetail() {
         const row = await getFeedbackById(id);
         setTicket(row);
         setStatus(row.status);
+        const assignedId = row.assignedToUserId || "";
+        setAssigneeId(assignedId);
+        assignSuggestDone.current = null;
       } catch {
         setError("Could not load ticket details.");
       } finally {
@@ -61,6 +142,32 @@ export function TicketDetail() {
     }
     void loadTicket();
   }, [id]);
+
+  useEffect(() => {
+    if (!ticket || !isAdmin || ticket.assignedToUserId) return;
+    if (assignSuggestDone.current === ticket._id) return;
+    if (!defaultHodId) {
+      assignSuggestDone.current = ticket._id;
+      return;
+    }
+    setAssigneeId(defaultHodId);
+    assignSuggestDone.current = ticket._id;
+  }, [ticket, isAdmin, defaultHodId]);
+
+  async function handleAssign(userId: string | null) {
+    if (!ticket) return;
+    try {
+      setIsSaving(true);
+      setError(null);
+      const updated = await assignFeedbackTicket(ticket._id, userId);
+      setTicket(updated);
+      setAssigneeId(updated.assignedToUserId || "");
+    } catch {
+      setError("Could not update assignment.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
 
   async function handleSave() {
     if (!ticket || !id) return;
@@ -118,6 +225,70 @@ export function TicketDetail() {
       : ticket?.botVoiceSourceFeedbackId && hasBotConversation
         ? "Voice Q&A loaded from the linked bot submission for this patient."
         : null;
+
+  const isAssignedToHod = Boolean(
+    ticket?.assignedToUserId &&
+      ticket?.assignedToUsername?.trim() &&
+      (isAdmin ? currentAssigneeIsHod : true)
+  );
+  const assignedAtLabel = ticket?.assignedAt
+    ? new Date(ticket.assignedAt).toLocaleString()
+    : isAssignedToHod
+      ? "Assigned"
+      : "Pending";
+
+  const timelineItems = useMemo(() => {
+    if (!ticket) return [];
+    return [
+      {
+        event: "Feedback Submitted",
+        status: "completed" as const,
+        time: createdAt?.toLocaleString() || "-",
+      },
+      {
+        event: "Ticket Created",
+        status: "completed" as const,
+        time: createdAt?.toLocaleString() || "-",
+      },
+      {
+        event: isAssignedToHod
+          ? `Assigned to HOD · ${ticket.assignedToUsername?.trim()}`
+          : "Assigned to HOD",
+        status: isAssignedToHod ? ("completed" as const) : ("pending" as const),
+        time: isAssignedToHod
+          ? assignedAtLabel
+          : !currentAssigneeIsHod && ticket.assignedToUserId
+            ? "Invalid assignee — reassign to HOD"
+            : "Pending",
+      },
+      {
+        event: "In Progress",
+        status:
+          ticket.status === "In Progress" || ticket.status === "Resolved"
+            ? ("completed" as const)
+            : ("pending" as const),
+        time:
+          ticket.status === "In Progress" || ticket.status === "Resolved"
+            ? "Updated"
+            : "Pending",
+      },
+      {
+        event: "Resolved",
+        status: ticket.status === "Resolved" ? ("completed" as const) : ("pending" as const),
+        time: ticket.status === "Resolved" ? "Updated" : "Pending",
+      },
+    ];
+  }, [ticket, createdAt, isAssignedToHod, assignedAtLabel, currentAssigneeIsHod]);
+
+  const assignButtonLabel = !assigneeId
+    ? ticket?.assignedToUserId
+      ? "Unassign"
+      : "Unassigned"
+    : !ticket?.assignedToUserId
+      ? "Assign"
+      : assigneeId !== ticket.assignedToUserId
+        ? "Reassign to HOD"
+        : "Current HOD";
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -199,7 +370,9 @@ export function TicketDetail() {
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Source</p>
-                <p className="text-base font-semibold text-gray-800 capitalize">{ticket.source}</p>
+                <p className="text-base font-semibold text-gray-800">
+                  {feedbackSourceLabel(ticket.source)}
+                </p>
               </div>
               <div>
                 <p className="text-sm text-gray-600 mb-1">Feedback type</p>
@@ -338,6 +511,13 @@ export function TicketDetail() {
 
           </div>
 
+          {ticket.staffRemarks?.trim() ? (
+            <div className="bg-amber-50 rounded-xl p-6 border border-amber-200 shadow-sm">
+              <h3 className="text-lg font-semibold text-amber-900 mb-2">Staff remarks</h3>
+              <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{ticket.staffRemarks.trim()}</p>
+            </div>
+          ) : null}
+
           {ticket.feedbackIssues && ticket.feedbackIssues.length > 0 && (
             <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
               <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
@@ -389,51 +569,110 @@ export function TicketDetail() {
             </div>
           )}
 
-          {/* Timeline */}
-          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-            <h3 className="text-xl font-bold text-gray-800 mb-6">Timeline</h3>
-            <div className="space-y-4">
-              {[
-                { event: "Feedback Submitted", status: "completed", time: createdAt?.toLocaleString() || "-" },
-                { event: "Ticket Created", status: "completed", time: createdAt?.toLocaleString() || "-" },
-                {
-                  event: "In Progress",
-                  status: ticket.status === "In Progress" || ticket.status === "Resolved" ? "completed" : "pending",
-                  time: ticket.status === "In Progress" || ticket.status === "Resolved" ? "Updated" : "Pending",
-                },
-                {
-                  event: "Resolved",
-                  status: ticket.status === "Resolved" ? "completed" : "pending",
-                  time: ticket.status === "Resolved" ? "Updated" : "Pending",
-                },
-              ].map((item, index) => (
-                <div key={index} className="flex items-start gap-4">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    item.status === "completed" ? "bg-[#2FBF71]" : "bg-gray-300"
-                  }`}>
-                    {item.status === "completed" ? (
-                      <CheckCircle size={20} className="text-white" />
-                    ) : (
-                      <div className="w-3 h-3 bg-white rounded-full" />
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <p className={`font-semibold ${item.status === "completed" ? "text-gray-800" : "text-gray-400"}`}>
-                      {item.event}
-                    </p>
-                    <p className="text-sm text-gray-600">{item.time}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
         {/* Right Column - Actions */}
         <div className="space-y-6">
-          {/* Status Update */}
+          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+            {isAdmin ? (
+              <>
+                <h3 className="text-lg font-semibold text-gray-800 mb-4">Assign to HOD</h3>
+                {!ticket.assignedToUserId && ticketDepartment(ticket) && defaultHodUser ? (
+                  <p className="text-xs text-emerald-700 mb-3">
+                    Suggested HOD for {ticketDepartment(ticket)}:{" "}
+                    <span className="font-semibold">{defaultHodUser.username}</span>
+                  </p>
+                ) : !ticket.assignedToUserId && ticketDepartment(ticket) ? (
+                  <p className="text-xs text-amber-700 mb-3">
+                    No HOD for {ticketDepartment(ticket)}. Create one in Admin → Users, or pick any HOD
+                    below.
+                  </p>
+                ) : null}
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {ticket.assignedToUserId ? "Reassign to another HOD" : "Select HOD"}
+                </label>
+                <select
+                  value={assigneeId}
+                  onChange={(e) => setAssigneeId(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none mb-3"
+                >
+                  <option value="">Unassigned</option>
+                  {hodAssignees.map((u) => (
+                    <option key={u._id} value={u._id}>
+                      {u.username}
+                      {userDepartmentName(u) ? ` · ${userDepartmentName(u)}` : ""}
+                      {u._id === defaultHodId ? " · Department HOD" : ""}
+                    </option>
+                  ))}
+                </select>
+                {hodAssignees.length === 0 ? (
+                  <p className="text-xs text-amber-700 mb-3">
+                    No HOD users yet. Create one under Admin → Users.
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void handleAssign(assigneeId || null)}
+                  disabled={isSaving || assigneeId === (ticket.assignedToUserId || "")}
+                  className="w-full bg-[#2A6FDB] text-white py-2.5 rounded-lg font-semibold text-sm disabled:opacity-50"
+                >
+                  {isSaving ? "Saving…" : assignButtonLabel}
+                </button>
+              </>
+            ) : null}
+
+            <div className={isAdmin ? "mt-6 pt-6 border-t border-gray-100" : ""}>
+              <h3 className="text-lg font-bold text-gray-800 mb-4">Timeline</h3>
+              <div className="space-y-4">
+                {timelineItems.map((item, index) => (
+                  <div key={index} className="flex items-start gap-3">
+                    <div
+                      className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
+                        item.status === "completed" ? "bg-[#2FBF71]" : "bg-gray-300"
+                      }`}
+                    >
+                      {item.status === "completed" ? (
+                        <CheckCircle size={18} className="text-white" />
+                      ) : (
+                        <div className="w-2.5 h-2.5 bg-white rounded-full" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className={`font-semibold text-sm ${
+                          item.status === "completed" ? "text-gray-800" : "text-gray-400"
+                        }`}
+                      >
+                        {item.event}
+                      </p>
+                      <p className="text-xs text-gray-600 mt-0.5">{item.time}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {isAdmin && showDeleteAction && (
+            <div className="bg-white rounded-xl p-6 border border-red-200 shadow-sm">
+              <button
+                type="button"
+                onClick={() => void handleDelete()}
+                className="w-full px-4 py-3 bg-red-700 text-white rounded-lg hover:bg-red-800 transition-colors text-sm font-bold"
+              >
+                Delete Ticket
+              </button>
+            </div>
+          )}
+
+          {canUpdateStatus && (
           <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
             <h3 className="text-lg font-semibold text-gray-800 mb-4">Update Status</h3>
+            {isHod ? (
+              <p className="text-sm text-gray-600 mb-4">
+                Update progress after you review this ticket.
+              </p>
+            ) : null}
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value as FeedbackItem["status"])}
@@ -444,16 +683,6 @@ export function TicketDetail() {
               <option value="Resolved">Resolved</option>
             </select>
 
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Add Notes
-            </label>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Add internal notes or comments..."
-              className="w-full h-32 px-4 py-3 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none resize-none mb-4"
-            />
-
             <button
               onClick={handleSave}
               disabled={isSaving || status === ticket.status}
@@ -462,16 +691,8 @@ export function TicketDetail() {
               <Save size={20} />
               {isSaving ? "Saving..." : "Save Changes"}
             </button>
-
-            {showDeleteAction && (
-              <button
-                onClick={() => void handleDelete()}
-                className="w-full mt-3 px-4 py-3 bg-red-700 text-white rounded-lg hover:bg-red-800 transition-colors text-sm font-bold"
-              >
-                Delete Ticket
-              </button>
-            )}
           </div>
+          )}
 
         </div>
       </div>

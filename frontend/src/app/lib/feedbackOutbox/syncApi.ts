@@ -19,6 +19,7 @@ function buildFeedbackFormData(payload: OutboxPayload, clientSubmissionId: strin
   if (payload.service) fd.append("service", payload.service);
   fd.append("rating", String(payload.rating));
   fd.append("comments", payload.comments ?? "");
+  if (payload.staffRemarks?.trim()) fd.append("staffRemarks", payload.staffRemarks.trim());
   if (payload.source) fd.append("source", payload.source);
   fd.append("submissionMode", payload.submissionMode || "standard");
   if (payload.patientRegNo) fd.append("patientRegNo", payload.patientRegNo);

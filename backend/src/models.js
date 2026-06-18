@@ -13,6 +13,7 @@ const departmentSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true, unique: true },
     description: { type: String, default: "", trim: true },
     services: { type: [departmentServiceSchema], default: [] },
+    hodUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );
@@ -29,7 +30,7 @@ const userSchema = new mongoose.Schema(
   {
     username: { type: String, required: true, trim: true, unique: true, lowercase: true },
     passwordHash: { type: String, required: true },
-    role: { type: String, enum: ["admin", "staff"], required: true },
+    role: { type: String, enum: ["admin", "staff", "hod"], required: true },
     departmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Department", default: null },
   },
   { timestamps: true }
@@ -70,6 +71,11 @@ const feedbackSchema = new mongoose.Schema(
     isSplitChild: { type: Boolean, default: false },
     rating: { type: Number, required: true, min: 1, max: 5 },
     comments: { type: String, default: "", trim: true },
+    /** Internal note when staff/HOD submits on behalf of patient */
+    staffRemarks: { type: String, default: "", trim: true },
+    assignedToUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    assignedToUsername: { type: String, default: "", trim: true },
+    assignedAt: { type: Date, default: null },
     status: {
       type: String,
       enum: ["New", "In Progress", "Resolved"],

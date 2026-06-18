@@ -9,11 +9,15 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router";
 import {
   getFeedback,
+  getFeedbackAnalytics,
   updateFeedbackStatus,
+  type FeedbackAnalytics,
   type FeedbackItem,
 } from "../lib/api";
+import { getSession } from "../lib/auth";
 import { displayOptionalLabel, sanitizeOptionalLabel } from "../lib/fieldSanitize";
 import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
 import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
@@ -73,12 +77,36 @@ function combinedFilterKey(dept: string, svc: string) {
   return `${dept}${COMBINED_KEY_SEP}${svc}`;
 }
 
+function matchesHodDepartment(item: FeedbackItem, departmentName: string): boolean {
+  const target = departmentName.trim().toLowerCase();
+  if (!target) return true;
+  const dept = departmentKey(item).toLowerCase();
+  if (dept && dept === target) return true;
+  return (item.feedbackIssues || []).some(
+    (issue) => (issue.department || "").trim().toLowerCase() === target
+  );
+}
+
+function visibleToHod(
+  item: FeedbackItem,
+  hodUserId: string,
+  hodDepartment: string
+): boolean {
+  if (hodUserId && item.assignedToUserId === hodUserId) return true;
+  if (hodDepartment) return matchesHodDepartment(item, hodDepartment);
+  return false;
+}
+
 function FeedbackTable({
   rows,
   onStatusChange,
+  hodUserId,
+  onOpenTicket,
 }: {
   rows: FeedbackItem[];
   onStatusChange: (id: string, status: FeedbackItem["status"]) => void;
+  hodUserId?: string;
+  onOpenTicket?: (id: string) => void;
 }) {
   if (rows.length === 0) {
     return (
@@ -99,7 +127,9 @@ function FeedbackTable({
             <TableHead>Rating</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="min-w-[200px]">Comments</TableHead>
+            <TableHead className="min-w-[160px]">Staff remarks</TableHead>
             <TableHead className="pr-4">Submitted</TableHead>
+            {onOpenTicket ? <TableHead className="pr-4 text-right"> </TableHead> : null}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -149,9 +179,28 @@ function FeedbackTable({
               <TableCell className="text-muted-foreground text-sm whitespace-normal">
                 {item.comments || "—"}
               </TableCell>
+              <TableCell className="text-muted-foreground text-sm whitespace-normal max-w-[200px]">
+                {item.staffRemarks?.trim() || "—"}
+              </TableCell>
               <TableCell className="text-muted-foreground pr-4 text-sm">
                 {new Date(item.createdAt).toLocaleString()}
+                {hodUserId && item.assignedToUserId === hodUserId ? (
+                  <span className="block text-xs font-semibold text-emerald-700 mt-1">Assigned to you</span>
+                ) : null}
               </TableCell>
+              {onOpenTicket ? (
+                <TableCell className="pr-4 text-right">
+                  {item.ticketId ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenTicket(item._id)}
+                      className="text-sm font-semibold text-[#2A6FDB] hover:underline"
+                    >
+                      View ticket
+                    </button>
+                  ) : null}
+                </TableCell>
+              ) : null}
             </TableRow>
           ))}
         </TableBody>
@@ -214,7 +263,13 @@ function SummaryStrip({
 }
 
 export function Dashboard() {
+  const navigate = useNavigate();
+  const session = getSession();
+  const isHod = session?.role === "hod";
+  const hodDepartment = session?.departmentName?.trim() || "";
+  const hodUserId = session?._id || "";
   const [items, setItems] = useState<FeedbackItem[]>([]);
+  const [analytics, setAnalytics] = useState<FeedbackAnalytics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterDepartment, setFilterDepartment] = useState("All");
@@ -230,8 +285,12 @@ export function Dashboard() {
       try {
         setIsLoading(true);
         setError(null);
-        const data = await getFeedback();
+        const [data, analyticsData] = await Promise.all([
+          getFeedback(),
+          getFeedbackAnalytics(),
+        ]);
         setItems(data);
+        setAnalytics(analyticsData);
       } catch {
         setError("Failed to load staff queue.");
       } finally {
@@ -242,31 +301,46 @@ export function Dashboard() {
     void loadData();
   }, []);
 
+  const visibleItems = useMemo(() => {
+    if (!isHod) return items;
+    return items.filter((item) => visibleToHod(item, hodUserId, hodDepartment));
+  }, [items, isHod, hodUserId, hodDepartment]);
+
   const departments = useMemo(() => {
     const keys = new Set<string>();
-    for (const item of items) {
+    for (const row of analytics?.submissionsByDepartment ?? []) {
+      if (row.department) keys.add(row.department);
+    }
+    for (const item of visibleItems) {
       const k = departmentKey(item);
       if (k) keys.add(k);
     }
     return ["All", ...[...keys].sort((a, b) => a.localeCompare(b))];
-  }, [items]);
+  }, [visibleItems, analytics]);
 
   const services = useMemo(() => {
     const keys = new Set<string>();
-    for (const item of items) {
+    for (const row of [
+      ...(analytics?.positiveByService ?? []),
+      ...(analytics?.negativeByService ?? []),
+    ]) {
+      if (row.service) keys.add(row.service);
+    }
+    for (const item of visibleItems) {
       const k = serviceKey(item);
       if (k) keys.add(k);
     }
     return ["All", ...[...keys].sort((a, b) => a.localeCompare(b))];
-  }, [items]);
+  }, [visibleItems, analytics]);
 
   const filteredItems = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
-    return items.filter((item) => {
+    return visibleItems.filter((item) => {
       const matchesSearch =
         !search ||
         item.patientName.toLowerCase().includes(search) ||
-        (item.comments || "").toLowerCase().includes(search);
+        (item.comments || "").toLowerCase().includes(search) ||
+        (item.staffRemarks || "").toLowerCase().includes(search);
       const dept = departmentKey(item);
       const svc = serviceKey(item);
       const matchesDepartment =
@@ -282,11 +356,11 @@ export function Dashboard() {
         matchesEncounter
       );
     });
-  }, [items, searchTerm, filterDepartment, filterService, filterStatus, encounterFilter]);
+  }, [visibleItems, searchTerm, filterDepartment, filterService, filterStatus, encounterFilter]);
 
   const departmentSummary = useMemo(() => {
     const map = new Map<string, { count: number; newCount: number }>();
-    for (const item of items) {
+    for (const item of visibleItems) {
       const key = departmentKey(item) || "(No department)";
       const prev = map.get(key) || { count: 0, newCount: 0 };
       prev.count += 1;
@@ -296,11 +370,11 @@ export function Dashboard() {
     return [...map.entries()]
       .map(([key, v]) => ({ key, label: key, ...v }))
       .sort((a, b) => b.count - a.count);
-  }, [items]);
+  }, [visibleItems]);
 
   const serviceSummary = useMemo(() => {
     const map = new Map<string, { count: number; newCount: number }>();
-    for (const item of items) {
+    for (const item of visibleItems) {
       const key = serviceKey(item) || "(No service)";
       const prev = map.get(key) || { count: 0, newCount: 0 };
       prev.count += 1;
@@ -310,7 +384,7 @@ export function Dashboard() {
     return [...map.entries()]
       .map(([key, v]) => ({ key, label: key, ...v }))
       .sort((a, b) => b.count - a.count);
-  }, [items]);
+  }, [visibleItems]);
 
   const groupedByDepartment = useMemo(() => {
     const map = new Map<string, FeedbackItem[]>();
@@ -339,7 +413,7 @@ export function Dashboard() {
       string,
       { key: string; label: string; count: number; newCount: number }
     >();
-    for (const item of items) {
+    for (const item of visibleItems) {
       const { dept, svc } = combinedPair(item);
       const key = combinedFilterKey(dept, svc);
       const prev = map.get(key) || {
@@ -353,7 +427,7 @@ export function Dashboard() {
       map.set(key, prev);
     }
     return [...map.values()].sort((a, b) => b.count - a.count);
-  }, [items]);
+  }, [visibleItems]);
 
   const groupedCombined = useMemo(() => {
     const outer = new Map<string, Map<string, FeedbackItem[]>>();
@@ -374,10 +448,10 @@ export function Dashboard() {
       .sort((a, b) => b.total - a.total);
   }, [filteredItems]);
 
-  const totalCount = items.length;
-  const newCount = items.filter((item) => item.status === "New").length;
-  const inProgressCount = items.filter((item) => item.status === "In Progress").length;
-  const resolvedCount = items.filter((item) => item.status === "Resolved").length;
+  const totalCount = visibleItems.length;
+  const newCount = visibleItems.filter((item) => item.status === "New").length;
+  const inProgressCount = visibleItems.filter((item) => item.status === "In Progress").length;
+  const resolvedCount = visibleItems.filter((item) => item.status === "Resolved").length;
 
   async function handleStatusChange(id: string, status: FeedbackItem["status"]) {
     try {
@@ -422,9 +496,15 @@ export function Dashboard() {
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       <div className="space-y-1">
-        <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">Staff feedback queue</h2>
+        <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">
+          {isHod ? "HOD feedback queue" : "Staff feedback queue"}
+        </h2>
         <p className="text-muted-foreground text-sm md:text-base">
-          View and resolve feedback by hospital department and routing service
+          {isHod
+            ? hodDepartment
+              ? `Tickets assigned to you and ${hodDepartment} department feedback`
+              : "Tickets assigned to you"
+            : "View and resolve feedback by hospital department and routing service"}
         </p>
       </div>
 
@@ -583,7 +663,12 @@ export function Dashboard() {
                   </div>
                 </CardHeader>
                 <CardContent className="px-0 pb-0">
-                  <FeedbackTable rows={groupRows} onStatusChange={handleStatusChange} />
+                  <FeedbackTable
+                    rows={groupRows}
+                    onStatusChange={handleStatusChange}
+                    hodUserId={isHod ? hodUserId : undefined}
+                    onOpenTicket={isHod ? (id) => navigate(`/ticket/${id}`) : undefined}
+                  />
                 </CardContent>
               </Card>
             ))}
@@ -618,7 +703,12 @@ export function Dashboard() {
                   </div>
                 </CardHeader>
                 <CardContent className="px-0 pb-0">
-                  <FeedbackTable rows={groupRows} onStatusChange={handleStatusChange} />
+                  <FeedbackTable
+                    rows={groupRows}
+                    onStatusChange={handleStatusChange}
+                    hodUserId={isHod ? hodUserId : undefined}
+                    onOpenTicket={isHod ? (id) => navigate(`/ticket/${id}`) : undefined}
+                  />
                 </CardContent>
               </Card>
             ))}
@@ -665,7 +755,12 @@ export function Dashboard() {
                           {groupRows.length}
                         </Badge>
                       </div>
-                      <FeedbackTable rows={groupRows} onStatusChange={handleStatusChange} />
+                      <FeedbackTable
+                    rows={groupRows}
+                    onStatusChange={handleStatusChange}
+                    hodUserId={isHod ? hodUserId : undefined}
+                    onOpenTicket={isHod ? (id) => navigate(`/ticket/${id}`) : undefined}
+                  />
                     </div>
                   ))}
                 </CardContent>
