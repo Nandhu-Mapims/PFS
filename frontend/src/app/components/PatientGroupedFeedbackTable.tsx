@@ -90,6 +90,14 @@ function assigneeSummary(items: FeedbackItem[]): string {
   return names.join(", ");
 }
 
+function groupRemark(group: PatientFeedbackGroup): string {
+  for (const item of group.items) {
+    const text = item.staffRemarks?.trim();
+    if (text) return text;
+  }
+  return group.representative.staffRemarks?.trim() || "";
+}
+
 export function PatientGroupedFeedbackTable({
   groups,
   variant,
@@ -177,6 +185,9 @@ export function PatientGroupedFeedbackTable({
                 </th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600">Status</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600">AI summary</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 hidden xl:table-cell max-w-[160px]">
+                  Remark
+                </th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 hidden lg:table-cell">
                   Submitted
                 </th>
@@ -246,6 +257,7 @@ function GroupRows({
       : "—";
   const splitIssues = variant === "overview" ? overviewSplitIssueRows(group) : [];
   const splitIssueCount = splitIssues.length;
+  const remarkLine = groupRemark(group);
   const summaryLines = ticketSummariesForDisplay(group.items);
   const parentSummaryLine =
     splitIssueCount > 1
@@ -361,6 +373,9 @@ function GroupRows({
           <td className="px-4 py-3 text-sm text-gray-600 max-w-[200px]">
             <span className="line-clamp-2">{parentSummaryLine}</span>
           </td>
+          <td className="px-4 py-3 text-sm text-gray-600 hidden xl:table-cell max-w-[160px]">
+            <span className="line-clamp-2">{remarkLine || "—"}</span>
+          </td>
           <td className="px-4 py-3 text-xs text-gray-500 hidden lg:table-cell whitespace-nowrap">
             {new Date(group.latestCreatedAt).toLocaleString()}
           </td>
@@ -471,6 +486,7 @@ function MobileGroupCard({
   );
   const splitIssues = variant === "overview" ? overviewSplitIssueRows(group) : [];
   const splitIssueCount = splitIssues.length;
+  const remarkLine = groupRemark(group);
   const summaryLines = ticketSummariesForDisplay(group.items);
   const summary =
     splitIssueCount > 1
@@ -509,6 +525,12 @@ function MobileGroupCard({
       </div>
 
       <p className="mt-2 text-xs text-gray-600 line-clamp-2">{summary}</p>
+      {variant === "overview" && remarkLine ? (
+        <p className="mt-2 text-xs text-gray-600">
+          <span className="font-semibold text-gray-700">Remark:</span>{" "}
+          <span className="line-clamp-2">{remarkLine}</span>
+        </p>
+      ) : null}
 
       <div className="mt-3 flex items-center gap-3">
         <button

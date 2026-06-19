@@ -122,7 +122,7 @@ export const resolveServiceFromAi = resolveDepartmentFromAi;
 
 /**
  * @param {{ patientName: string; department: string; rating: number; comments: string }} input (rating is not sent to the model; sentiment uses comments only)
- * @param {{ feedbackId?: string; departmentChoices?: { name: string; description?: string }[] }} [options]
+ * @param {{ feedbackId?: string; serviceChoices?: { name: string; description?: string }[]; departmentChoices?: { name: string }[] }} [options]
  * @returns {Promise<{ sentiment: string; urgency: string; topics: string[]; summary: string; inferredDepartment?: string | null } | null>}
  */
 /**
@@ -208,10 +208,18 @@ export async function inferRatingFromVoiceTranscript(transcript) {
   return { rating: bounded, sentiment };
 }
 
-function normalizeIssueFromAi(raw, serviceChoices, emrDepartment) {
+function normalizeIssueFromAi(raw, serviceChoices, departmentChoices, emrDepartment) {
   const emrDept = sanitizeOptionalLabel(emrDepartment);
-  const inferredDept = sanitizeOptionalLabel(raw?.department);
-  const dept = (inferredDept || emrDept).slice(0, 120);
+  const deptRaw = sanitizeOptionalLabel(raw?.department);
+  const deptHeuristic = deptRaw
+    ? resolveDepartmentHeuristic(deptRaw, departmentChoices).name || ""
+    : "";
+  const dept =
+    (deptHeuristic ? resolveDepartmentFromAi(deptHeuristic, departmentChoices) : null) ||
+    resolveDepartmentFromAi(deptRaw, departmentChoices) ||
+    resolveDepartmentFromAi(emrDept, departmentChoices) ||
+    emrDept ||
+    "";
   const svcRaw = sanitizeOptionalLabel(raw?.recommendedService);
   const svcHeuristic = svcRaw
     ? resolveDepartmentHeuristic(svcRaw, serviceChoices).name || ""
@@ -221,7 +229,7 @@ function normalizeIssueFromAi(raw, serviceChoices, emrDepartment) {
     resolveServiceFromAi(svcRaw, serviceChoices) ||
     "";
   return {
-    department: dept,
+    department: String(dept).slice(0, 120),
     recommendedService: svc,
     issueSummary: String(raw?.issueSummary || "").trim().slice(0, 500),
     suggestedAction: String(raw?.suggestedAction || "").trim().slice(0, 500),
@@ -249,10 +257,11 @@ export async function analyzePatientFeedback(input, options = {}) {
     input.patientDepartment || input.department
   );
   const serviceHint = sanitizeOptionalLabel(input.service);
-  const serviceChoices = Array.isArray(options.serviceChoices || options.departmentChoices)
-    ? (options.serviceChoices || options.departmentChoices).filter(
-        (c) => c && String(c.name || "").trim()
-      )
+  const serviceChoices = Array.isArray(options.serviceChoices)
+    ? options.serviceChoices.filter((c) => c && String(c.name || "").trim())
+    : [];
+  const departmentChoices = Array.isArray(options.departmentChoices)
+    ? options.departmentChoices.filter((c) => c && String(c.name || "").trim())
     : [];
 
   const userContent = buildFeedbackAnalysisUserPrompt({
@@ -264,6 +273,9 @@ export async function analyzePatientFeedback(input, options = {}) {
       name: String(c.name).trim(),
       description: String(c.description || "").trim(),
     })),
+    departmentChoices: departmentChoices.map((c) => ({
+      name: String(c.name).trim(),
+    })),
   });
 
   // eslint-disable-next-line no-console
@@ -272,6 +284,8 @@ export async function analyzePatientFeedback(input, options = {}) {
     model,
     patientDepartment: emrDepartment.slice(0, 80) || "(none)",
     serviceHint: serviceHint.slice(0, 80) || "(none)",
+    departmentCatalogSize: departmentChoices.length,
+    serviceCatalogSize: serviceChoices.length,
     commentChars: comments.length,
   });
 
@@ -345,7 +359,7 @@ export async function analyzePatientFeedback(input, options = {}) {
 
   let issues = Array.isArray(parsed.issues)
     ? parsed.issues
-        .map((row) => normalizeIssueFromAi(row, serviceChoices, emrDepartment))
+        .map((row) => normalizeIssueFromAi(row, serviceChoices, departmentChoices, emrDepartment))
         .filter((row) => row.issueSummary || row.department || row.recommendedService)
         .slice(0, 8)
     : [];
@@ -362,6 +376,7 @@ export async function analyzePatientFeedback(input, options = {}) {
             "Review feedback and assign appropriate service owner.",
         },
         serviceChoices,
+        departmentChoices,
         emrDepartment
       ),
     ];

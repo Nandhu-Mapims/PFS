@@ -189,6 +189,35 @@ export function usePatientIdentity() {
     setLookupError(null);
   }, []);
 
+  const restoreFromSubmitFields = useCallback(
+    (fields: PatientIdentitySubmitFields, mode: IdentificationMode, match: PatientLookupMatch | null) => {
+      setIdentificationMode(mode);
+      setLookupError(null);
+      if (mode === "name") {
+        setManualPatientName(fields.patientName?.trim() || "");
+        setManualDepartment(fields.department?.trim() || "");
+        setManualWard(fields.ward?.trim() || "");
+        setUhidInput("");
+        setLookupMatches([]);
+        setLookupRangeLabel("");
+        setSelectedMatchKey(null);
+        return;
+      }
+      setUhidInput(fields.patientRegNo?.trim() || "");
+      setManualPatientName("");
+      setManualDepartment("");
+      setManualWard("");
+      if (match) {
+        setLookupMatches([match]);
+        setSelectedMatchKey(match.key);
+      } else {
+        setLookupMatches([]);
+        setSelectedMatchKey(null);
+      }
+    },
+    []
+  );
+
   return {
     identificationMode,
     setIdentificationMode,
@@ -219,6 +248,7 @@ export function usePatientIdentity() {
     validateForSubmit,
     getSubmitFields,
     reset,
+    restoreFromSubmitFields,
   };
 }
 

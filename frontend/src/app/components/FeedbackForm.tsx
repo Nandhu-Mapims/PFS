@@ -14,9 +14,9 @@ import {
   loadBrandingSettings,
   onBrandingSettingsChange,
 } from "../lib/branding";
+import { FeedbackRemarkField } from "./StaffRemarksField";
 import { FeedbackVoiceSection } from "./FeedbackVoiceSection";
 import { PatientIdentitySection } from "./PatientIdentitySection";
-import { StaffRemarksInput } from "./StaffRemarksInput";
 
 type InputKind = "voice" | "type";
 
@@ -42,7 +42,7 @@ export function FeedbackForm() {
   const identity = usePatientIdentity();
 
   const [comments, setComments] = useState("");
-  const [staffRemarks, setStaffRemarks] = useState("");
+  const [remark, setRemark] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<"idle" | "text" | "voice">("idle");
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -62,6 +62,7 @@ export function FeedbackForm() {
     if (prevModeBucketRef.current === bucket) return;
     prevModeBucketRef.current = bucket;
     setSubmitError(null);
+    setRemark("");
     setSelectedEmotion(null);
     setComments("");
     setVoiceReady(false);
@@ -71,8 +72,7 @@ export function FeedbackForm() {
     identity.reset();
   }, [modeParam, identity.reset]);
 
-  const session = getSession();
-  const internalSubmit = isInternalUser(session);
+  const internalSubmit = isInternalUser(getSession());
 
   const selectedEmotionData = emotions.find((e) => e.id === selectedEmotion);
   const primaryTint = `${primaryColor}1A`;
@@ -108,15 +108,18 @@ export function FeedbackForm() {
     [getSubmitFields]
   );
 
-  const onVoiceSuccess = useCallback((transcript: string, inferredRating: number) => {
-    draftCommentsRef.current = transcript;
-    draftRatingRef.current = inferredRating;
-    setComments(transcript);
-    setSelectedEmotion(inferredRating);
-    setVoiceReady(true);
-    setSubmitError(null);
-    void persistVoiceDraft(transcript, inferredRating, voiceBlobRef.current);
-  }, [persistVoiceDraft]);
+  const onVoiceSuccess = useCallback(
+    (transcript: string, inferredRating: number) => {
+      draftCommentsRef.current = transcript;
+      draftRatingRef.current = inferredRating;
+      setComments(transcript);
+      setSelectedEmotion(inferredRating);
+      setVoiceReady(true);
+      setSubmitError(null);
+      void persistVoiceDraft(transcript, inferredRating, voiceBlobRef.current);
+    },
+    [persistVoiceDraft]
+  );
 
   const onVoiceCleared = useCallback(() => {
     setVoiceReady(false);
@@ -169,7 +172,6 @@ export function FeedbackForm() {
       setSubmitError(null);
       setIsSubmitting(true);
       setSubmitPhase("text");
-      const isStaffSession = internalSubmit;
       const outboxId = outboxIdRef.current ?? newOutboxId();
       outboxIdRef.current = outboxId;
 
@@ -177,8 +179,8 @@ export function FeedbackForm() {
         ...identity.getSubmitFields(),
         rating: selectedEmotion as number,
         comments: comments.trim(),
-        ...(staffRemarks.trim() ? { staffRemarks: staffRemarks.trim() } : {}),
-        source: (isStaffSession ? "staff" : "patient") as "staff" | "patient",
+        ...(remark.trim() ? { staffRemarks: remark.trim() } : {}),
+        source: (internalSubmit ? "staff" : "patient") as "staff" | "patient",
         submissionMode: (inputKind === "voice" ? "voice" : "standard") as "voice" | "standard",
       };
 
@@ -188,7 +190,7 @@ export function FeedbackForm() {
         audioBlob: inputKind === "voice" ? voiceBlobRef.current ?? voiceRecordingBlob : null,
         thankYouState: {
           rating: selectedEmotion as number,
-          fromStaffSession: isStaffSession,
+          fromStaffSession: internalSubmit,
         },
       });
 
@@ -216,7 +218,8 @@ export function FeedbackForm() {
       navigate("/thank-you", {
         state: {
           rating: selectedEmotion,
-          fromStaffSession: isStaffSession,
+          fromStaffSession: internalSubmit,
+          staffRemarks: remark.trim() || undefined,
           aiSummary: typeof created.aiSummary === "string" ? created.aiSummary : undefined,
           aiSentiment: created.aiSentiment as "positive" | "neutral" | "negative" | undefined,
           aiUrgency: created.aiUrgency as string | undefined,
@@ -240,6 +243,9 @@ export function FeedbackForm() {
     identity.identityReady &&
     !isSubmitting &&
     (inputKind === "type" ? canSubmitType : canSubmitVoice);
+
+  const showRemark =
+    inputKind === "voice" ? voiceReady : Boolean(selectedEmotion);
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -365,15 +371,11 @@ export function FeedbackForm() {
           </>
         )}
 
-        {internalSubmit && (
-          <StaffRemarksInput
-            value={staffRemarks}
-            onChange={setStaffRemarks}
-            primaryColor={primaryColor}
-            username={session?.username || "staff"}
-            roleLabel={session?.role === "hod" ? "HOD" : "Staff"}
-          />
-        )}
+        {showRemark ? (
+          <div className="mb-6">
+            <FeedbackRemarkField value={remark} onChange={setRemark} />
+          </div>
+        ) : null}
 
         <button
           type="button"
@@ -390,7 +392,7 @@ export function FeedbackForm() {
               {submitPhase === "voice" ? "Almost done..." : "Submitting..."}
             </span>
           ) : (
-            "Submit Feedback"
+            "Submit feedback"
           )}
         </button>
         {submitError && <p className="mt-4 text-red-600 text-center font-medium">{submitError}</p>}

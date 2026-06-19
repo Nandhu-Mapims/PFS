@@ -28,6 +28,8 @@ export function ThankYou() {
     typeof location.state?.voiceUploadWarning === "string"
       ? location.state.voiceUploadWarning
       : "";
+  const staffRemarksSubmitted =
+    typeof location.state?.staffRemarks === "string" ? location.state.staffRemarks : "";
   const offlineQueued = Boolean(location.state?.offlineQueued);
   const session = getSession();
   const isStaffSession = fromStaffSession || session?.role === "staff";
@@ -82,6 +84,17 @@ export function ThankYou() {
           <p className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             {voiceUploadWarning.trim()}
           </p>
+        )}
+
+        {staffRemarksSubmitted.trim() && (
+          <div className="mb-8 rounded-2xl border border-gray-200 bg-gray-50/80 px-5 py-4 text-left">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+              Remark
+            </p>
+            <p className="text-base text-gray-800 leading-relaxed whitespace-pre-wrap">
+              {staffRemarksSubmitted.trim()}
+            </p>
+          </div>
         )}
 
         {isStaffSession && aiSummary.trim() && (

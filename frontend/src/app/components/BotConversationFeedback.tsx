@@ -14,7 +14,7 @@ import { transcribeVoiceRecordingChunked } from "../lib/audioTranscription";
 import { getSession, isInternalUser } from "../lib/auth";
 import { usePatientIdentity } from "../lib/usePatientIdentity";
 import { PatientIdentitySection } from "./PatientIdentitySection";
-import { StaffRemarksInput } from "./StaffRemarksInput";
+import { FeedbackRemarkField } from "./StaffRemarksField";
 import {
   getBrandingSettings,
   loadBrandingSettings,
@@ -27,7 +27,7 @@ const SILENCE_MS = 2200;
 const MIN_RECORD_MS = 900;
 const SILENCE_RMS_THRESHOLD = 7;
 
-type Phase = "loading" | "identity" | "intro" | "question" | "submitting" | "submit-failed";
+type Phase = "loading" | "identity" | "intro" | "question" | "complete" | "submitting";
 type QuestionPhase = "prompt" | "think" | "record" | "processing";
 
 function questionAudioUrl(q: BotConversationQuestion | null): string | null {
@@ -63,12 +63,8 @@ export function BotConversationFeedback() {
   const [thinkCountdown, setThinkCountdown] = useState(DEFAULT_BOT_THINK_SECONDS);
   const [answers, setAnswers] = useState<BotConversationAnswer[]>([]);
   const [answerBlobs, setAnswerBlobs] = useState<Blob[]>([]);
-  const [pendingSubmit, setPendingSubmit] = useState<{
-    answers: BotConversationAnswer[];
-    blobs: Blob[];
-  } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [staffRemarks, setStaffRemarks] = useState("");
+  const [remark, setRemark] = useState("");
   const [statusHint, setStatusHint] = useState<string | null>(null);
   const [isPlayingPrompt, setIsPlayingPrompt] = useState(false);
 
@@ -221,43 +217,40 @@ export function BotConversationFeedback() {
     }
   }, [introAudioSrc]);
 
-  const submitAll = useCallback(
-    async (finalAnswers: BotConversationAnswer[], finalBlobs: Blob[]) => {
-      setPhase("submitting");
-      setSubmitError(null);
-      setPendingSubmit({ answers: finalAnswers, blobs: finalBlobs });
-      const mergedComments = finalAnswers
-        .map((a) => `Q: ${a.questionText}\nA: ${a.transcript}`)
-        .join("\n\n");
-      const session = getSession();
-      const internalSubmit = isInternalUser(session);
-      try {
-        const created = await createBotFeedback({
-          ...identity.getSubmitFields(),
-          rating: 3,
-          comments: mergedComments,
-          ...(staffRemarks.trim() ? { staffRemarks: staffRemarks.trim() } : {}),
-          source: internalSubmit ? "staff" : "patient",
-          submissionMode: "bot",
-          conversationAnswers: finalAnswers,
-          answerAudioBlobs: finalBlobs,
-        });
-        setPendingSubmit(null);
-        navigate("/thank-you", {
-          state: {
-            fromStaffSession: internalSubmit,
-            aiSummary: created.aiSummary || undefined,
-            aiSentiment: created.aiSentiment || undefined,
-            aiTopics: created.aiTopics || undefined,
-          },
-        });
-      } catch (e) {
-        setPhase("submit-failed");
-        setSubmitError(e instanceof Error ? e.message : "Could not submit feedback");
-      }
-    },
-    [navigate, identity, staffRemarks]
-  );
+  const submitAll = useCallback(async () => {
+    const session = getSession();
+    const internalSubmit = isInternalUser(session);
+    const mergedComments = answers
+      .map((a) => `Q: ${a.questionText}\nA: ${a.transcript}`)
+      .join("\n\n");
+
+    setPhase("submitting");
+    setSubmitError(null);
+    try {
+      const created = await createBotFeedback({
+        ...identity.getSubmitFields(),
+        rating: 3,
+        comments: mergedComments,
+        ...(remark.trim() ? { staffRemarks: remark.trim() } : {}),
+        source: internalSubmit ? "staff" : "patient",
+        submissionMode: "bot",
+        conversationAnswers: answers,
+        answerAudioBlobs: answerBlobs,
+      });
+      navigate("/thank-you", {
+        state: {
+          fromStaffSession: internalSubmit,
+          staffRemarks: remark.trim() || undefined,
+          aiSummary: created.aiSummary || undefined,
+          aiSentiment: created.aiSentiment || undefined,
+          aiTopics: created.aiTopics || undefined,
+        },
+      });
+    } catch (e) {
+      setPhase("complete");
+      setSubmitError(e instanceof Error ? e.message : "Could not submit feedback");
+    }
+  }, [answerBlobs, answers, identity, navigate, remark]);
 
   const finishRecording = useCallback(async () => {
     if (finishingRef.current) return;
@@ -319,7 +312,7 @@ export function BotConversationFeedback() {
         setAnswerBlobs((prevBlobs) => {
           const nextBlobs = [...prevBlobs, blob];
           if (isLast) {
-            void submitAll(nextAnswers, nextBlobs);
+            setPhase("complete");
           }
           return nextBlobs;
         });
@@ -349,7 +342,6 @@ export function BotConversationFeedback() {
     sortedQuestions.length,
     stopSilenceMonitor,
     stopTracks,
-    submitAll,
     playQuestionAtIndex,
     thinkSeconds,
   ]);
@@ -480,7 +472,6 @@ export function BotConversationFeedback() {
     }
     if (!sortedQuestions.length) return;
     setSubmitError(null);
-    setPendingSubmit(null);
     if (skipIntro) {
       goToFirstQuestion();
       return;
@@ -548,16 +539,6 @@ export function BotConversationFeedback() {
               <p className="mb-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3 text-center">
                 {submitError}
               </p>
-            ) : null}
-
-            {isInternalUser(getSession()) ? (
-              <StaffRemarksInput
-                value={staffRemarks}
-                onChange={setStaffRemarks}
-                primaryColor={primaryColor}
-                username={getSession()?.username || "staff"}
-                roleLabel={getSession()?.role === "hod" ? "HOD" : "Staff"}
-              />
             ) : null}
 
             <button
@@ -666,32 +647,35 @@ export function BotConversationFeedback() {
           </div>
         )}
 
-        {phase === "submitting" && (
-          <div className="p-12 flex flex-col items-center gap-3 text-gray-600">
-            <Loader className="animate-spin" size={36} />
-            <p className="font-medium">Submitting your feedback…</p>
-          </div>
-        )}
-
-        {phase === "submit-failed" && pendingSubmit && (
-          <div className="p-8 md:p-12 space-y-4 text-center">
-            <p className="text-lg font-semibold text-gray-800">Could not save your feedback</p>
+        {phase === "complete" && (
+          <div className="p-6 md:p-10 space-y-6">
+            <div className="text-center">
+              <h3 className="text-xl font-bold text-gray-800 mb-2">Conversation complete</h3>
+              <p className="text-sm text-gray-600">
+                Add an optional remark below, then submit your feedback.
+              </p>
+            </div>
+            <FeedbackRemarkField value={remark} onChange={setRemark} />
             {submitError ? (
               <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">
                 {submitError}
               </p>
             ) : null}
-            <p className="text-sm text-gray-600">
-              Your answers are still here. Tap retry — you do not need to record again.
-            </p>
             <button
               type="button"
-              onClick={() => void submitAll(pendingSubmit.answers, pendingSubmit.blobs)}
-              className="w-full py-4 rounded-2xl text-lg font-bold text-white shadow-lg"
+              onClick={() => void submitAll()}
+              className="w-full py-4 md:py-5 rounded-2xl text-lg md:text-xl font-bold text-white shadow-lg transition-all hover:shadow-xl hover:scale-[1.01]"
               style={{ backgroundColor: primaryColor }}
             >
-              Retry submit
+              Submit feedback
             </button>
+          </div>
+        )}
+
+        {phase === "submitting" && (
+          <div className="p-12 flex flex-col items-center gap-3 text-gray-600">
+            <Loader className="animate-spin" size={36} />
+            <p className="font-medium">Submitting your feedback…</p>
           </div>
         )}
       </div>

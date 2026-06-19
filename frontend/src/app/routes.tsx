@@ -34,6 +34,7 @@ export const router = createBrowserRouter([
       { path: "welcome", Component: Welcome },
       { path: "feedback/give", Component: FeedbackForm },
       { path: "feedback/bot", Component: BotConversationFeedback },
+      { path: "feedback/review", element: <Navigate to="/feedback/give" replace /> },
       { path: "feedback", Component: FeedbackMode },
       { path: "paper-upload", Component: PaperUpload },
       { path: "thank-you", Component: ThankYou },

@@ -5,6 +5,7 @@ export const patientRoutes = {
   give: "/feedback/give",
   giveVoice: "/feedback/give?mode=voice",
   bot: "/feedback/bot",
+  review: "/feedback/review",
   paper: "/paper-upload",
   thankYou: "/thank-you",
 } as const;
@@ -14,6 +15,7 @@ const PATIENT_PATHS = new Set([
   patientRoutes.mode,
   patientRoutes.give,
   patientRoutes.bot,
+  patientRoutes.review,
   patientRoutes.paper,
   patientRoutes.thankYou,
   "/feedback-mode",

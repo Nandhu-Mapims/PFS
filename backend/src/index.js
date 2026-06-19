@@ -483,6 +483,15 @@ async function loadServiceCatalogForAi() {
   return [...local].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+async function loadDepartmentCatalogForAi() {
+  const rows = await Department.find().sort({ name: 1 }).lean();
+  return rows
+    .map((row) => ({
+      name: String(row.name || "").trim(),
+    }))
+    .filter((row) => row.name);
+}
+
 async function listServiceCatalogForUi() {
   const local = await loadLocalRoutingServicesFromDb();
   const items = local.map((row) => ({
@@ -1343,7 +1352,10 @@ async function reanalyzeFeedbackById(feedbackId) {
     return false;
   }
 
-  const serviceCatalog = await loadServiceCatalogForAi();
+  const [serviceCatalog, departmentCatalog] = await Promise.all([
+    loadServiceCatalogForAi(),
+    loadDepartmentCatalogForAi(),
+  ]);
   const visitDepartment = sanitizeOptionalLabel(row.lookupDepartment || row.department);
 
   await runDeferredFeedbackAiPipeline({
@@ -1353,6 +1365,7 @@ async function reanalyzeFeedbackById(feedbackId) {
     visitDepartment,
     normalizedService: sanitizeOptionalLabel(row.service) || "",
     serviceCatalog,
+    departmentCatalog,
     numericRating: row.rating,
     ticketId: row.ticketId,
     ticketRule: "none",
@@ -1385,6 +1398,7 @@ async function runDeferredFeedbackAiPipeline(ctx) {
     visitDepartment,
     normalizedService,
     serviceCatalog,
+    departmentCatalog,
     numericRating,
     ticketId,
     ticketRule,
@@ -1418,6 +1432,7 @@ async function runDeferredFeedbackAiPipeline(ctx) {
             name: d.name,
             description: d.description || "",
           })),
+          departmentChoices: departmentCatalog.map((d) => ({ name: d.name })),
         }
       );
       break;
@@ -1568,7 +1583,10 @@ app.post("/api/feedback", (req, res, next) => {
       return res.status(400).json({ message: "patientName is required" });
     }
 
-    const serviceCatalog = await loadServiceCatalogForAi();
+    const [serviceCatalog, departmentCatalog] = await Promise.all([
+      loadServiceCatalogForAi(),
+      loadDepartmentCatalogForAi(),
+    ]);
     let numericRating = Number(rating);
 
     /** Visit department: UHID/EMR first; name-only flow uses saved hospital department from form */
@@ -1654,6 +1672,7 @@ app.post("/api/feedback", (req, res, next) => {
               name: d.name,
               description: d.description || "",
             })),
+            departmentChoices: departmentCatalog.map((d) => ({ name: d.name })),
           }
         );
         if (pendingAi?.rating >= 1 && pendingAi.rating <= 5) {
@@ -1748,6 +1767,7 @@ app.post("/api/feedback", (req, res, next) => {
               name: d.name,
               description: d.description || "",
             })),
+            departmentChoices: departmentCatalog.map((d) => ({ name: d.name })),
           }
         );
         // eslint-disable-next-line no-console
@@ -1887,6 +1907,7 @@ app.post("/api/feedback", (req, res, next) => {
           visitDepartment,
           normalizedService,
           serviceCatalog,
+          departmentCatalog,
           numericRating,
           ticketId,
           ticketRule,

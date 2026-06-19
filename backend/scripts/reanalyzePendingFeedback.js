@@ -33,6 +33,18 @@ async function loadServiceCatalog() {
   }));
 }
 
+async function loadDepartmentCatalog() {
+  const DepartmentModel =
+    mongoose.models.Department ||
+    mongoose.model("Department", new mongoose.Schema({}, { strict: false }));
+  const rows = await DepartmentModel.find().sort({ name: 1 }).lean();
+  return rows
+    .map((row) => ({
+      name: String(row.name || "").trim(),
+    }))
+    .filter((row) => row.name);
+}
+
 async function main() {
   if (!process.env.OPENROUTER_API_KEY?.trim()) {
     // eslint-disable-next-line no-console
@@ -41,7 +53,10 @@ async function main() {
   }
 
   await mongoose.connect(MONGODB_URI);
-  const serviceCatalog = await loadServiceCatalog();
+  const [serviceCatalog, departmentCatalog] = await Promise.all([
+    loadServiceCatalog(),
+    loadDepartmentCatalog(),
+  ]);
 
   const rows = await Feedback.find({
     $and: [
@@ -77,6 +92,7 @@ async function main() {
         {
           feedbackId: String(row._id),
           serviceChoices: serviceCatalog,
+          departmentChoices: departmentCatalog,
         }
       );
 

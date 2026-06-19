@@ -51,7 +51,8 @@ export interface FeedbackVoiceSectionProps {
   variant?: "default" | "staffRemarks";
   /** Skip OpenRouter rating inference (staff notes only need transcript). */
   skipRatingInference?: boolean;
-  maxRecordingSecondsOverride?: number;
+  /** Restore transcript when returning from the remark step. */
+  restoredTranscript?: string;
 }
 
 export function FeedbackVoiceSection({
@@ -65,6 +66,7 @@ export function FeedbackVoiceSection({
   variant = "default",
   skipRatingInference = false,
   maxRecordingSecondsOverride,
+  restoredTranscript,
 }: FeedbackVoiceSectionProps) {
   const isStaffRemarks = variant === "staffRemarks";
   const [speechLanguageCode, setSpeechLanguageCode] =
@@ -103,7 +105,17 @@ export function FeedbackVoiceSection({
   onVoiceRecordingReadyRef.current = onVoiceRecordingReady;
   onVoiceErrorRef.current = onVoiceError;
 
+  const restoredAppliedRef = useRef(false);
+  const skipResetForRestoreRef = useRef(Boolean(restoredTranscript?.trim()));
   const [liveTranscript, setLiveTranscript] = useState("");
+
+  useEffect(() => {
+    if (!restoredTranscript?.trim() || restoredAppliedRef.current) return;
+    restoredAppliedRef.current = true;
+    const text = restoredTranscript.trim();
+    setLocalTranscript(text);
+    setRecordingState("completed");
+  }, [restoredTranscript]);
 
   const stopArchiveRecorderAsync = useCallback(
     async (notify: boolean) => {
@@ -365,6 +377,10 @@ export function FeedbackVoiceSection({
   }, [clearCountdownTimer, clearSegmentTimer, stopTracks]);
 
   useEffect(() => {
+    if (skipResetForRestoreRef.current) {
+      skipResetForRestoreRef.current = false;
+      return;
+    }
     clearCountdownTimer();
     clearSegmentTimer();
     mediaRecorderRef.current?.stop();
