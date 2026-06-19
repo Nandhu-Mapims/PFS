@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -41,6 +41,10 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
   if (!item) return null;
 
   const voiceSrc = audioSrc(item.voiceRecordingUrl);
+  const [voiceAudioVisible, setVoiceAudioVisible] = useState(true);
+  useEffect(() => {
+    setVoiceAudioVisible(true);
+  }, [item._id, voiceSrc]);
   const botAnswers = [...(item.botConversationAnswers ?? [])].sort(
     (a, b) => a.questionOrder - b.questionOrder
   );
@@ -161,15 +165,16 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
                   {transcript || "—"}
                 </p>
               </section>
-              {hasVoice ? (
+              {hasVoice && voiceAudioVisible ? (
                 <section>
                   <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide mb-2">
                     Voice audio (what patient spoke)
                   </h3>
-                  <VoiceAudioPlayer src={voiceSrc!} />
+                  <VoiceAudioPlayer
+                    src={voiceSrc!}
+                    onUnavailable={() => setVoiceAudioVisible(false)}
+                  />
                 </section>
-              ) : displayMode === "voice" ? (
-                <p className="text-sm text-amber-700">No voice audio file on server.</p>
               ) : null}
             </>
           )}

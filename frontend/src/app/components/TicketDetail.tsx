@@ -214,6 +214,10 @@ export function TicketDetail() {
   const aiSummary = ticket?.aiSummary?.trim() || fallbackAiSummary;
 
   const voiceAudioSrc = resolveUploadUrl(ticket?.voiceRecordingUrl ?? null);
+  const [voiceAudioVisible, setVoiceAudioVisible] = useState(true);
+  useEffect(() => {
+    setVoiceAudioVisible(true);
+  }, [ticket?._id, voiceAudioSrc]);
   const displayMode = ticket ? effectiveFeedbackMode(ticket) : "standard";
   const botAnswers = ticket?.botConversationAnswers ?? [];
   const hasBotConversation =
@@ -492,13 +496,16 @@ export function TicketDetail() {
                   </div>
                 )}
 
-                {hasVoiceCapture ? (
+                {hasVoiceCapture && voiceAudioVisible ? (
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                     <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                       <Mic size={14} />
                       Voice audio (what the patient spoke)
                     </p>
-                    <VoiceAudioPlayer src={voiceAudioSrc!} />
+                    <VoiceAudioPlayer
+                      src={voiceAudioSrc!}
+                      onUnavailable={() => setVoiceAudioVisible(false)}
+                    />
                   </div>
                 ) : null}
 

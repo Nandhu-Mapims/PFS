@@ -1,10 +1,39 @@
 import { Mic } from "lucide-react";
+import { useState } from "react";
 import type { BotConversationAnswer } from "../lib/api";
 import { resolveUploadUrl } from "../lib/api";
 import { VoiceAudioPlayer } from "./VoiceAudioPlayer";
 
 function answerAudioSrc(url: string | null | undefined): string | null {
   return resolveUploadUrl(url ?? null);
+}
+
+function AnswerVoiceAudio({ src }: { src: string }) {
+  const [visible, setVisible] = useState(true);
+  if (!visible) return null;
+  return (
+    <div>
+      <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1 flex items-center gap-1">
+        <Mic size={14} />
+        Voice audio
+      </p>
+      <VoiceAudioPlayer src={src} className="w-full" onUnavailable={() => setVisible(false)} />
+    </div>
+  );
+}
+
+function SessionVoiceAudio({ src, cardPad }: { src: string; cardPad: string }) {
+  const [visible, setVisible] = useState(true);
+  if (!visible) return null;
+  return (
+    <div className={`rounded-lg border border-gray-200 bg-gray-50 ${cardPad}`}>
+      <p className="text-xs font-semibold text-[#2A6FDB] uppercase tracking-wide mb-2 flex items-center gap-1">
+        <Mic size={14} />
+        Combined session audio
+      </p>
+      <VoiceAudioPlayer src={src} onUnavailable={() => setVisible(false)} />
+    </div>
+  );
 }
 
 type BotConversationFeedbackSectionProps = {
@@ -78,30 +107,12 @@ export function BotConversationFeedbackSection({
                 {row.transcript?.trim() || "—"}
               </p>
             </div>
-            {answerSrc ? (
-              <div>
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1 flex items-center gap-1">
-                  <Mic size={14} />
-                  Voice audio
-                </p>
-                <VoiceAudioPlayer src={answerSrc} className="w-full" />
-              </div>
-            ) : (
-              <p className="text-xs text-amber-700">No answer audio file saved.</p>
-            )}
+            {answerSrc ? <AnswerVoiceAudio src={answerSrc} /> : null}
           </div>
         );
       })}
 
-      {sessionSrc ? (
-        <div className={`rounded-lg border border-gray-200 bg-gray-50 ${cardPad}`}>
-          <p className="text-xs font-semibold text-[#2A6FDB] uppercase tracking-wide mb-2 flex items-center gap-1">
-            <Mic size={14} />
-            Combined session audio
-          </p>
-          <VoiceAudioPlayer src={sessionSrc} />
-        </div>
-      ) : null}
+      {sessionSrc ? <SessionVoiceAudio src={sessionSrc} cardPad={cardPad} /> : null}
 
       {fullTranscript?.trim() ? (
         <details className="rounded-lg border border-gray-100 bg-white p-3 text-sm">
