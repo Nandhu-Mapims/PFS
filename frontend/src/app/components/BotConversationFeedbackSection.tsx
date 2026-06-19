@@ -1,6 +1,7 @@
 import { Mic } from "lucide-react";
 import type { BotConversationAnswer } from "../lib/api";
 import { resolveUploadUrl } from "../lib/api";
+import { VoiceAudioPlayer } from "./VoiceAudioPlayer";
 
 function answerAudioSrc(url: string | null | undefined): string | null {
   return resolveUploadUrl(url ?? null);
@@ -83,9 +84,7 @@ export function BotConversationFeedbackSection({
                   <Mic size={14} />
                   Voice audio
                 </p>
-                <audio controls className="w-full" preload="metadata" src={answerSrc}>
-                  Your browser does not support audio playback.
-                </audio>
+                <VoiceAudioPlayer src={answerSrc} className="w-full" />
               </div>
             ) : (
               <p className="text-xs text-amber-700">No answer audio file saved.</p>
@@ -100,9 +99,7 @@ export function BotConversationFeedbackSection({
             <Mic size={14} />
             Combined session audio
           </p>
-          <audio controls className="w-full max-w-xl" preload="metadata" src={sessionSrc}>
-            Your browser does not support audio playback.
-          </audio>
+          <VoiceAudioPlayer src={sessionSrc} />
         </div>
       ) : null}
 
