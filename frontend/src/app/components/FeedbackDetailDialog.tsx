@@ -7,7 +7,6 @@ import {
 } from "./ui/dialog";
 import type { FeedbackItem } from "../lib/api";
 import { BotConversationFeedbackSection } from "./BotConversationFeedbackSection";
-import { VoiceAudioPlayer } from "./VoiceAudioPlayer";
 import { resolveUploadUrl } from "../lib/api";
 import {
   displaySentimentForItem,
@@ -166,7 +165,9 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
                   <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide mb-2">
                     Voice audio (what patient spoke)
                   </h3>
-                  <VoiceAudioPlayer src={voiceSrc!} />
+                  <audio controls className="w-full max-w-xl" preload="metadata" src={voiceSrc!}>
+                    Your browser does not support audio playback.
+                  </audio>
                 </section>
               ) : displayMode === "voice" ? (
                 <p className="text-sm text-amber-700">No voice audio file on server.</p>

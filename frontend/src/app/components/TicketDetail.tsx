@@ -21,7 +21,6 @@ import {
   updateFeedbackStatus,
 } from "../lib/api";
 import { BotConversationFeedbackSection } from "./BotConversationFeedbackSection";
-import { VoiceAudioPlayer } from "./VoiceAudioPlayer";
 import { displayOptionalLabel } from "../lib/fieldSanitize";
 import {
   displaySentimentForItem,
@@ -498,7 +497,9 @@ export function TicketDetail() {
                       <Mic size={14} />
                       Voice audio (what the patient spoke)
                     </p>
-                    <VoiceAudioPlayer src={voiceAudioSrc!} />
+                    <audio controls className="w-full max-w-xl" preload="metadata" src={voiceAudioSrc!}>
+                      Your browser does not support audio playback.
+                    </audio>
                   </div>
                 ) : null}
 
