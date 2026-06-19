@@ -13,6 +13,7 @@
     "clean-positive-tickets": "node scripts/cleanPositiveTickets.js",
     "repair-complaint-sentiment": "node scripts/repairComplaintSentiment.js",
     "reanalyze-pending": "node scripts/reanalyzePendingFeedback.js",
+    "uploads:check": "node scripts/checkUploadsHealth.js",
     "reset-db": "node scripts/resetDatabase.js --yes",
     "test-emr-lookup": "node scripts/testEmrLookup.js"
   },

@@ -6,7 +6,11 @@ RUN npm ci --omit=dev
 
 COPY . .
 
+# Runtime writes go to /app/uploads (Docker volume). Bundle repo files separately for seeding.
+RUN if [ -d uploads ]; then mv uploads uploads-bundled; fi \
+  && chmod +x docker-entrypoint.sh
+
 ENV NODE_ENV=production
 EXPOSE 5000
 
-CMD ["node", "src/index.js"]
+ENTRYPOINT ["./docker-entrypoint.sh"]

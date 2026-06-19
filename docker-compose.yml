@@ -41,7 +41,7 @@ services:
     env_file:
       - ./backend/.env
     volumes:
-      # Voice/bot recordings — without this, container rebuilds delete audio while MongoDB paths remain.
+      # Persistent voice/bot recordings — survives container rebuilds.
       - pfs_uploads_data:/app/uploads
     depends_on:
       - mongodb
