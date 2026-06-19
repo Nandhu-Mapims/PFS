@@ -4,8 +4,8 @@ import {
   coerceTranscriptText,
   inferVoiceRatingFromTranscript,
   type SpeechLanguageCode,
-  transcribeVoiceRecording,
 } from "../lib/api";
+import { transcribeVoiceRecordingChunked } from "../lib/audioTranscription";
 import {
   getBrandingSettings,
   loadBrandingSettings,
@@ -15,7 +15,7 @@ import {
 type RecordingState = "idle" | "recording" | "processing" | "completed";
 
 /** Sarvam REST works best ~30s per clip — auto-rotate recorder and merge transcripts for longer speech */
-const SEGMENT_MS = 26000;
+const SEGMENT_MS = 22000;
 
 function formatCountdown(totalSeconds: number): string {
   const safe = Math.max(0, Math.floor(totalSeconds));
@@ -218,7 +218,7 @@ export function FeedbackVoiceSection({
           ? "webm"
           : "audio";
     const filename = `seg-${segmentIdx}.${ext}`;
-    const { transcript: raw } = await transcribeVoiceRecording(
+    const { transcript: raw } = await transcribeVoiceRecordingChunked(
       blob,
       filename,
       speechLanguageCode
@@ -497,6 +497,7 @@ export function FeedbackVoiceSection({
     }
 
     setRecordingState("recording");
+    recordingStateRef.current = "recording";
     startCountdown();
     scheduleSegmentRotate();
   };

@@ -9,8 +9,8 @@ import {
   type BotConversationAnswer,
   type BotConversationConfig,
   type BotConversationQuestion,
-  transcribeVoiceRecording,
 } from "../lib/api";
+import { transcribeVoiceRecordingChunked } from "../lib/audioTranscription";
 import { getSession, isInternalUser } from "../lib/auth";
 import { usePatientIdentity } from "../lib/usePatientIdentity";
 import { PatientIdentitySection } from "./PatientIdentitySection";
@@ -305,7 +305,7 @@ export function BotConversationFeedback() {
 
     try {
       const ext = blob.type.includes("mp4") ? "m4a" : "webm";
-      const { transcript: raw } = await transcribeVoiceRecording(blob, `answer.${ext}`, "ta-IN");
+      const { transcript: raw } = await transcribeVoiceRecordingChunked(blob, `answer.${ext}`, "ta-IN");
       const transcript = coerceTranscriptText(raw).trim() || "(No speech detected.)";
       const row: BotConversationAnswer = {
         questionOrder: q.order,
