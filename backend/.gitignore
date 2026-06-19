@@ -1,1 +1,3 @@
 .env
+# Runtime uploads (voice recordings) — persist via Docker volume in production
+uploads/

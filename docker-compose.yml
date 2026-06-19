@@ -40,6 +40,9 @@ services:
     # Create backend/.env on the server from backend/.env.example (secrets, OPENROUTER_API_KEY, TMS_*, etc.)
     env_file:
       - ./backend/.env
+    volumes:
+      # Voice/bot recordings — without this, container rebuilds delete audio while MongoDB paths remain.
+      - pfs_uploads_data:/app/uploads
     depends_on:
       - mongodb
     networks:
@@ -60,6 +63,7 @@ services:
 
 volumes:
   pfs_mongo_data:
+  pfs_uploads_data:
 
 networks:
   pfs_net:
