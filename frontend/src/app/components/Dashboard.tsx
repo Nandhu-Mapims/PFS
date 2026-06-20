@@ -127,7 +127,7 @@ function FeedbackTable({
             <TableHead>Rating</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="min-w-[200px]">Comments</TableHead>
-            <TableHead className="min-w-[160px]">Staff remarks</TableHead>
+            <TableHead className="min-w-[160px]">Remark</TableHead>
             <TableHead className="pr-4">Submitted</TableHead>
             {onOpenTicket ? <TableHead className="pr-4 text-right"> </TableHead> : null}
           </TableRow>

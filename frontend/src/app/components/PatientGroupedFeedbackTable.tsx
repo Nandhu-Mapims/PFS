@@ -185,7 +185,7 @@ export function PatientGroupedFeedbackTable({
                 </th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600">Status</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600">AI summary</th>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 hidden xl:table-cell max-w-[160px]">
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 min-w-[120px] max-w-[200px]">
                   Remark
                 </th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 hidden lg:table-cell">
@@ -373,8 +373,8 @@ function GroupRows({
           <td className="px-4 py-3 text-sm text-gray-600 max-w-[200px]">
             <span className="line-clamp-2">{parentSummaryLine}</span>
           </td>
-          <td className="px-4 py-3 text-sm text-gray-600 hidden xl:table-cell max-w-[160px]">
-            <span className="line-clamp-2">{remarkLine || "—"}</span>
+          <td className="px-4 py-3 text-sm text-gray-600 min-w-[120px] max-w-[200px]">
+            <span className="line-clamp-3 whitespace-pre-wrap">{remarkLine || "—"}</span>
           </td>
           <td className="px-4 py-3 text-xs text-gray-500 hidden lg:table-cell whitespace-nowrap">
             {new Date(group.latestCreatedAt).toLocaleString()}
@@ -525,10 +525,10 @@ function MobileGroupCard({
       </div>
 
       <p className="mt-2 text-xs text-gray-600 line-clamp-2">{summary}</p>
-      {variant === "overview" && remarkLine ? (
+      {variant === "overview" ? (
         <p className="mt-2 text-xs text-gray-600">
           <span className="font-semibold text-gray-700">Remark:</span>{" "}
-          <span className="line-clamp-2">{remarkLine}</span>
+          <span className="line-clamp-3 whitespace-pre-wrap">{remarkLine || "—"}</span>
         </p>
       ) : null}
 
@@ -665,7 +665,8 @@ function BotAnswerRow({
           <td className="px-4 py-2 text-xs hidden sm:table-cell">—</td>
           <td className="px-4 py-2 text-xs">—</td>
           <td className="px-4 py-2 text-xs text-gray-600 max-w-[200px] line-clamp-2">{transcript}</td>
-          <td className="px-4 py-2" />
+          <td className="px-4 py-2 text-xs text-gray-500">—</td>
+          <td className="px-4 py-2 text-xs text-gray-500 hidden lg:table-cell">—</td>
         </>
       )}
       <td className="px-4 py-2 text-right">
@@ -749,6 +750,9 @@ function ChildRow({
           <td className="px-4 py-2 text-xs">{item.status}</td>
           <td className="px-4 py-2 text-xs text-gray-600 max-w-[200px] line-clamp-2">
             {ticketAiSummaryForItem(item) || "—"}
+          </td>
+          <td className="px-4 py-2 text-xs text-gray-600 max-w-[160px]">
+            <span className="line-clamp-3 whitespace-pre-wrap">{item.staffRemarks?.trim() || "—"}</span>
           </td>
           <td className="px-4 py-2 text-xs text-gray-500 hidden lg:table-cell">
             {new Date(item.createdAt).toLocaleString()}
