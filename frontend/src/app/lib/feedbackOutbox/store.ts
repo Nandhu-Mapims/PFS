@@ -78,12 +78,21 @@ export async function removeCompletedOutbox(id: string): Promise<void> {
 
 export async function listSyncableOutbox(): Promise<(FeedbackOutboxEntry & { audioBlob?: Blob })[]> {
   const rows = await listOutboxRecords();
-  return rows.filter((r) => ["pending_sync", "text_synced", "syncing"].includes(r.status));
+  return rows.filter((r) => {
+    if (["pending_sync", "text_synced", "syncing"].includes(r.status)) return true;
+    if (r.status === "failed") {
+      if (!r.serverFeedbackId) return true;
+      if (r.hasAudio && !r.audioUploaded) return true;
+    }
+    return false;
+  });
 }
 
 export async function listVisiblePending(): Promise<FeedbackOutboxEntry[]> {
   const rows = await listOutboxRecords();
-  return rows.filter((r) =>
-    (["pending_sync", "text_synced", "syncing", "failed"] as OutboxStatus[]).includes(r.status)
+  return rows.filter(
+    (r) =>
+      !r.serverFeedbackId &&
+      (r.status === "pending_sync" || r.status === "syncing" || r.status === "failed")
   );
 }

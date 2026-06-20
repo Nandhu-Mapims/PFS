@@ -7,7 +7,11 @@ const DB_NAME = "pfs-feedback-outbox";
 const DB_VERSION = 1;
 const STORE = "entries";
 const SYNC_TAG = "pfs-feedback-sync";
-const MAX_ATTEMPTS = 24;
+const DELAY_BEFORE_VOICE_MS = 8000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -43,7 +47,12 @@ async function listSyncable() {
   await txDone(tx);
   db.close();
   return all.filter(
-    (r) => r.status === "pending_sync" || r.status === "text_synced" || r.status === "syncing"
+    (r) =>
+      r.status === "pending_sync" ||
+      r.status === "text_synced" ||
+      r.status === "syncing" ||
+      (r.status === "failed" &&
+        (!r.serverFeedbackId || (r.hasAudio && !r.audioUploaded)))
   );
 }
 
@@ -72,6 +81,7 @@ function buildFormData(payload, clientSubmissionId) {
   if (payload.service) fd.append("service", payload.service);
   fd.append("rating", String(payload.rating));
   fd.append("comments", payload.comments || "");
+  if (payload.staffRemarks?.trim()) fd.append("staffRemarks", payload.staffRemarks.trim());
   if (payload.source) fd.append("source", payload.source);
   fd.append("submissionMode", payload.submissionMode || "standard");
   if (payload.patientRegNo) fd.append("patientRegNo", payload.patientRegNo);
@@ -115,7 +125,7 @@ async function syncOne(row) {
       await putRow(
         {
           ...row,
-          status: attempts >= MAX_ATTEMPTS ? "failed" : "pending_sync",
+          status: "pending_sync",
           attempts,
           lastError: textRes.body?.message || "Text sync failed",
           updatedAt: now,
@@ -124,7 +134,7 @@ async function syncOne(row) {
       );
       return;
     }
-    serverFeedbackId = String(textRes.body._id || "");
+    serverFeedbackId = String(textRes.body._id || textRes.body.id || "");
     if (!serverFeedbackId) return;
     row = {
       ...row,
@@ -136,14 +146,23 @@ async function syncOne(row) {
   }
 
   if (row.hasAudio && row.audioBlob && row.audioBlob.size && !row.audioUploaded && serverFeedbackId) {
+    await sleep(DELAY_BEFORE_VOICE_MS);
     const voiceRes = await postVoice(serverFeedbackId, row.audioBlob);
     if (!voiceRes.ok) {
       const attempts = (row.attempts || 0) + 1;
       const permanent = voiceRes.status === 413;
+      if (permanent) {
+        await deleteRow(row.id);
+        const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+        for (const client of clients) {
+          client.postMessage({ type: "OUTBOX_ENTRY_COMPLETED", id: row.id });
+        }
+        return;
+      }
       await putRow(
         {
           ...row,
-          status: permanent || attempts >= MAX_ATTEMPTS ? "failed" : "text_synced",
+          status: "text_synced",
           attempts,
           lastError: voiceRes.body?.message || "Voice sync failed",
           updatedAt: now,
@@ -164,22 +183,26 @@ async function syncOne(row) {
 
 async function syncAll() {
   const rows = await listSyncable();
-  for (const row of rows) {
-    try {
-      await syncOne(row);
-    } catch (err) {
-      const attempts = (row.attempts || 0) + 1;
-      await putRow(
-        {
-          ...row,
-          status: attempts >= MAX_ATTEMPTS ? "failed" : row.status,
-          attempts,
-          lastError: err?.message || String(err),
-          updatedAt: Date.now(),
-        },
-        row.audioBlob
-      );
-    }
+  if (!rows.length) return;
+  const row = rows[0];
+  try {
+    await syncOne(row);
+  } catch (err) {
+    const attempts = (row.attempts || 0) + 1;
+    const nextStatus =
+      row.serverFeedbackId && row.hasAudio && !row.audioUploaded
+        ? "text_synced"
+        : "pending_sync";
+    await putRow(
+      {
+        ...row,
+        status: nextStatus,
+        attempts,
+        lastError: err?.message || String(err),
+        updatedAt: Date.now(),
+      },
+      row.audioBlob
+    );
   }
 }
 

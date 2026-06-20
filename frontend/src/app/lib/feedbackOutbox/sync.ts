@@ -1,5 +1,12 @@
-import { MAX_SYNC_ATTEMPTS, QUICK_RETRY_DELAYS_MS } from "./constants";
-import { getOutboxRecord } from "./db";
+import { QUICK_RETRY_DELAYS_MS } from "./constants";
+import { getOutboxRecord, listOutboxRecords } from "./db";
+import {
+  getDelayBeforeVoiceUploadMs,
+  getDelayBetweenOutboxItemsMs,
+  getMaxItemsPerBackgroundSync,
+  getNetworkQuality,
+  getSubmitQuickRetryCount,
+} from "./networkQuality";
 import { patchOutboxEntry, removeCompletedOutbox, listSyncableOutbox } from "./store";
 import { delay, postFeedbackText, postFeedbackVoice } from "./syncApi";
 import type { FeedbackOutboxEntry, SyncOneResult } from "./types";
@@ -7,6 +14,59 @@ import { requestBackgroundSync } from "./registerSw";
 import { notifyOutboxChanged } from "./events";
 
 type OutboxRow = FeedbackOutboxEntry & { audioBlob?: Blob };
+
+const STALE_SYNCING_MS = 5 * 60 * 1000;
+
+function readServerFeedbackId(body: Record<string, unknown>): string {
+  const id = body._id;
+  if (typeof id === "string" && id.trim()) return id.trim();
+  if (id && typeof id === "object" && "$oid" in id) {
+    const oid = (id as { $oid?: unknown }).$oid;
+    if (typeof oid === "string" && oid.trim()) return oid.trim();
+  }
+  return "";
+}
+
+/** Reset stuck rows and drop outbox entries whose text is already on the server. */
+export async function reconcileOutboxEntries(): Promise<void> {
+  const rows = await listOutboxRecords();
+  const now = Date.now();
+
+  for (const row of rows) {
+    if (row.status === "completed") {
+      await removeCompletedOutbox(row.id);
+      continue;
+    }
+
+    if (row.serverFeedbackId && row.status === "failed") {
+      await patchOutboxEntry(row.id, {
+        status: row.hasAudio && !row.audioUploaded ? "text_synced" : "pending_sync",
+      });
+      continue;
+    }
+
+    if (row.serverFeedbackId && row.status === "pending_sync") {
+      await patchOutboxEntry(row.id, { status: "text_synced" });
+      continue;
+    }
+
+    if (!row.hasAudio && row.serverFeedbackId && row.status === "text_synced") {
+      await removeCompletedOutbox(row.id);
+      continue;
+    }
+
+    if (row.status === "failed" && !row.serverFeedbackId) {
+      await patchOutboxEntry(row.id, { status: "pending_sync" });
+      continue;
+    }
+
+    if (row.status === "syncing" && now - row.updatedAt > STALE_SYNCING_MS) {
+      await patchOutboxEntry(row.id, {
+        status: row.serverFeedbackId ? "text_synced" : "pending_sync",
+      });
+    }
+  }
+}
 
 async function syncOneEntryInternal(row: OutboxRow): Promise<SyncOneResult> {
   if (row.status === "completed") {
@@ -22,18 +82,16 @@ async function syncOneEntryInternal(row: OutboxRow): Promise<SyncOneResult> {
     const textRes = await postFeedbackText(row.payload, row.id);
     if (!textRes.ok) {
       const attempts = row.attempts + 1;
-      const failed = attempts >= MAX_SYNC_ATTEMPTS;
       const updated = (await patchOutboxEntry(row.id, {
-        status: failed ? "failed" : "pending_sync",
+        status: "pending_sync",
         attempts,
         lastError: textRes.message,
       }))!;
-      return failed
-        ? { outcome: "failed", entry: updated }
-        : { outcome: "retry", entry: updated };
+      void requestBackgroundSync();
+      return { outcome: "retry", entry: updated };
     }
     response = textRes.body;
-    serverFeedbackId = String(textRes.body._id || "");
+    serverFeedbackId = readServerFeedbackId(textRes.body);
     if (!serverFeedbackId) {
       const updated = (await patchOutboxEntry(row.id, {
         status: "pending_sync",
@@ -55,18 +113,22 @@ async function syncOneEntryInternal(row: OutboxRow): Promise<SyncOneResult> {
 
   const needsAudio = Boolean(fresh.hasAudio && fresh.audioBlob?.size && !fresh.audioUploaded);
   if (needsAudio && fresh.serverFeedbackId && fresh.audioBlob) {
+    const pauseMs = getDelayBeforeVoiceUploadMs();
+    if (pauseMs > 0) await delay(pauseMs);
     const voiceRes = await postFeedbackVoice(fresh.serverFeedbackId, fresh.audioBlob);
     if (!voiceRes.ok) {
       const attempts = fresh.attempts + 1;
-      const failed = voiceRes.permanent || attempts >= MAX_SYNC_ATTEMPTS;
+      if (voiceRes.permanent) {
+        await removeCompletedOutbox(row.id);
+        return { outcome: "completed", entry: fresh, response };
+      }
       const updated = (await patchOutboxEntry(row.id, {
-        status: failed ? "failed" : "text_synced",
+        status: "text_synced",
         attempts,
         lastError: voiceRes.message,
       }))!;
-      return failed
-        ? { outcome: "failed", entry: updated }
-        : { outcome: "text_synced", entry: updated, response };
+      void requestBackgroundSync();
+      return { outcome: "text_synced", entry: updated, response };
     }
     await patchOutboxEntry(row.id, { audioUploaded: true });
   }
@@ -88,7 +150,7 @@ export async function syncOneOutboxEntry(
     if (!row) {
       return { outcome: "completed", entry: { id } as FeedbackOutboxEntry };
     }
-    if (!["pending_sync", "text_synced", "syncing"].includes(row.status)) {
+    if (!["pending_sync", "text_synced", "syncing", "failed"].includes(row.status)) {
       if (row.status === "completed") {
         return { outcome: "completed", entry: row };
       }
@@ -112,13 +174,31 @@ export async function syncOneOutboxEntry(
 }
 
 export async function syncAllPendingOutbox(): Promise<void> {
+  if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
+  await reconcileOutboxEntries();
   const rows = await listSyncableOutbox();
+  const maxItems = getMaxItemsPerBackgroundSync();
+  let processed = 0;
+
   for (const row of rows) {
-    const result = await syncOneOutboxEntry(row.id, { quickRetries: 1 });
-    if (result.outcome === "retry" || result.outcome === "text_synced") {
+    if (processed >= maxItems) break;
+
+    const result = await syncOneOutboxEntry(row.id, {
+      quickRetries: getNetworkQuality() === "slow" ? 1 : 2,
+    });
+    processed += 1;
+
+    if (result.outcome === "retry" || result.outcome === "text_synced" || result.outcome === "failed") {
       void requestBackgroundSync();
     }
+
+    if (processed < maxItems && processed < rows.length) {
+      await delay(getDelayBetweenOutboxItemsMs());
+    }
   }
+
+  await reconcileOutboxEntries();
   notifyOutboxChanged();
 }
 
@@ -128,7 +208,8 @@ export type SubmitSyncSummary =
   | { kind: "queued" };
 
 export async function syncAfterEnqueue(entryId: string): Promise<SubmitSyncSummary> {
-  const result = await syncOneOutboxEntry(entryId, { quickRetries: QUICK_RETRY_DELAYS_MS.length });
+  const quickRetries = getSubmitQuickRetryCount();
+  const result = await syncOneOutboxEntry(entryId, { quickRetries });
 
   if (result.outcome === "completed") {
     return { kind: "completed", response: result.response ?? {} };

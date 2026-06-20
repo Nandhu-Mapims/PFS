@@ -40,7 +40,10 @@ export function listenForSwMessages(onSyncRequested: () => void): () => void {
   if (!("serviceWorker" in navigator)) return () => {};
 
   const handler = (event: MessageEvent) => {
-    if (event.data?.type === "SYNC_OUTBOX_NOW") {
+    if (
+      event.data?.type === "SYNC_OUTBOX_NOW" ||
+      event.data?.type === "OUTBOX_ENTRY_COMPLETED"
+    ) {
       onSyncRequested();
     }
   };

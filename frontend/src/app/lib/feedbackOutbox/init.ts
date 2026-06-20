@@ -1,9 +1,23 @@
 import { syncAllPendingOutbox } from "./sync";
+import { getSyncPollIntervalMs } from "./networkQuality";
 import { registerFeedbackSyncServiceWorker, listenForSwMessages } from "./registerSw";
 
 export { OUTBOX_CHANGED_EVENT, notifyOutboxChanged } from "./events";
 
 let started = false;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleBackgroundSyncPoll(): void {
+  if (pollTimer != null) window.clearTimeout(pollTimer);
+  pollTimer = window.setTimeout(() => {
+    pollTimer = null;
+    if (navigator.onLine) {
+      void syncAllPendingOutbox().finally(() => scheduleBackgroundSyncPoll());
+    } else {
+      scheduleBackgroundSyncPoll();
+    }
+  }, getSyncPollIntervalMs());
+}
 
 export function initFeedbackOutboxSync(): void {
   if (started || typeof window === "undefined") return;
@@ -24,7 +38,5 @@ export function initFeedbackOutboxSync(): void {
     run();
   }
 
-  window.setInterval(() => {
-    if (navigator.onLine) run();
-  }, 45_000);
+  scheduleBackgroundSyncPoll();
 }

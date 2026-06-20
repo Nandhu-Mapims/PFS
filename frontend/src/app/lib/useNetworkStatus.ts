@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { OUTBOX_CHANGED_EVENT } from "./feedbackOutbox";
 import { listVisiblePending } from "./feedbackOutbox/store";
+import {
+  getNetworkQuality,
+  type NetworkQuality,
+} from "./feedbackOutbox/networkQuality";
 
-export type ConnectionQuality = "offline" | "slow" | "online";
+export type ConnectionQuality = NetworkQuality;
 
 export interface NetworkStatus {
   isOnline: boolean;
@@ -21,18 +25,11 @@ function readConnectionMeta(): Pick<NetworkStatus, "effectiveType" | "downlinkMb
     connection?: { effectiveType?: string; downlink?: number; addEventListener?: (t: string, fn: () => void) => void };
   }).connection;
 
-  const effectiveType = conn?.effectiveType ?? null;
-  const downlinkMbps = typeof conn?.downlink === "number" ? conn.downlink : null;
-
-  const slowTypes = new Set(["slow-2g", "2g"]);
-  const quality: ConnectionQuality =
-    effectiveType && slowTypes.has(effectiveType)
-      ? "slow"
-      : downlinkMbps != null && downlinkMbps < 0.5
-        ? "slow"
-        : "online";
-
-  return { effectiveType, downlinkMbps, quality };
+  return {
+    effectiveType: conn?.effectiveType ?? null,
+    downlinkMbps: typeof conn?.downlink === "number" ? conn.downlink : null,
+    quality: getNetworkQuality(),
+  };
 }
 
 export function useNetworkStatus(): NetworkStatus {
