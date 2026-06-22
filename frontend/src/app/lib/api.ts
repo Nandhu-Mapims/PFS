@@ -566,6 +566,7 @@ export interface ServiceCatalogItem {
   _id: string;
   name: string;
   description?: string;
+  hodUserId?: { _id: string; username: string; role: string } | null;
   source: "tms" | "local";
   readOnly: boolean;
 }
@@ -595,7 +596,7 @@ export async function createService(payload: {
 
 export async function updateService(
   id: string,
-  payload: { name: string; description?: string }
+  payload: { name: string; description?: string; hodUserId?: string | null }
 ): Promise<ServiceCatalogItem> {
   const response = await fetch(`${API_BASE_URL}/api/services/${id}`, {
     method: "PATCH",
@@ -708,6 +709,7 @@ export interface UserRow {
   username: string;
   role: "admin" | "staff" | "hod";
   departmentId?: { _id: string; name: string } | null;
+  serviceId?: { _id: string; name: string } | null;
 }
 
 export async function getUsers(): Promise<UserRow[]> {
@@ -721,6 +723,7 @@ export async function createUser(payload: {
   password: string;
   role: "admin" | "staff" | "hod";
   departmentId?: string | null;
+  serviceId?: string | null;
 }): Promise<UserRow> {
   const response = await fetch(`${API_BASE_URL}/api/users`, {
     method: "POST",
@@ -740,6 +743,7 @@ export async function updateUser(
     username: string;
     role: "admin" | "staff" | "hod";
     departmentId?: string | null;
+    serviceId?: string | null;
     password?: string;
   }
 ): Promise<UserRow> {

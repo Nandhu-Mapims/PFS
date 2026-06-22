@@ -6,6 +6,8 @@ export interface SessionUser {
   role: UserRole;
   departmentId?: string | null;
   departmentName?: string | null;
+  serviceId?: string | null;
+  serviceName?: string | null;
 }
 
 const SESSION_KEY = "feedback_auth_session";
@@ -31,6 +33,8 @@ export async function login(
       role: data.role,
       departmentId: data.departmentId ?? null,
       departmentName: data.departmentName ?? null,
+      serviceId: data.serviceId ?? null,
+      serviceName: data.serviceName ?? null,
     };
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
     return session;

@@ -3,20 +3,27 @@ import {
   createUser,
   deleteUser,
   getDepartments,
+  getServices,
   getUsers,
   type Department,
+  type ServiceCatalogItem,
   type UserRow,
   updateUser,
 } from "../lib/api";
 import type { UserRole } from "../lib/auth";
 
+type HodAssignType = "department" | "service";
+
 export function AdminUsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [services, setServices] = useState<ServiceCatalogItem[]>([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<UserRole>("staff");
   const [departmentId, setDepartmentId] = useState("");
+  const [serviceId, setServiceId] = useState("");
+  const [hodAssignType, setHodAssignType] = useState<HodAssignType>("department");
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -25,9 +32,10 @@ export function AdminUsersPage() {
     try {
       setLoading(true);
       setError(null);
-      const [u, d] = await Promise.all([getUsers(), getDepartments()]);
+      const [u, d, s] = await Promise.all([getUsers(), getDepartments(), getServices()]);
       setUsers(u);
       setDepartments(d);
+      setServices(s);
     } catch {
       setError("Could not load data.");
     } finally {
@@ -39,34 +47,54 @@ export function AdminUsersPage() {
     load();
   }, []);
 
+  function resetForm() {
+    setUsername("");
+    setPassword("");
+    setRole("staff");
+    setDepartmentId("");
+    setServiceId("");
+    setHodAssignType("department");
+    setEditingUserId(null);
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if ((role === "staff" || role === "hod") && !departmentId) {
-      setError("Department is required for staff and HOD accounts.");
+    if (role === "staff" && !departmentId) {
+      setError("Department is required for staff accounts.");
       return;
     }
+    if (role === "hod") {
+      if (hodAssignType === "department" && !departmentId) {
+        setError("Select a department for this HOD.");
+        return;
+      }
+      if (hodAssignType === "service" && !serviceId) {
+        setError("Select a service for this HOD.");
+        return;
+      }
+    }
+
+    const payload = {
+      username: username.trim(),
+      role,
+      departmentId: role === "hod" && hodAssignType === "service" ? null : departmentId || null,
+      serviceId: role === "hod" && hodAssignType === "service" ? serviceId : null,
+    };
+
     try {
       setError(null);
       if (editingUserId) {
         await updateUser(editingUserId, {
-          username: username.trim(),
-          role,
-          departmentId: departmentId || null,
+          ...payload,
           ...(password.trim() ? { password } : {}),
         });
       } else {
         await createUser({
-          username: username.trim(),
+          ...payload,
           password,
-          role,
-          departmentId: departmentId || null,
         });
       }
-      setUsername("");
-      setPassword("");
-      setRole("staff");
-      setDepartmentId("");
-      setEditingUserId(null);
+      resetForm();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
@@ -78,20 +106,30 @@ export function AdminUsersPage() {
     setUsername(user.username);
     setPassword("");
     setRole(user.role);
-    setDepartmentId(
+
+    const userService =
+      user.serviceId && typeof user.serviceId === "object" && "_id" in user.serviceId
+        ? user.serviceId._id
+        : "";
+    const userDept =
       user.departmentId && typeof user.departmentId === "object" && "_id" in user.departmentId
         ? user.departmentId._id
-        : ""
-    );
+        : "";
+
+    if (user.role === "hod" && userService) {
+      setHodAssignType("service");
+      setServiceId(userService);
+      setDepartmentId("");
+    } else {
+      setHodAssignType("department");
+      setDepartmentId(userDept);
+      setServiceId("");
+    }
     setError(null);
   }
 
   function cancelEdit() {
-    setEditingUserId(null);
-    setUsername("");
-    setPassword("");
-    setRole("staff");
-    setDepartmentId("");
+    resetForm();
     setError(null);
   }
 
@@ -106,6 +144,18 @@ export function AdminUsersPage() {
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");
+    }
+  }
+
+  function onRoleChange(nextRole: UserRole) {
+    setRole(nextRole);
+    if (nextRole !== "hod") {
+      setServiceId("");
+      setHodAssignType("department");
+    }
+    if (nextRole === "admin") {
+      setDepartmentId("");
+      setServiceId("");
     }
   }
 
@@ -146,7 +196,7 @@ export function AdminUsersPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
             <select
               value={role}
-              onChange={(e) => setRole(e.target.value as UserRole)}
+              onChange={(e) => onRoleChange(e.target.value as UserRole)}
               className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-[#2A6FDB] outline-none bg-white"
             >
               <option value="staff">Staff</option>
@@ -154,24 +204,79 @@ export function AdminUsersPage() {
               <option value="admin">Admin</option>
             </select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Department {role === "staff" || role === "hod" ? "(required)" : "(optional)"}
-            </label>
-            <select
-              value={departmentId}
-              onChange={(e) => setDepartmentId(e.target.value)}
-              required={role === "staff" || role === "hod"}
-              className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-[#2A6FDB] outline-none bg-white"
-            >
-              <option value="">— None —</option>
-              {departments.map((d) => (
-                <option key={d._id} value={d._id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          </div>
+
+          {role === "hod" ? (
+            <div>
+              <span className="block text-sm font-medium text-gray-700 mb-2">HOD assignment (required)</span>
+              <div className="flex flex-wrap gap-4">
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="hodAssignType"
+                    checked={hodAssignType === "department"}
+                    onChange={() => {
+                      setHodAssignType("department");
+                      setServiceId("");
+                    }}
+                  />
+                  Department
+                </label>
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="hodAssignType"
+                    checked={hodAssignType === "service"}
+                    onChange={() => {
+                      setHodAssignType("service");
+                      setDepartmentId("");
+                    }}
+                  />
+                  Service
+                </label>
+              </div>
+            </div>
+          ) : null}
+
+          {role === "staff" || (role === "hod" && hodAssignType === "department") ? (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Department {role === "staff" || role === "hod" ? "(required)" : "(optional)"}
+              </label>
+              <select
+                value={departmentId}
+                onChange={(e) => setDepartmentId(e.target.value)}
+                required={role === "staff" || (role === "hod" && hodAssignType === "department")}
+                className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-[#2A6FDB] outline-none bg-white"
+              >
+                <option value="">— None —</option>
+                {departments.map((d) => (
+                  <option key={d._id} value={d._id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
+          {role === "hod" && hodAssignType === "service" ? (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Service (required)</label>
+              <select
+                value={serviceId}
+                onChange={(e) => setServiceId(e.target.value)}
+                required
+                className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-[#2A6FDB] outline-none bg-white"
+              >
+                <option value="">— None —</option>
+                {services.map((s) => (
+                  <option key={s._id} value={s._id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
           {error && <p className="text-red-600 text-sm">{error}</p>}
           <div className="flex items-center gap-3">
             <button
@@ -209,6 +314,11 @@ export function AdminUsersPage() {
                   {u.departmentId && typeof u.departmentId === "object" && "name" in u.departmentId ? (
                     <span className="text-sm text-gray-500">
                       Dept: {(u.departmentId as { name: string }).name}
+                    </span>
+                  ) : null}
+                  {u.serviceId && typeof u.serviceId === "object" && "name" in u.serviceId ? (
+                    <span className="text-sm text-gray-500">
+                      Service: {(u.serviceId as { name: string }).name}
                     </span>
                   ) : null}
                 </div>

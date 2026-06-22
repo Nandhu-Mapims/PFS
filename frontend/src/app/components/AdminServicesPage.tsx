@@ -3,13 +3,17 @@ import {
   createService,
   deleteService,
   getServices,
+  getUsers,
   updateService,
   type ServiceCatalogItem,
+  type UserRow,
 } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { HodAssignSelect } from "./HodAssignSelect";
 
 export function AdminServicesPage() {
   const [list, setList] = useState<ServiceCatalogItem[]>([]);
+  const [hodUsers, setHodUsers] = useState<UserRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -20,6 +24,7 @@ export function AdminServicesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [editHodUserId, setEditHodUserId] = useState("");
 
   const localCount = list.filter((row) => row.source === "local").length;
 
@@ -28,6 +33,7 @@ export function AdminServicesPage() {
       setLoading(true);
       setError(null);
       setList(await getServices());
+      setHodUsers((await getUsers()).filter((u) => u.role === "hod"));
     } catch {
       setError("Could not load services.");
     } finally {
@@ -62,6 +68,7 @@ export function AdminServicesPage() {
     setEditingId(item._id);
     setEditName(item.name);
     setEditDescription(item.description || "");
+    setEditHodUserId(item.hodUserId?._id || "");
     setError(null);
     setSuccess(null);
   }
@@ -70,6 +77,7 @@ export function AdminServicesPage() {
     setEditingId(null);
     setEditName("");
     setEditDescription("");
+    setEditHodUserId("");
   }
 
   async function onSaveEdit(id: string) {
@@ -79,6 +87,7 @@ export function AdminServicesPage() {
       await updateService(id, {
         name: editName.trim(),
         description: editDescription.trim(),
+        hodUserId: editHodUserId || null,
       });
       onCancelEdit();
       setSuccess("Service updated.");
@@ -165,7 +174,7 @@ export function AdminServicesPage() {
               ? "Loading…"
               : list.length === 0
                 ? "No services yet — create one above."
-                : `${list.length} total (${localCount} local)`}
+                : `${list.length} total (${localCount} local). Assign an HOD per service below.`}
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -193,6 +202,17 @@ export function AdminServicesPage() {
                           onChange={(e) => setEditDescription(e.target.value)}
                           className="p-3 border-2 border-gray-200 rounded-xl w-full"
                           placeholder="Description"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          HOD (optional)
+                        </label>
+                        <HodAssignSelect
+                          value={editHodUserId}
+                          onChange={setEditHodUserId}
+                          hodUsers={hodUsers}
+                          className="w-full p-3 border-2 border-gray-200 rounded-xl focus:border-violet-600 outline-none bg-white"
                         />
                       </div>
                       <div className="flex gap-3">
@@ -226,6 +246,14 @@ export function AdminServicesPage() {
                         ) : (
                           <p className="text-sm text-gray-400 mt-1 italic">No description</p>
                         )}
+                        <p className="text-sm text-gray-600 mt-2">
+                          HOD:{" "}
+                          {row.hodUserId?.username ? (
+                            <span className="font-semibold text-gray-900">{row.hodUserId.username}</span>
+                          ) : (
+                            <span className="text-gray-400 italic">Not assigned</span>
+                          )}
+                        </p>
                       </div>
                       {!row.readOnly ? (
                         <div className="flex shrink-0 gap-3">

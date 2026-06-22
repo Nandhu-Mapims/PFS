@@ -445,6 +445,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
     const user = await User.findOne({ username: String(username).trim().toLowerCase() })
       .populate("departmentId", "name")
+      .populate("serviceId", "name")
       .lean();
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       return res.status(401).json({ message: "Invalid credentials" });
@@ -453,12 +454,16 @@ app.post("/api/auth/login", async (req, res) => {
       user.departmentId && typeof user.departmentId === "object"
         ? user.departmentId
         : null;
+    const svc =
+      user.serviceId && typeof user.serviceId === "object" ? user.serviceId : null;
     return res.json({
       _id: String(user._id),
       username: user.username,
       role: user.role,
       departmentId: dept?._id ? String(dept._id) : user.departmentId ? String(user.departmentId) : null,
       departmentName: dept?.name || null,
+      serviceId: svc?._id ? String(svc._id) : user.serviceId ? String(user.serviceId) : null,
+      serviceName: svc?.name || null,
     });
   } catch (error) {
     return res.status(500).json({ message: "Login failed" });
@@ -470,11 +475,21 @@ function serviceNameKey(name) {
 }
 
 async function loadLocalRoutingServicesFromDb() {
-  const rows = await RoutingService.find().sort({ name: 1 }).lean();
+  const rows = await RoutingService.find()
+    .populate("hodUserId", "username role")
+    .sort({ name: 1 })
+    .lean();
   return rows.map((row) => ({
     _id: String(row._id),
     name: row.name,
     description: row.description || "",
+    hodUserId: row.hodUserId
+      ? {
+          _id: String(row.hodUserId._id),
+          username: row.hodUserId.username,
+          role: row.hodUserId.role,
+        }
+      : null,
   }));
 }
 
@@ -498,10 +513,80 @@ async function listServiceCatalogForUi() {
     _id: row._id,
     name: row.name,
     description: row.description || "",
+    hodUserId: row.hodUserId ?? null,
     source: "local",
     readOnly: false,
   }));
   return items.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function resolveHodUserIdFromBody(hodUserId) {
+  if (hodUserId === undefined) return { skip: true };
+  if (!hodUserId) return { value: null };
+  if (!mongoose.Types.ObjectId.isValid(String(hodUserId))) {
+    return { error: "Invalid hodUserId" };
+  }
+  const hodUser = await User.findById(hodUserId).lean();
+  if (!hodUser || hodUser.role !== "hod") {
+    return { error: "HOD must be a user with role hod" };
+  }
+  return { value: String(hodUserId) };
+}
+
+function serializeUserOut(user) {
+  const dept =
+    user.departmentId && typeof user.departmentId === "object" ? user.departmentId : null;
+  const svc = user.serviceId && typeof user.serviceId === "object" ? user.serviceId : null;
+  return {
+    _id: String(user._id),
+    username: user.username,
+    role: user.role,
+    departmentId: dept ? { _id: String(dept._id), name: dept.name } : null,
+    serviceId: svc ? { _id: String(svc._id), name: svc.name } : null,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
+
+function parseOptionalObjectId(value) {
+  if (!value) return null;
+  const s = String(value).trim();
+  return mongoose.Types.ObjectId.isValid(s) ? s : null;
+}
+
+function validateUserAssignment(role, departmentId, serviceId) {
+  const deptId = parseOptionalObjectId(departmentId);
+  const svcId = parseOptionalObjectId(serviceId);
+
+  if (role === "staff") {
+    if (!deptId) return { error: "departmentId is required for staff" };
+    if (svcId) return { error: "Staff accounts cannot be assigned to a service" };
+    return { departmentId: deptId, serviceId: null };
+  }
+
+  if (role === "hod") {
+    if (!deptId && !svcId) {
+      return { error: "HOD must be assigned to a department or a service" };
+    }
+    if (deptId && svcId) {
+      return { error: "HOD can be assigned to a department or a service, not both" };
+    }
+    return { departmentId: deptId, serviceId: svcId };
+  }
+
+  return { departmentId: deptId, serviceId: null };
+}
+
+async function syncHodCatalogMappings(userId, { departmentId, serviceId }) {
+  const uid = String(userId);
+  await Department.updateMany({ hodUserId: uid }, { $set: { hodUserId: null } });
+  await RoutingService.updateMany({ hodUserId: uid }, { $set: { hodUserId: null } });
+  if (departmentId) {
+    await Department.updateOne({ _id: departmentId }, { $set: { hodUserId: uid } });
+  }
+  if (serviceId) {
+    await RoutingService.updateOne({ _id: serviceId }, { $set: { hodUserId: uid } });
+  }
 }
 
 function normalizeServicesPayload(services) {
@@ -602,6 +687,7 @@ app.post("/api/services", async (req, res) => {
       _id: String(doc._id),
       name: doc.name,
       description: doc.description || "",
+      hodUserId: null,
       source: "local",
       readOnly: false,
     });
@@ -623,7 +709,7 @@ app.patch("/api/services/:id", async (req, res) => {
     if (!existing) {
       return res.status(404).json({ message: "Service not found or managed in TMS" });
     }
-    const { name, description } = req.body;
+    const { name, description, hodUserId } = req.body;
     if (name !== undefined) {
       const trimmedName = String(name).trim();
       if (!trimmedName) {
@@ -634,11 +720,28 @@ app.patch("/api/services/:id", async (req, res) => {
     if (description !== undefined) {
       existing.description = String(description || "").trim();
     }
+    if (hodUserId !== undefined) {
+      const resolved = await resolveHodUserIdFromBody(hodUserId);
+      if (resolved.error) {
+        return res.status(400).json({ message: resolved.error });
+      }
+      if (!resolved.skip) {
+        existing.hodUserId = resolved.value;
+      }
+    }
     await existing.save();
+    await existing.populate("hodUserId", "username role");
     return res.json({
       _id: String(existing._id),
       name: existing.name,
       description: existing.description || "",
+      hodUserId: existing.hodUserId
+        ? {
+            _id: String(existing.hodUserId._id),
+            username: existing.hodUserId.username,
+            role: existing.hodUserId.role,
+          }
+        : null,
       source: "local",
       readOnly: false,
     });
@@ -767,16 +870,18 @@ app.patch("/api/hospital-departments/:id", async (req, res) => {
       update.services = normalizeServicesPayload(services);
     }
     if (hodUserId !== undefined) {
-      if (!hodUserId) {
-        update.hodUserId = null;
-      } else if (mongoose.Types.ObjectId.isValid(String(hodUserId))) {
-        const hodUser = await User.findById(hodUserId).lean();
-        if (!hodUser || hodUser.role !== "hod") {
-          return res.status(400).json({ message: "HOD must be a user with role hod" });
+      const resolved = await resolveHodUserIdFromBody(hodUserId);
+      if (resolved.error) {
+        return res.status(400).json({ message: resolved.error });
+      }
+      if (!resolved.skip) {
+        update.hodUserId = resolved.value;
+        if (resolved.value) {
+          await User.updateOne(
+            { _id: resolved.value, role: "hod" },
+            { $set: { departmentId: req.params.id } }
+          );
         }
-        update.hodUserId = String(hodUserId);
-      } else {
-        return res.status(400).json({ message: "Invalid hodUserId" });
       }
     }
     const updated = await Department.findByIdAndUpdate(req.params.id, update, {
@@ -814,9 +919,10 @@ app.get("/api/users", async (_req, res) => {
     const list = await User.find()
       .select("-passwordHash")
       .populate("departmentId", "name")
+      .populate("serviceId", "name")
       .sort({ username: 1 })
       .lean();
-    return res.json(list);
+    return res.json(list.map(serializeUserOut));
   } catch (error) {
     return res.status(500).json({ message: "Failed to list users" });
   }
@@ -824,28 +930,35 @@ app.get("/api/users", async (_req, res) => {
 
 app.post("/api/users", async (req, res) => {
   try {
-    const { username, password, role, departmentId } = req.body;
+    const { username, password, role, departmentId, serviceId } = req.body;
     if (!username || !password || !role) {
       return res.status(400).json({ message: "username, password, and role are required" });
     }
     if (!["admin", "staff", "hod"].includes(role)) {
       return res.status(400).json({ message: "Invalid role" });
     }
+    const assignment = validateUserAssignment(role, departmentId, serviceId);
+    if (assignment.error) {
+      return res.status(400).json({ message: assignment.error });
+    }
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(String(password), salt);
-    const deptOk =
-      departmentId && mongoose.Types.ObjectId.isValid(String(departmentId));
-    if ((role === "staff" || role === "hod") && !deptOk) {
-      return res.status(400).json({ message: "departmentId is required for staff and HOD" });
-    }
     const doc = await User.create({
       username: String(username).trim().toLowerCase(),
       passwordHash,
       role,
-      departmentId: deptOk ? String(departmentId) : null,
+      departmentId: assignment.departmentId,
+      serviceId: assignment.serviceId,
     });
-    const out = await User.findById(doc._id).select("-passwordHash").populate("departmentId", "name").lean();
-    return res.status(201).json(out);
+    if (role === "hod") {
+      await syncHodCatalogMappings(doc._id, assignment);
+    }
+    const out = await User.findById(doc._id)
+      .select("-passwordHash")
+      .populate("departmentId", "name")
+      .populate("serviceId", "name")
+      .lean();
+    return res.status(201).json(serializeUserOut(out));
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: "Username already exists" });
@@ -857,7 +970,7 @@ app.post("/api/users", async (req, res) => {
 app.patch("/api/users/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { username, password, role, departmentId } = req.body;
+    const { username, password, role, departmentId, serviceId } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid user id" });
@@ -868,19 +981,16 @@ app.patch("/api/users/:id", async (req, res) => {
     if (!["admin", "staff", "hod"].includes(role)) {
       return res.status(400).json({ message: "Invalid role" });
     }
-    const deptOk =
-      departmentId && mongoose.Types.ObjectId.isValid(String(departmentId));
-    if ((role === "staff" || role === "hod") && !deptOk) {
-      return res.status(400).json({ message: "departmentId is required for staff and HOD" });
+    const assignment = validateUserAssignment(role, departmentId, serviceId);
+    if (assignment.error) {
+      return res.status(400).json({ message: assignment.error });
     }
 
     const update = {
       username: String(username).trim().toLowerCase(),
       role,
-      departmentId:
-        departmentId && mongoose.Types.ObjectId.isValid(String(departmentId))
-          ? String(departmentId)
-          : null,
+      departmentId: assignment.departmentId,
+      serviceId: assignment.serviceId,
     };
 
     if (password && String(password).trim().length > 0) {
@@ -894,12 +1004,18 @@ app.patch("/api/users/:id", async (req, res) => {
     })
       .select("-passwordHash")
       .populate("departmentId", "name")
+      .populate("serviceId", "name")
       .lean();
 
     if (!updated) {
       return res.status(404).json({ message: "User not found" });
     }
-    return res.json(updated);
+    if (role === "hod") {
+      await syncHodCatalogMappings(updated._id, assignment);
+    } else {
+      await syncHodCatalogMappings(updated._id, { departmentId: null, serviceId: null });
+    }
+    return res.json(serializeUserOut(updated));
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: "Username already exists" });
@@ -918,6 +1034,7 @@ app.delete("/api/users/:id", async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ message: "User not found" });
     }
+    await syncHodCatalogMappings(id, { departmentId: null, serviceId: null });
     return res.json({ ok: true });
   } catch (error) {
     return res.status(500).json({ message: "Failed to delete user" });

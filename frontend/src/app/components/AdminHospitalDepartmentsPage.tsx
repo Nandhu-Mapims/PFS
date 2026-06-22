@@ -10,18 +10,11 @@ import {
 } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 
-function hodForDepartment(dept: Department, hodUsers: UserRow[]): UserRow | null {
-  const deptKey = dept.name.trim().toLowerCase();
-  return (
-    hodUsers.find((u) => {
-      if (!u.departmentId || typeof u.departmentId !== "object") return false;
-      if ("_id" in u.departmentId && u.departmentId._id === dept._id) return true;
-      if ("name" in u.departmentId && u.departmentId.name.trim().toLowerCase() === deptKey) {
-        return true;
-      }
-      return false;
-    }) ?? null
-  );
+import { HodAssignSelect } from "./HodAssignSelect";
+
+function displayHod(dept: Department): string {
+  if (dept.hodUserId?.username) return dept.hodUserId.username;
+  return "";
 }
 
 export function AdminHospitalDepartmentsPage() {
@@ -37,6 +30,7 @@ export function AdminHospitalDepartmentsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [editHodUserId, setEditHodUserId] = useState("");
 
   async function load() {
     try {
@@ -78,6 +72,7 @@ export function AdminHospitalDepartmentsPage() {
     setEditingId(item._id);
     setEditName(item.name);
     setEditDescription(item.description || "");
+    setEditHodUserId(item.hodUserId?._id || "");
     setError(null);
     setSuccess(null);
   }
@@ -86,6 +81,7 @@ export function AdminHospitalDepartmentsPage() {
     setEditingId(null);
     setEditName("");
     setEditDescription("");
+    setEditHodUserId("");
   }
 
   async function onSaveEdit(id: string) {
@@ -95,6 +91,7 @@ export function AdminHospitalDepartmentsPage() {
       await updateHospitalDepartment(id, {
         name: editName.trim(),
         description: editDescription.trim(),
+        hodUserId: editHodUserId || null,
       });
       onCancelEdit();
       setSuccess("Department updated.");
@@ -179,7 +176,7 @@ export function AdminHospitalDepartmentsPage() {
           <CardDescription>
             {loading
               ? "Loading…"
-              : `${list.length} department(s). HOD is applied automatically from Admin → Users (role HOD + matching department).`}
+              : `${list.length} department(s). Assign an HOD per department below.`}
           </CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -192,7 +189,7 @@ export function AdminHospitalDepartmentsPage() {
           ) : (
             <ul className="divide-y divide-gray-100">
               {list.map((dept) => {
-                const hod = hodForDepartment(dept, hodUsers);
+                const hodName = displayHod(dept);
                 return (
                   <li key={dept._id} className="p-6 hover:bg-gray-50/80 transition-colors">
                     {editingId === dept._id ? (
@@ -209,6 +206,16 @@ export function AdminHospitalDepartmentsPage() {
                             onChange={(e) => setEditDescription(e.target.value)}
                             className="p-3 border-2 border-gray-200 rounded-xl w-full"
                             placeholder="Description"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            HOD (optional)
+                          </label>
+                          <HodAssignSelect
+                            value={editHodUserId}
+                            onChange={setEditHodUserId}
+                            hodUsers={hodUsers}
                           />
                         </div>
                         <div className="flex gap-3">
@@ -239,10 +246,10 @@ export function AdminHospitalDepartmentsPage() {
                           )}
                           <p className="text-sm text-gray-600 mt-2">
                             HOD:{" "}
-                            {hod ? (
-                              <span className="font-semibold text-gray-900">{hod.username}</span>
+                            {hodName ? (
+                              <span className="font-semibold text-gray-900">{hodName}</span>
                             ) : (
-                              <span className="text-gray-400 italic">Not assigned — create HOD user for this department in Users</span>
+                              <span className="text-gray-400 italic">Not assigned</span>
                             )}
                           </p>
                         </div>

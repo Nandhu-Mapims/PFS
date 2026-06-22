@@ -13,11 +13,14 @@ import { useNavigate } from "react-router";
 import {
   getFeedback,
   getFeedbackAnalytics,
+  getServices,
   updateFeedbackStatus,
   type FeedbackAnalytics,
   type FeedbackItem,
+  type ServiceCatalogItem,
 } from "../lib/api";
 import { getSession } from "../lib/auth";
+import { serviceNamesForHod, visibleToHod } from "../lib/hodRouting";
 import { displayOptionalLabel, sanitizeOptionalLabel } from "../lib/fieldSanitize";
 import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
 import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
@@ -75,26 +78,6 @@ function combinedPair(item: FeedbackItem): { dept: string; svc: string } {
 
 function combinedFilterKey(dept: string, svc: string) {
   return `${dept}${COMBINED_KEY_SEP}${svc}`;
-}
-
-function matchesHodDepartment(item: FeedbackItem, departmentName: string): boolean {
-  const target = departmentName.trim().toLowerCase();
-  if (!target) return true;
-  const dept = departmentKey(item).toLowerCase();
-  if (dept && dept === target) return true;
-  return (item.feedbackIssues || []).some(
-    (issue) => (issue.department || "").trim().toLowerCase() === target
-  );
-}
-
-function visibleToHod(
-  item: FeedbackItem,
-  hodUserId: string,
-  hodDepartment: string
-): boolean {
-  if (hodUserId && item.assignedToUserId === hodUserId) return true;
-  if (hodDepartment) return matchesHodDepartment(item, hodDepartment);
-  return false;
 }
 
 function FeedbackTable({
@@ -269,6 +252,7 @@ export function Dashboard() {
   const hodDepartment = session?.departmentName?.trim() || "";
   const hodUserId = session?._id || "";
   const [items, setItems] = useState<FeedbackItem[]>([]);
+  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
   const [analytics, setAnalytics] = useState<FeedbackAnalytics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -285,12 +269,14 @@ export function Dashboard() {
       try {
         setIsLoading(true);
         setError(null);
-        const [data, analyticsData] = await Promise.all([
+        const [data, analyticsData, servicesData] = await Promise.all([
           getFeedback(),
           getFeedbackAnalytics(),
+          isHod ? getServices() : Promise.resolve([] as ServiceCatalogItem[]),
         ]);
         setItems(data);
         setAnalytics(analyticsData);
+        setServiceCatalog(servicesData);
       } catch {
         setError("Failed to load staff queue.");
       } finally {
@@ -299,12 +285,22 @@ export function Dashboard() {
     }
 
     void loadData();
-  }, []);
+  }, [isHod]);
+
+  const hodServiceNames = useMemo(() => {
+    if (!isHod) return [];
+    const names = serviceNamesForHod(serviceCatalog, hodUserId);
+    const fromSession = session?.serviceName?.trim().toLowerCase();
+    if (fromSession && !names.includes(fromSession)) names.push(fromSession);
+    return names;
+  }, [isHod, serviceCatalog, hodUserId, session?.serviceName]);
 
   const visibleItems = useMemo(() => {
     if (!isHod) return items;
-    return items.filter((item) => visibleToHod(item, hodUserId, hodDepartment));
-  }, [items, isHod, hodUserId, hodDepartment]);
+    return items.filter((item) =>
+      visibleToHod(item, hodUserId, hodDepartment, hodServiceNames)
+    );
+  }, [items, isHod, hodUserId, hodDepartment, hodServiceNames]);
 
   const departments = useMemo(() => {
     const keys = new Set<string>();
@@ -501,8 +497,8 @@ export function Dashboard() {
         </h2>
         <p className="text-muted-foreground text-sm md:text-base">
           {isHod
-            ? hodDepartment
-              ? `Tickets assigned to you and ${hodDepartment} department feedback`
+            ? hodDepartment || hodServiceNames.length
+              ? `Tickets assigned to you, your department${hodDepartment ? ` (${hodDepartment})` : ""}, and mapped services`
               : "Tickets assigned to you"
             : "View and resolve feedback by hospital department and routing service"}
         </p>

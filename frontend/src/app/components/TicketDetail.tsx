@@ -14,6 +14,8 @@ import {
   assignFeedbackTicket,
   deleteFeedback,
   getFeedbackById,
+  getHospitalDepartments,
+  getServices,
   getUsers,
   resolveUploadUrl,
   type FeedbackItem,
@@ -29,42 +31,12 @@ import {
   feedbackModeLabel,
 } from "../lib/feedbackDisplay";
 import { getSession } from "../lib/auth";
-import { ticketDepartment } from "../lib/ticketFilters";
-
-function userDepartmentName(user: UserRow): string {
-  if (user.departmentId && typeof user.departmentId === "object" && "name" in user.departmentId) {
-    return user.departmentId.name.trim();
-  }
-  return "";
-}
-
-function sortHodAssignees(
-  hods: UserRow[],
-  ticket: FeedbackItem | null,
-  defaultHodId: string | null
-): UserRow[] {
-  const ticketDept = ticket ? ticketDepartment(ticket).trim().toLowerCase() : "";
-  return [...hods].sort((a, b) => {
-    const rank = (u: UserRow) => {
-      if (defaultHodId && u._id === defaultHodId) return 0;
-      if (ticketDept && userDepartmentName(u).toLowerCase() === ticketDept) return 1;
-      return 2;
-    };
-    const diff = rank(a) - rank(b);
-    return diff !== 0 ? diff : a.username.localeCompare(b.username);
-  });
-}
-
-function defaultHodForTicket(hodUsers: UserRow[], ticket: FeedbackItem | null): string | null {
-  if (!ticket) return null;
-  const ticketDept = ticketDepartment(ticket).trim().toLowerCase();
-  if (!ticketDept) return null;
-
-  const fromUserDept = hodUsers.find(
-    (u) => userDepartmentName(u).trim().toLowerCase() === ticketDept
-  );
-  return fromUserDept?._id ?? null;
-}
+import {
+  defaultHodForTicket,
+  sortHodAssignees,
+  userDepartmentName,
+} from "../lib/hodRouting";
+import { ticketDepartment, ticketService } from "../lib/ticketFilters";
 
 function feedbackSourceLabel(source: string | undefined): string {
   if (source === "staff") return "Patient (collected at desk)";
@@ -78,6 +50,8 @@ export function TicketDetail() {
   const { id } = useParams();
   const [ticket, setTicket] = useState<FeedbackItem | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [departments, setDepartments] = useState<Awaited<ReturnType<typeof getHospitalDepartments>>>([]);
+  const [services, setServices] = useState<Awaited<ReturnType<typeof getServices>>>([]);
   const assignSuggestDone = useRef<string | null>(null);
   const [assigneeId, setAssigneeId] = useState<string>("");
   const [status, setStatus] = useState<FeedbackItem["status"]>("New");
@@ -92,21 +66,29 @@ export function TicketDetail() {
 
   useEffect(() => {
     if (!isAdmin) return;
-    void getUsers()
-      .then((userRows) => setUsers(userRows.filter((u) => u.role === "hod")))
-      .catch(() => setUsers([]));
+    void Promise.all([getUsers(), getHospitalDepartments(), getServices()])
+      .then(([userRows, deptRows, serviceRows]) => {
+        setUsers(userRows.filter((u) => u.role === "hod"));
+        setDepartments(deptRows);
+        setServices(serviceRows);
+      })
+      .catch(() => {
+        setUsers([]);
+        setDepartments([]);
+        setServices([]);
+      });
   }, [isAdmin]);
 
   const hodUsers = users;
 
   const defaultHodId = useMemo(
-    () => defaultHodForTicket(hodUsers, ticket),
-    [hodUsers, ticket]
+    () => defaultHodForTicket(ticket, departments, services, hodUsers),
+    [hodUsers, ticket, departments, services]
   );
 
   const hodAssignees = useMemo(
-    () => sortHodAssignees(hodUsers, ticket, defaultHodId),
-    [hodUsers, ticket, defaultHodId]
+    () => sortHodAssignees(hodUsers, ticket, defaultHodId, departments, services),
+    [hodUsers, ticket, defaultHodId, departments, services]
   );
 
   const currentAssigneeIsHod = useMemo(() => {
@@ -583,15 +565,17 @@ export function TicketDetail() {
             {isAdmin ? (
               <>
                 <h3 className="text-lg font-semibold text-gray-800 mb-4">Assign to HOD</h3>
-                {!ticket.assignedToUserId && ticketDepartment(ticket) && defaultHodUser ? (
+                {!ticket.assignedToUserId && defaultHodUser ? (
                   <p className="text-xs text-emerald-700 mb-3">
-                    Suggested HOD for {ticketDepartment(ticket)}:{" "}
+                    Suggested HOD
+                    {ticketDepartment(ticket) ? ` for ${ticketDepartment(ticket)}` : ""}
+                    {ticketService(ticket) ? ` / ${ticketService(ticket)}` : ""}:{" "}
                     <span className="font-semibold">{defaultHodUser.username}</span>
                   </p>
-                ) : !ticket.assignedToUserId && ticketDepartment(ticket) ? (
+                ) : !ticket.assignedToUserId && (ticketDepartment(ticket) || ticketService(ticket)) ? (
                   <p className="text-xs text-amber-700 mb-3">
-                    No HOD for {ticketDepartment(ticket)}. Create one in Admin → Users, or pick any HOD
-                    below.
+                    No mapped HOD for this ticket. Assign one in Admin → Departments or Services, or
+                    pick any HOD below.
                   </p>
                 ) : null}
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -607,7 +591,7 @@ export function TicketDetail() {
                     <option key={u._id} value={u._id}>
                       {u.username}
                       {userDepartmentName(u) ? ` · ${userDepartmentName(u)}` : ""}
-                      {u._id === defaultHodId ? " · Department HOD" : ""}
+                      {u._id === defaultHodId ? " · Mapped HOD" : ""}
                     </option>
                   ))}
                 </select>
