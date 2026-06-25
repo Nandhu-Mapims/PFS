@@ -530,6 +530,16 @@ export async function seedOpenNegativeTickets(): Promise<{
   return response.json();
 }
 
+export async function repairSplitTickets(): Promise<{ scanned: number; created: number }> {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/repair-split-children`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error("Could not repair split tickets");
+  }
+  return response.json();
+}
+
 export interface DepartmentService {
   _id?: string;
   name: string;

@@ -127,7 +127,7 @@ export function sortHodAssignees(
 
 export function matchesHodDepartment(item: FeedbackItem, departmentName: string): boolean {
   const target = normKey(departmentName);
-  if (!target) return true;
+  if (!target) return false;
   if (normKey(ticketDepartment(item)) === target) return true;
   return (item.feedbackIssues || []).some((issue) => normKey(issue.department) === target);
 }
@@ -141,11 +141,8 @@ export function matchesHodServices(item: FeedbackItem, serviceNames: string[]): 
 export function visibleToHod(
   item: FeedbackItem,
   hodUserId: string,
-  hodDepartment: string,
-  hodServiceNames: string[]
+  _hodDepartment: string,
+  _hodServiceNames: string[]
 ): boolean {
-  if (hodUserId && item.assignedToUserId === hodUserId) return true;
-  if (hodDepartment && matchesHodDepartment(item, hodDepartment)) return true;
-  if (matchesHodServices(item, hodServiceNames)) return true;
-  return false;
+  return Boolean(hodUserId && item.assignedToUserId === hodUserId);
 }

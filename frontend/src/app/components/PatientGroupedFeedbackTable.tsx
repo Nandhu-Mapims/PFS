@@ -153,8 +153,8 @@ export function PatientGroupedFeedbackTable({
             <th className="w-8 px-2 py-2.5" />
             {variant === "tickets" ? (
               <>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600">Patient</th>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600">Tickets / services</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600">Patient / ticket</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600">Dept / service</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 hidden md:table-cell">
                   Sentiment
                 </th>
@@ -287,6 +287,12 @@ function GroupRows({
             {group.patientRegNo ? (
               <div className="text-xs text-gray-500 font-normal mt-0.5 font-mono">UHID {group.patientRegNo}</div>
             ) : null}
+            {rep.ticketId ? (
+              <div className="text-xs font-mono text-gray-700 mt-0.5">{rep.ticketId}</div>
+            ) : null}
+            {rep.isSplitChild ? (
+              <div className="text-xs text-amber-700 font-medium mt-0.5">Split issue</div>
+            ) : null}
             {multi ? (
               <div className="text-xs text-[#2A6FDB] font-semibold mt-1">
                 {group.ticketCount} ticket{group.ticketCount !== 1 ? "s" : ""} · {group.items.length} entr
@@ -295,9 +301,11 @@ function GroupRows({
             ) : null}
           </td>
           <td className="px-4 py-3 text-sm text-gray-600">
-            <div className="line-clamp-2">{servicesLine}</div>
-            {group.departments[0] ? (
-              <div className="text-xs text-gray-500 mt-0.5">{group.departments[0]}</div>
+            <div className="line-clamp-2">{ticketDepartment(rep) || departmentsLine}</div>
+            {ticketService(rep) || servicesLine ? (
+              <div className="text-xs text-gray-500 mt-0.5 line-clamp-2">
+                {ticketService(rep) || servicesLine}
+              </div>
             ) : null}
           </td>
           <td className="px-4 py-3 hidden md:table-cell">
@@ -317,7 +325,7 @@ function GroupRows({
             </span>
           </td>
           <td className="px-4 py-3 text-xs text-gray-600 hidden md:table-cell max-w-[140px]">
-            <span className="line-clamp-2">{assigneeSummary(group.items)}</span>
+            <span className="line-clamp-2">{rep.assignedToUsername?.trim() || "Unassigned"}</span>
           </td>
           <td className="px-4 py-3 text-xs text-gray-500 hidden lg:table-cell whitespace-nowrap">
             {new Date(group.latestCreatedAt).toLocaleDateString()}

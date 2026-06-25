@@ -18,17 +18,21 @@ import {
   ticketDepartment,
   ticketService,
   uniqueSorted,
+  type TicketAssigneeFilter,
   type TicketStatusFilter,
 } from "../lib/ticketFilters";
-import { buildPatientFeedbackGroups } from "../lib/patientFeedbackGroups";
+import { buildFlatTicketGroups } from "../lib/patientFeedbackGroups";
 import { PatientGroupedFeedbackTable } from "./PatientGroupedFeedbackTable";
 import {
   deleteFeedback,
   getFeedback,
   getHospitalDepartments,
   getServices,
+  getUsers,
+  repairSplitTickets,
   seedOpenNegativeTickets,
   type FeedbackItem,
+  type UserRow,
 } from "../lib/api";
 
 function isOpenTicket(item: FeedbackItem): boolean {
@@ -74,6 +78,8 @@ export function AdminTicketsPage() {
   const [statusFilter, setStatusFilter] = useState<TicketStatusFilter>("all");
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [serviceFilter, setServiceFilter] = useState("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<TicketAssigneeFilter>("all");
+  const [hodUsers, setHodUsers] = useState<UserRow[]>([]);
   const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
   const [catalogDepartments, setCatalogDepartments] = useState<string[]>([]);
   const [catalogServices, setCatalogServices] = useState<string[]>([]);
@@ -87,6 +93,7 @@ export function AdminTicketsPage() {
         setIsLoading(true);
       }
       setError(null);
+      await repairSplitTickets().catch(() => {});
       const data = await getFeedback();
       setItems(data);
     } catch {
@@ -124,12 +131,14 @@ export function AdminTicketsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [depts, services] = await Promise.all([
+        const [depts, services, users] = await Promise.all([
           getHospitalDepartments(),
           getServices(),
+          getUsers(),
         ]);
         setCatalogDepartments(depts.map((d) => d.name).filter(Boolean));
         setCatalogServices(services.map((s) => s.name).filter(Boolean));
+        setHodUsers(users.filter((u) => u.role === "hod"));
       } catch {
         /* dropdowns still built from ticket rows */
       }
@@ -166,10 +175,26 @@ export function AdminTicketsPage() {
     [catalogServices, ticketRows]
   );
 
+  const assigneeOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const hod of hodUsers) {
+      byId.set(hod._id, hod.username);
+    }
+    for (const row of ticketRows) {
+      const id = row.assignedToUserId?.trim();
+      const name = row.assignedToUsername?.trim();
+      if (id && name) byId.set(id, name);
+    }
+    return [...byId.entries()]
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [hodUsers, ticketRows]);
+
   const hasDimensionFilters =
     statusFilter !== "all" ||
     departmentFilter !== "all" ||
     serviceFilter !== "all" ||
+    assigneeFilter !== "all" ||
     encounterFilter !== "all" ||
     dateFilterActive;
 
@@ -185,6 +210,7 @@ export function AdminTicketsPage() {
       department: departmentFilter,
       service: serviceFilter,
       encounterFilter,
+      assignee: assigneeFilter,
     });
     return [...filtered].sort((a, b) => b._id.localeCompare(a._id));
   }, [
@@ -196,11 +222,12 @@ export function AdminTicketsPage() {
     statusFilter,
     departmentFilter,
     serviceFilter,
+    assigneeFilter,
     encounterFilter,
   ]);
 
   const patientGroups = useMemo(
-    () => buildPatientFeedbackGroups(sortedItems),
+    () => buildFlatTicketGroups(sortedItems),
     [sortedItems]
   );
 
@@ -210,18 +237,24 @@ export function AdminTicketsPage() {
     else if (statusFilter !== "all") chips.push({ key: "status", label: statusFilter });
     if (departmentFilter !== "all") chips.push({ key: "dept", label: departmentFilter });
     if (serviceFilter !== "all") chips.push({ key: "svc", label: serviceFilter });
+    if (assigneeFilter === "unassigned") chips.push({ key: "assignee", label: "Unassigned" });
+    else if (assigneeFilter !== "all") {
+      const label = assigneeOptions.find((o) => o.id === assigneeFilter)?.label || "Assigned";
+      chips.push({ key: "assignee", label });
+    }
     if (encounterFilter === "op") chips.push({ key: "enc", label: "OP" });
     else if (encounterFilter === "ip") chips.push({ key: "enc", label: "IP" });
     else if (encounterFilter === "op-ip") chips.push({ key: "enc", label: "OP + IP" });
     else if (encounterFilter === "name-only") chips.push({ key: "enc", label: "Name-only" });
     if (dateFilterActive) chips.push({ key: "date", label: "Date range" });
     return chips;
-  }, [statusFilter, departmentFilter, serviceFilter, encounterFilter, dateFilterActive]);
+  }, [statusFilter, departmentFilter, serviceFilter, assigneeFilter, assigneeOptions, encounterFilter, dateFilterActive]);
 
   const clearAllFilters = () => {
     setStatusFilter("all");
     setDepartmentFilter("all");
     setServiceFilter("all");
+    setAssigneeFilter("all");
     setEncounterFilter("all");
     setCustomFrom("");
     setCustomTo("");
@@ -452,9 +485,12 @@ export function AdminTicketsPage() {
         onClearAll={clearAllFilters}
         resultCount={patientGroups.length}
         totalCount={ticketRows.length}
-        resultUnit="patients"
+        resultUnit="tickets"
         encounterFilter={encounterFilter}
         onEncounterFilterChange={setEncounterFilter}
+        assigneeFilter={assigneeFilter}
+        onAssigneeFilterChange={setAssigneeFilter}
+        assigneeOptions={assigneeOptions}
       />
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -471,7 +507,7 @@ export function AdminTicketsPage() {
         ) : (
           <>
             <p className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100 bg-gray-50/80">
-              Grouped by patient · click ▶ to see each service ticket (split issues)
+              One row per ticket · split issues are separate and can each be assigned to a different HOD
             </p>
             <PatientGroupedFeedbackTable
               groups={patientGroups}

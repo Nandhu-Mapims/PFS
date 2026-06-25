@@ -273,6 +273,132 @@ async function propagateVoiceRecordingToGroup(feedbackId, voiceRecordingRelPath)
   return result.modifiedCount ?? 0;
 }
 
+async function materializeMissingSplitChildrenForParent(parentRow) {
+  if (!parentRow || parentRow.isSplitChild) return 0;
+  const issues = Array.isArray(parentRow.feedbackIssues) ? parentRow.feedbackIssues : [];
+  if (issues.length <= 1) return 0;
+
+  let submissionGroupId = parentRow.submissionGroupId;
+  if (!submissionGroupId) {
+    submissionGroupId = newSubmissionGroupId();
+    await Feedback.updateOne({ _id: parentRow._id }, { $set: { submissionGroupId } });
+    parentRow = { ...parentRow, submissionGroupId };
+  }
+
+  const existingChildren = await Feedback.find({
+    submissionGroupId,
+    isSplitChild: true,
+  }).lean();
+  const childTicketIds = new Set(
+    existingChildren.map((c) => String(c.ticketId || "").trim()).filter(Boolean)
+  );
+
+  const visitDepartment = sanitizeOptionalLabel(
+    parentRow.lookupDepartment || parentRow.department
+  );
+  const recommendedService = sanitizeOptionalLabel(parentRow.service);
+  let created = 0;
+
+  const base = {
+    patientName: parentRow.patientName,
+    patientRegNo: parentRow.patientRegNo,
+    patientEncounterType: parentRow.patientEncounterType,
+    ward: parentRow.ward,
+    ipNo: parentRow.ipNo,
+    visitOrAdmissionDate: parentRow.visitOrAdmissionDate,
+    lookupDepartment: parentRow.lookupDepartment,
+    rating: parentRow.rating,
+    source: parentRow.source,
+    submissionMode: parentRow.submissionMode,
+    botConversationAnswers: parentRow.botConversationAnswers || [],
+    submissionGroupId,
+    isSplitChild: true,
+    aiUrgency: parentRow.aiUrgency,
+    aiTopics: parentRow.aiTopics || [],
+    aiAnalyzedAt: parentRow.aiAnalyzedAt,
+    feedbackIssues: issues,
+    staffRemarks: parentRow.staffRemarks || "",
+  };
+
+  for (let i = 1; i < issues.length; i++) {
+    const issue = issues[i];
+    const issueSentiment =
+      aiSentimentOnly(issue?.sentiment) || aiSentimentOnly(parentRow.aiSentiment);
+    if (!canOpenTicketForSentiment(issueSentiment)) continue;
+
+    let childTicketId = String(issue.ticketId || "").trim() || null;
+    if (childTicketId && childTicketIds.has(childTicketId)) continue;
+
+    const childSig = buildComplaintSignature(
+      issue.department || visitDepartment,
+      issue.recommendedService,
+      issue.issueSummary
+    );
+
+    if (!childTicketId) {
+      const childEval = await evaluateTicketForFeedback(Feedback, {
+        patientName: parentRow.patientName,
+        rating: parentRow.rating,
+        complaintSignature: childSig,
+      });
+      childTicketId = childEval.ticketId;
+    }
+    if (issueSentiment === "negative" && !childTicketId) {
+      childTicketId = newTicketId();
+    }
+    if (!childTicketId) continue;
+
+    const childTopics = filterAiTopicsForTranscript(parentRow.aiTopics || [], parentRow.comments || "");
+    await Feedback.create({
+      ...base,
+      aiSentiment: issueSentiment,
+      department: issue.department || visitDepartment,
+      service: issue.recommendedService || recommendedService,
+      comments: String(parentRow.comments || "").trim(),
+      aiSummary: issue.issueSummary,
+      aiTopics: childTopics,
+      suggestedAction: issue.suggestedAction,
+      complaintSignature: childSig,
+      ticketId: childTicketId,
+      status: parentRow.status || "New",
+    });
+    childTicketIds.add(childTicketId);
+    created += 1;
+
+    if (!issue.ticketId) {
+      issues[i] = { ...issue, ticketId: childTicketId };
+    }
+  }
+
+  if (created > 0) {
+    const issuesWithTickets = ensureIssueTicketIds(issues, { newTicketId });
+    await Feedback.updateOne(
+      { _id: parentRow._id },
+      { $set: { feedbackIssues: issuesWithTickets, submissionGroupId } }
+    );
+    const freshParent = await Feedback.findById(parentRow._id)
+      .select("voiceRecordingRelPath")
+      .lean();
+    if (freshParent?.voiceRecordingRelPath) {
+      await propagateVoiceRecordingToGroup(parentRow._id, freshParent.voiceRecordingRelPath);
+    }
+  }
+
+  return created;
+}
+
+async function repairAllMissingSplitChildren() {
+  const parents = await Feedback.find({
+    isSplitChild: { $ne: true },
+    "feedbackIssues.1": { $exists: true },
+  }).lean();
+  let created = 0;
+  for (const parent of parents) {
+    created += await materializeMissingSplitChildrenForParent(parent);
+  }
+  return { scanned: parents.length, created };
+}
+
 function newTicketId() {
   return `TKT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 }
@@ -1075,6 +1201,16 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ message: "Failed to open negative tickets" });
+  }
+});
+
+/** Create separate DB rows for each AI split issue so tickets can be assigned to different HODs. */
+app.post("/api/feedback/repair-split-children", async (_req, res) => {
+  try {
+    const result = await repairAllMissingSplitChildren();
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to repair split tickets" });
   }
 });
 

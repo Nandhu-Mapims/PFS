@@ -13,14 +13,11 @@ import { useNavigate } from "react-router";
 import {
   getFeedback,
   getFeedbackAnalytics,
-  getServices,
   updateFeedbackStatus,
   type FeedbackAnalytics,
   type FeedbackItem,
-  type ServiceCatalogItem,
 } from "../lib/api";
 import { getSession } from "../lib/auth";
-import { serviceNamesForHod, visibleToHod } from "../lib/hodRouting";
 import { displayOptionalLabel, sanitizeOptionalLabel } from "../lib/fieldSanitize";
 import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
 import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
@@ -249,10 +246,8 @@ export function Dashboard() {
   const navigate = useNavigate();
   const session = getSession();
   const isHod = session?.role === "hod";
-  const hodDepartment = session?.departmentName?.trim() || "";
   const hodUserId = session?._id || "";
   const [items, setItems] = useState<FeedbackItem[]>([]);
-  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
   const [analytics, setAnalytics] = useState<FeedbackAnalytics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -269,14 +264,12 @@ export function Dashboard() {
       try {
         setIsLoading(true);
         setError(null);
-        const [data, analyticsData, servicesData] = await Promise.all([
+        const [data, analyticsData] = await Promise.all([
           getFeedback(),
           getFeedbackAnalytics(),
-          isHod ? getServices() : Promise.resolve([] as ServiceCatalogItem[]),
         ]);
         setItems(data);
         setAnalytics(analyticsData);
-        setServiceCatalog(servicesData);
       } catch {
         setError("Failed to load staff queue.");
       } finally {
@@ -285,22 +278,12 @@ export function Dashboard() {
     }
 
     void loadData();
-  }, [isHod]);
-
-  const hodServiceNames = useMemo(() => {
-    if (!isHod) return [];
-    const names = serviceNamesForHod(serviceCatalog, hodUserId);
-    const fromSession = session?.serviceName?.trim().toLowerCase();
-    if (fromSession && !names.includes(fromSession)) names.push(fromSession);
-    return names;
-  }, [isHod, serviceCatalog, hodUserId, session?.serviceName]);
+  }, []);
 
   const visibleItems = useMemo(() => {
     if (!isHod) return items;
-    return items.filter((item) =>
-      visibleToHod(item, hodUserId, hodDepartment, hodServiceNames)
-    );
-  }, [items, isHod, hodUserId, hodDepartment, hodServiceNames]);
+    return items.filter((item) => item.assignedToUserId === hodUserId);
+  }, [items, isHod, hodUserId]);
 
   const departments = useMemo(() => {
     const keys = new Set<string>();
@@ -497,9 +480,7 @@ export function Dashboard() {
         </h2>
         <p className="text-muted-foreground text-sm md:text-base">
           {isHod
-            ? hodDepartment || hodServiceNames.length
-              ? `Tickets assigned to you, your department${hodDepartment ? ` (${hodDepartment})` : ""}, and mapped services`
-              : "Tickets assigned to you"
+            ? "Tickets assigned to you by admin or staff"
             : "View and resolve feedback by hospital department and routing service"}
         </p>
       </div>

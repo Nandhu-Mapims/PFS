@@ -137,6 +137,63 @@ export function buildPatientFeedbackGroups(items: FeedbackItem[]): PatientFeedba
   return groups.sort((a, b) => b.representative._id.localeCompare(a.representative._id));
 }
 
+function ticketRowSortKey(item: FeedbackItem): string {
+  return item.createdAt || item._id;
+}
+
+/** One group per complaint ticket — split issues appear as separate rows. */
+export function buildFlatTicketGroups(items: FeedbackItem[]): PatientFeedbackGroup[] {
+  const withTicket = items.filter((item) => Boolean(String(item.ticketId || "").trim()));
+  const bySubmission = new Map<string, FeedbackItem[]>();
+
+  for (const item of withTicket) {
+    const key = item.submissionGroupId ? `sg:${item.submissionGroupId}` : `solo:${item._id}`;
+    const list = bySubmission.get(key) ?? [];
+    list.push(item);
+    bySubmission.set(key, list);
+  }
+
+  const flat: FeedbackItem[] = [];
+  for (const list of bySubmission.values()) {
+    const splitChildren = list.filter((i) => i.isSplitChild);
+    if (splitChildren.length > 0) {
+      const parent = list.find((i) => !i.isSplitChild);
+      if (parent) flat.push(parent);
+      flat.push(...splitChildren.sort((a, b) => a._id.localeCompare(b._id)));
+      continue;
+    }
+
+    const parent = list[0];
+    const issues = (parent.feedbackIssues ?? []).filter(
+      (issue) =>
+        String(issue.ticketId || "").trim() &&
+        (issue.issueSummary?.trim() || issue.recommendedService?.trim())
+    );
+    if (issues.length > 1) {
+      flat.push(...issues.map((issue, index) => feedbackItemForIssue(parent, issue, index)));
+    } else {
+      flat.push(parent);
+    }
+  }
+
+  return flat
+    .sort((a, b) => ticketRowSortKey(b).localeCompare(ticketRowSortKey(a)))
+    .map((item) => ({
+      groupKey: `ticket:${item._id}:${item.ticketId || ""}`,
+      patientName: item.patientName,
+      patientRegNo: item.patientRegNo?.trim() || "",
+      representative: item,
+      items: [item],
+      ticketCount: 1,
+      services: uniqueStrings(ticketServices(item)),
+      departments: uniqueStrings([ticketDepartment(item)]),
+      lowestRating: item.rating,
+      latestCreatedAt: item.createdAt,
+      statusLabel: item.status,
+      dominantSentiment: item.aiSentiment,
+    }));
+}
+
 /** Unique patients (grouped by visit/session — split tickets count as one submission). */
 export function countPatientFeedbackGroups(items: FeedbackItem[]): number {
   return buildPatientFeedbackGroups(items).length;

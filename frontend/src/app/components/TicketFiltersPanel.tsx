@@ -16,7 +16,7 @@ import {
   type PeriodGranularity,
 } from "../lib/insightsFilters";
 import type { EncounterTypeFilter } from "../lib/insightsFilters";
-import type { TicketStatusFilter } from "../lib/ticketFilters";
+import type { TicketStatusFilter, TicketAssigneeFilter } from "../lib/ticketFilters";
 import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
 
 const STATUS_OPTIONS: { id: TicketStatusFilter; label: string }[] = [
@@ -56,6 +56,9 @@ type TicketFiltersPanelProps = {
   resultUnit?: string;
   encounterFilter: EncounterTypeFilter;
   onEncounterFilterChange: (v: EncounterTypeFilter) => void;
+  assigneeFilter: TicketAssigneeFilter;
+  onAssigneeFilterChange: (v: TicketAssigneeFilter) => void;
+  assigneeOptions: Array<{ id: string; label: string }>;
 };
 
 function chipClass(active: boolean) {
@@ -94,6 +97,9 @@ export function TicketFiltersPanel({
   resultUnit = "tickets",
   encounterFilter,
   onEncounterFilterChange,
+  assigneeFilter,
+  onAssigneeFilterChange,
+  assigneeOptions,
 }: TicketFiltersPanelProps) {
   const customRange: CustomDateRange = { from: customFrom, to: customTo };
   const usingCustomRange = hasCustomDateRange(customRange);
@@ -169,7 +175,7 @@ export function TicketFiltersPanel({
 
       {expanded ? (
         <div className="px-4 pb-4 pt-0 border-t border-gray-100 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
             <div>
               <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
                 Status
@@ -218,6 +224,25 @@ export function TicketFiltersPanel({
                   {serviceOptions.map((name) => (
                     <SelectItem key={name} value={name}>
                       {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
+                Assigned to
+              </label>
+              <Select value={assigneeFilter} onValueChange={onAssigneeFilterChange}>
+                <SelectTrigger className={selectTriggerClass}>
+                  <SelectValue placeholder="All" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All assignees</SelectItem>
+                  <SelectItem value="unassigned">Unassigned</SelectItem>
+                  {assigneeOptions.map((opt) => (
+                    <SelectItem key={opt.id} value={opt.id}>
+                      {opt.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

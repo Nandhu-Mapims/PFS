@@ -63,6 +63,8 @@ export function ticketServices(item: FeedbackItem): string[] {
   return single ? [single] : [];
 }
 
+export type TicketAssigneeFilter = "all" | "unassigned" | string;
+
 export function filterTicketsByDimensions(
   rows: FeedbackItem[],
   opts: {
@@ -70,6 +72,7 @@ export function filterTicketsByDimensions(
     department: string;
     service: string;
     encounterFilter?: EncounterTypeFilter;
+    assignee?: TicketAssigneeFilter;
   }
 ): FeedbackItem[] {
   return rows.filter((row) => {
@@ -91,6 +94,13 @@ export function filterTicketsByDimensions(
       if (ticketService(row) !== opts.service) return false;
     }
 
+    const assignee = opts.assignee ?? "all";
+    if (assignee === "unassigned") {
+      if (row.assignedToUserId) return false;
+    } else if (assignee !== "all") {
+      if (row.assignedToUserId !== assignee) return false;
+    }
+
     return true;
   });
 }
@@ -103,6 +113,8 @@ export function buildFilterSummary(opts: {
   status: TicketStatusFilter;
   department: string;
   service: string;
+  assignee?: TicketAssigneeFilter;
+  assigneeLabel?: string;
   dateLabel: string;
 }): string {
   const parts: string[] = [];
@@ -110,6 +122,10 @@ export function buildFilterSummary(opts: {
   else if (opts.status !== "all") parts.push(opts.status);
   if (opts.department !== "all") parts.push(`Dept: ${opts.department}`);
   if (opts.service !== "all") parts.push(`Service: ${opts.service}`);
+  if (opts.assignee === "unassigned") parts.push("Unassigned");
+  else if (opts.assignee && opts.assignee !== "all") {
+    parts.push(`Assigned: ${opts.assigneeLabel || opts.assignee}`);
+  }
   if (opts.dateLabel && !opts.dateLabel.startsWith("All tickets")) {
     parts.push(opts.dateLabel);
   }
