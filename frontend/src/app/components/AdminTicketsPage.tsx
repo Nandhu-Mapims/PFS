@@ -27,6 +27,12 @@ import {
   fetchFeedbackList,
   mergeFeedbackLists,
 } from "../lib/feedbackListSync";
+import {
+  feedbackCacheKey,
+  getFeedbackCache,
+  patchFeedbackCache,
+  setFeedbackCache,
+} from "../lib/feedbackCache";
 import { PatientGroupedFeedbackTable } from "./PatientGroupedFeedbackTable";
 import {
   deleteFeedback,
@@ -66,6 +72,8 @@ const ratingLabel: Record<number, string> = {
   5: "Excellent",
 };
 
+const TICKETS_LIST_QUERY = { lite: true as const };
+
 export function AdminTicketsPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -92,9 +100,17 @@ export function AdminTicketsPage() {
   const lastFeedbackSyncMsRef = useRef(0);
 
   const loadTickets = useCallback(async (opts?: { silent?: boolean; incremental?: boolean }) => {
+    const query = TICKETS_LIST_QUERY;
+    const key = feedbackCacheKey(query);
+    const cached = getFeedbackCache(key);
+
     try {
       if (opts?.silent) {
         setIsRefreshing(true);
+      } else if (cached) {
+        setItems(cached.items);
+        lastFeedbackSyncMsRef.current = cached.lastSyncMs;
+        setIsLoading(false);
       } else {
         setIsLoading(true);
       }
@@ -104,23 +120,37 @@ export function AdminTicketsPage() {
         repairDoneRef.current = true;
       }
 
-      const query = { lite: true as const };
-      const useIncremental = Boolean(opts?.incremental && lastFeedbackSyncMsRef.current > 0);
+      const useIncremental = Boolean(
+        opts?.incremental && (lastFeedbackSyncMsRef.current > 0 || cached?.lastSyncMs)
+      );
+      const sinceMs = lastFeedbackSyncMsRef.current || cached?.lastSyncMs || 0;
 
       const data = useIncremental
-        ? await fetchFeedbackChanges(query, lastFeedbackSyncMsRef.current)
+        ? await fetchFeedbackChanges(query, sinceMs)
         : await fetchFeedbackList(query);
 
       if (useIncremental) {
         if (data.length) {
-          setItems((current) => mergeFeedbackLists(current, data));
+          setItems((current) => {
+            const merged = mergeFeedbackLists(current, data);
+            patchFeedbackCache(key, merged, Date.now());
+            return merged;
+          });
+        } else {
+          setItems((current) => {
+            patchFeedbackCache(key, current, Date.now());
+            return current;
+          });
         }
       } else {
         setItems(data);
+        setFeedbackCache(key, data, Date.now());
       }
       lastFeedbackSyncMsRef.current = Date.now();
     } catch {
-      setError("Failed to load tickets. Please check API and database.");
+      if (!opts?.silent && !cached) {
+        setError("Failed to load tickets. Please check API and database.");
+      }
     } finally {
       if (opts?.silent) {
         setIsRefreshing(false);
@@ -148,6 +178,15 @@ export function AdminTicketsPage() {
   }, [loadTickets]);
 
   useEffect(() => {
+    const key = feedbackCacheKey(TICKETS_LIST_QUERY);
+    const cached = getFeedbackCache(key);
+    if (cached) {
+      setItems(cached.items);
+      lastFeedbackSyncMsRef.current = cached.lastSyncMs;
+      setIsLoading(false);
+      void loadTickets({ silent: true, incremental: true });
+      return;
+    }
     void loadTickets();
   }, [loadTickets]);
 
@@ -361,7 +400,11 @@ export function AdminTicketsPage() {
       try {
         setError(null);
         await deleteFeedback(item._id);
-        setItems((current) => current.filter((row) => row._id !== item._id));
+        setItems((current) => {
+          const next = current.filter((row) => row._id !== item._id);
+          patchFeedbackCache(feedbackCacheKey(TICKETS_LIST_QUERY), next, Date.now());
+          return next;
+        });
       } catch {
         setError("Failed to delete ticket.");
       }
@@ -518,7 +561,7 @@ export function AdminTicketsPage() {
       />
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        {isLoading ? (
+        {isLoading && items.length === 0 ? (
           <p className="p-6 text-gray-600">Loading tickets...</p>
         ) : error ? (
           <p className="p-6 text-red-600">{error}</p>

@@ -14,6 +14,7 @@ export function feedbackCacheKey(query: FeedbackInsightsQuery): string {
     endMs: query.endMs ?? null,
     encounter: query.encounter ?? "all",
     lite: query.lite ? 1 : 0,
+    assignedToUserId: query.assignedToUserId?.trim() || null,
   });
 }
 

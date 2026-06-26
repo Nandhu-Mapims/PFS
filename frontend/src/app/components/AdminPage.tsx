@@ -18,6 +18,7 @@ import {
   patchFeedbackCache,
   setFeedbackCache,
 } from "../lib/feedbackCache";
+import { getAnalyticsCache, setAnalyticsCache } from "../lib/analyticsCache";
 import {
   defaultFeedbackListScope,
   feedbackMatchesListScope,
@@ -78,9 +79,10 @@ export function AdminPage() {
   const location = useLocation();
   const isDeleteMode = location.pathname.includes("/delete");
   const [items, setItems] = useState<FeedbackItem[]>([]);
-  const [analytics, setAnalytics] = useState<FeedbackAnalytics | null>(null);
+  const [analytics, setAnalytics] = useState<FeedbackAnalytics | null>(() => getAnalyticsCache());
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [chartsReady, setChartsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [downloadBusy, setDownloadBusy] = useState(false);
@@ -103,6 +105,7 @@ export function AdminPage() {
       if (opts?.silent) setIsRefreshing(true);
       const analyticsData = await getFeedbackAnalytics();
       setAnalytics(analyticsData);
+      setAnalyticsCache(analyticsData);
     } catch {
       if (!opts?.silent) {
         setError("Failed to load analytics. Please check API and database.");
@@ -112,7 +115,7 @@ export function AdminPage() {
     }
   }, []);
 
-  const loadData = useCallback(
+  const loadFeedback = useCallback(
     async (opts?: { silent?: boolean; incremental?: boolean }) => {
       const query = listQuery();
       const key = feedbackCacheKey(query);
@@ -135,14 +138,9 @@ export function AdminPage() {
         );
         const sinceMs = lastFeedbackSyncMsRef.current || cached?.lastSyncMs || 0;
 
-        const feedbackPromise = useIncremental
-          ? fetchFeedbackChanges(query, sinceMs)
-          : fetchFeedbackList(query);
-
-        const [feedbackData, analyticsData] = await Promise.all([
-          feedbackPromise,
-          opts?.silent ? Promise.resolve(null) : getFeedbackAnalytics(),
-        ]);
+        const feedbackData = useIncremental
+          ? await fetchFeedbackChanges(query, sinceMs)
+          : await fetchFeedbackList(query);
 
         if (useIncremental) {
           if (feedbackData.length) {
@@ -165,10 +163,6 @@ export function AdminPage() {
           setFeedbackCache(key, feedbackData, Date.now());
         }
         markFeedbackSynced();
-
-        if (analyticsData) {
-          setAnalytics(analyticsData);
-        }
       } catch {
         if (!opts?.silent && !cached) {
           setError("Failed to load feedback. Please check API and database.");
@@ -234,15 +228,27 @@ export function AdminPage() {
     const query = listQuery();
     const key = feedbackCacheKey(query);
     const cached = getFeedbackCache(key);
+    const hasAnalytics = Boolean(getAnalyticsCache());
+
+    void loadAnalytics({ silent: hasAnalytics });
+
     if (cached) {
       setItems(cached.items);
       lastFeedbackSyncMsRef.current = cached.lastSyncMs;
       setIsLoading(false);
-      void loadData({ silent: true, incremental: true });
+      void loadFeedback({ silent: true, incremental: true });
       return;
     }
-    void loadData();
+    void loadFeedback();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setChartsReady(true));
+    return () => {
+      cancelAnimationFrame(id);
+      setChartsReady(false);
+    };
   }, []);
 
   useEffect(() => {
@@ -266,10 +272,10 @@ export function AdminPage() {
     const interval = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
       void loadAnalytics({ silent: true });
-      void loadData({ silent: true, incremental: true });
+      void loadFeedback({ silent: true, incremental: true });
     }, 60_000);
     return () => window.clearInterval(interval);
-  }, [loadAnalytics, loadData]);
+  }, [loadAnalytics, loadFeedback]);
 
   useEffect(() => {
     void loadBrandingSettings().then((next) => {
@@ -476,6 +482,7 @@ export function AdminPage() {
   );
   const negativeDepartmentData = analytics?.negativeByDepartment ?? [];
   const trendData = analytics?.submissionsByDay ?? [];
+  const chartRenderKey = chartsReady ? `ready-${pieData.length}-${trendData.length}` : "pending";
   function downloadExcel(rows: FeedbackItem[], fileName: string) {
     const data = rows.map((item) => ({
       patientName: item.patientName,
@@ -578,25 +585,31 @@ export function AdminPage() {
         <div className="bg-white rounded-xl shadow-md p-5">
           <h3 className="text-lg font-semibold text-gray-800 mb-4">Submission Status Distribution</h3>
           <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  dataKey="count"
-                  nameKey="status"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={90}
-                  label
-                >
-                  {pieData.map((entry) => (
-                    <Cell key={entry.status} fill={entry.fill} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
+            {chartsReady && pieData.length > 0 ? (
+              <ResponsiveContainer key={chartRenderKey} width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    dataKey="count"
+                    nameKey="status"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={90}
+                    label
+                  >
+                    {pieData.map((entry) => (
+                      <Cell key={entry.status} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-gray-400">
+                {analytics ? "No status data yet" : "Loading charts…"}
+              </div>
+            )}
           </div>
         </div>
         <div className="bg-white rounded-xl shadow-md p-5">
@@ -604,15 +617,21 @@ export function AdminPage() {
             Negative Feedback by Department
           </h3>
           <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={negativeDepartmentData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="department" />
-                <YAxis allowDecimals={false} />
-                <Tooltip />
-                <Bar dataKey="count" fill="#E5533D" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {chartsReady && negativeDepartmentData.length > 0 ? (
+              <ResponsiveContainer key={`neg-${chartRenderKey}`} width="100%" height="100%">
+                <BarChart data={negativeDepartmentData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="department" />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="#E5533D" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-gray-400">
+                {analytics ? "No negative feedback by department" : "Loading charts…"}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -622,15 +641,21 @@ export function AdminPage() {
           Submission Trend (Last 14 Days)
         </h3>
         <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={trendData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="day" />
-              <YAxis allowDecimals={false} />
-              <Tooltip />
-              <Line type="monotone" dataKey="count" stroke="#2A6FDB" strokeWidth={3} />
-            </LineChart>
-          </ResponsiveContainer>
+          {chartsReady && trendData.length > 0 ? (
+            <ResponsiveContainer key={`trend-${chartRenderKey}`} width="100%" height="100%">
+              <LineChart data={trendData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="day" />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Line type="monotone" dataKey="count" stroke="#2A6FDB" strokeWidth={3} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-gray-400">
+              {analytics ? "No trend data yet" : "Loading charts…"}
+            </div>
+          )}
         </div>
       </div>
 
@@ -700,7 +725,7 @@ export function AdminPage() {
         isDeleteMode={isDeleteMode}
         listScope={listScope}
         onListScopeChange={handleListScopeChange}
-        onRefresh={() => void loadData({ silent: true, incremental: true })}
+        onRefresh={() => void loadFeedback({ silent: true, incremental: true })}
         onDownloadAll={downloadAllFeedbackExcel}
         excelDownloadBusy={excelDownloadBusy}
         onDownloadRange={downloadFilteredFeedbackExcel}
