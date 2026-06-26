@@ -136,6 +136,7 @@ const feedbackSchema = new mongoose.Schema(
 
 feedbackSchema.index({ createdAt: -1 });
 feedbackSchema.index({ createdAt: -1, patientEncounterType: 1 });
+feedbackSchema.index({ updatedAt: -1 });
 feedbackSchema.index(
   { clientSubmissionId: 1 },
   {

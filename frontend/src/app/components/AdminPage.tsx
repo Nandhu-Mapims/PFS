@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 import {
   deleteFeedback,
@@ -7,6 +7,19 @@ import {
   type FeedbackAnalytics,
   type FeedbackItem,
 } from "../lib/api";
+import {
+  fetchFeedbackChanges,
+  fetchFeedbackList,
+  mergeFeedbackLists,
+} from "../lib/feedbackListSync";
+import {
+  defaultFeedbackListScope,
+  feedbackMatchesListScope,
+  feedbackQueryFromListScope,
+  last12WeeksRange,
+  last30DaysRange,
+  type FeedbackListScope,
+} from "../lib/insightsFilters";
 import {
   getBrandingSettings,
   loadBrandingSettings,
@@ -66,31 +79,113 @@ export function AdminPage() {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [brandLogoDataUrl, setBrandLogoDataUrl] = useState<string | null>(null);
+  const [listScope, setListScope] = useState<FeedbackListScope>(defaultFeedbackListScope);
+  const [excelDownloadBusy, setExcelDownloadBusy] = useState(false);
+  const lastFeedbackSyncMsRef = useRef(0);
 
-  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+  const listQuery = useCallback(
+    () => ({ lite: true as const, ...feedbackQueryFromListScope(listScope) }),
+    [listScope]
+  );
+
+  const markFeedbackSynced = useCallback(() => {
+    lastFeedbackSyncMsRef.current = Date.now();
+  }, []);
+
+  const loadAnalytics = useCallback(async (opts?: { silent?: boolean }) => {
     try {
-      if (opts?.silent) {
-        setIsRefreshing(true);
-      } else {
-        setIsLoading(true);
-      }
-      setError(null);
-      const [feedbackData, analyticsData] = await Promise.all([
-        getFeedback(),
-        getFeedbackAnalytics(),
-      ]);
-      setItems(feedbackData);
+      if (opts?.silent) setIsRefreshing(true);
+      const analyticsData = await getFeedbackAnalytics();
       setAnalytics(analyticsData);
     } catch {
-      setError("Failed to load feedback. Please check API and database.");
-    } finally {
-      if (opts?.silent) {
-        setIsRefreshing(false);
-      } else {
-        setIsLoading(false);
+      if (!opts?.silent) {
+        setError("Failed to load analytics. Please check API and database.");
       }
+    } finally {
+      if (opts?.silent) setIsRefreshing(false);
     }
   }, []);
+
+  const loadData = useCallback(
+    async (opts?: { silent?: boolean; incremental?: boolean }) => {
+      try {
+        if (opts?.silent) {
+          setIsRefreshing(true);
+        } else {
+          setIsLoading(true);
+        }
+        setError(null);
+
+        const query = listQuery();
+        const useIncremental = Boolean(opts?.incremental && lastFeedbackSyncMsRef.current > 0);
+
+        const feedbackPromise = useIncremental
+          ? fetchFeedbackChanges(query, lastFeedbackSyncMsRef.current)
+          : fetchFeedbackList(query);
+
+        const [feedbackData, analyticsData] = await Promise.all([
+          feedbackPromise,
+          opts?.silent ? Promise.resolve(null) : getFeedbackAnalytics(),
+        ]);
+
+        if (useIncremental) {
+          if (feedbackData.length) {
+            setItems((current) => {
+              let merged = mergeFeedbackLists(current, feedbackData);
+              if (!listScope.allTime) {
+                merged = merged.filter((row) => feedbackMatchesListScope(row, listScope));
+              }
+              return merged;
+            });
+          }
+        } else {
+          setItems(feedbackData);
+        }
+        markFeedbackSynced();
+
+        if (analyticsData) {
+          setAnalytics(analyticsData);
+        }
+      } catch {
+        setError("Failed to load feedback. Please check API and database.");
+      } finally {
+        if (opts?.silent) {
+          setIsRefreshing(false);
+        } else {
+          setIsLoading(false);
+        }
+      }
+    },
+    [listQuery, listScope, markFeedbackSynced]
+  );
+
+  const reloadFeedbackList = useCallback(
+    async (scope: FeedbackListScope, opts?: { silent?: boolean }) => {
+      try {
+        if (opts?.silent) setIsRefreshing(true);
+        else setIsLoading(true);
+        setError(null);
+        lastFeedbackSyncMsRef.current = 0;
+        const feedbackData = await fetchFeedbackList({
+          lite: true,
+          ...feedbackQueryFromListScope(scope),
+        });
+        setItems(feedbackData);
+        markFeedbackSynced();
+      } catch {
+        setError("Failed to load feedback. Please check API and database.");
+      } finally {
+        if (opts?.silent) setIsRefreshing(false);
+        else setIsLoading(false);
+      }
+    },
+    [markFeedbackSynced]
+  );
+
+  const handleListScopeChange = useCallback((scope: FeedbackListScope) => {
+    setListScope(scope);
+    void reloadFeedbackList(scope);
+  }, [reloadFeedbackList]);
 
   const handleDeleteFeedback = useCallback(
     async (item: FeedbackItem) => {
@@ -112,16 +207,17 @@ export function AdminPage() {
 
   useEffect(() => {
     void loadData();
-  }, [loadData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     function refreshWhenVisible() {
       if (document.visibilityState === "visible") {
-        void loadData({ silent: true });
+        void loadAnalytics({ silent: true });
       }
     }
     function onFocus() {
-      void loadData({ silent: true });
+      void loadAnalytics({ silent: true });
     }
     document.addEventListener("visibilitychange", refreshWhenVisible);
     window.addEventListener("focus", onFocus);
@@ -129,14 +225,16 @@ export function AdminPage() {
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.removeEventListener("focus", onFocus);
     };
-  }, [loadData]);
+  }, [loadAnalytics]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      void loadData({ silent: true });
-    }, 5000);
+      if (document.visibilityState !== "visible") return;
+      void loadAnalytics({ silent: true });
+      void loadData({ silent: true, incremental: true });
+    }, 60_000);
     return () => window.clearInterval(interval);
-  }, [loadData]);
+  }, [loadAnalytics, loadData]);
 
   useEffect(() => {
     void loadBrandingSettings().then((next) => {
@@ -148,14 +246,18 @@ export function AdminPage() {
     });
   }, []);
 
-  const totalSubmissions = items.length;
+  const totalSubmissions = analytics?.totals?.all ?? items.length;
   const patientCount = useMemo(() => countPatientFeedbackGroups(items), [items]);
-  const averageRating = useMemo(() => {
+  const averageRatingFromItems = useMemo(() => {
     if (!items.length) return 0;
     const parents = items.filter((row) => !row.isSplitChild);
     const base = parents.length ? parents : items;
     return Number((base.reduce((sum, row) => sum + row.rating, 0) / base.length).toFixed(1));
   }, [items]);
+  const averageRating = analytics?.totals?.averageRating ?? averageRatingFromItems;
+  const negativeAiCount =
+    analytics?.totals?.negative ?? items.filter((i) => i.aiSentiment === "negative").length;
+  const aiChannelCount = analytics?.totals?.aiTickets ?? items.filter((i) => i.source === "ai").length;
 
   const feedbackLink = useMemo(() => {
     const envBase = (
@@ -358,8 +460,19 @@ export function AdminPage() {
   }
 
   function downloadAllFeedbackExcel() {
-    if (!items.length) return;
-    downloadExcel(items, "feedback-all-data.xlsx");
+    void (async () => {
+      if (excelDownloadBusy) return;
+      try {
+        setExcelDownloadBusy(true);
+        const all = await getFeedback({ lite: true });
+        if (!all.length) return;
+        downloadExcel(all, "feedback-all-data.xlsx");
+      } catch {
+        setError("Could not download all feedback. Try again.");
+      } finally {
+        setExcelDownloadBusy(false);
+      }
+    })();
   }
 
   function downloadFilteredFeedbackExcel(rows: FeedbackItem[]) {
@@ -375,6 +488,10 @@ export function AdminPage() {
           <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-800">Admin Panel</h2>
           <p className="text-sm sm:text-base md:text-lg text-gray-600 mt-1.5 sm:mt-2">
             SaaS-level analytics for patient feedback performance
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            Charts use all-time totals · table below loads{" "}
+            {listScope.allTime ? "all submissions" : `${listScope.from} to ${listScope.to}`} only
           </p>
         </div>
         <div className="grid grid-cols-2 gap-2 w-full sm:w-auto sm:flex sm:items-center">
@@ -414,15 +531,11 @@ export function AdminPage() {
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#F4A261]">
           <p className="text-gray-600 text-sm mb-1 font-medium">Negative (AI)</p>
-          <p className="text-3xl font-bold text-gray-800">
-            {items.filter((i) => i.aiSentiment === "negative").length}
-          </p>
+          <p className="text-3xl font-bold text-gray-800">{negativeAiCount}</p>
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100 border-l-4 border-l-[#7C3AED]">
           <p className="text-gray-600 text-sm mb-1 font-medium">AI Channel Submissions</p>
-          <p className="text-3xl font-bold text-gray-800">
-            {items.filter((i) => i.source === "ai").length}
-          </p>
+          <p className="text-3xl font-bold text-gray-800">{aiChannelCount}</p>
         </div>
       </div>
 
@@ -550,8 +663,11 @@ export function AdminPage() {
         isRefreshing={isRefreshing}
         error={error}
         isDeleteMode={isDeleteMode}
-        onRefresh={() => void loadData({ silent: true })}
+        listScope={listScope}
+        onListScopeChange={handleListScopeChange}
+        onRefresh={() => void loadData({ silent: true, incremental: true })}
         onDownloadAll={downloadAllFeedbackExcel}
+        excelDownloadBusy={excelDownloadBusy}
         onDownloadRange={downloadFilteredFeedbackExcel}
         onDeleteItem={isDeleteMode ? (item) => void handleDeleteFeedback(item) : undefined}
       />

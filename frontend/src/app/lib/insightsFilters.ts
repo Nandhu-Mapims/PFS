@@ -155,6 +155,51 @@ export function last30DaysRange(now = new Date()): CustomDateRange {
   return { from: toDateInputValue(start), to: toDateInputValue(end) };
 }
 
+/** Inclusive local-date range → epoch window for API queries. */
+export function customRangeToWindow(
+  range: Partial<CustomDateRange>
+): { startMs: number; endMs: number } | null {
+  const from = String(range.from || "").trim();
+  const to = String(range.to || "").trim();
+  if (!from || !to) return null;
+  const start = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T23:59:59.999`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+    return null;
+  }
+  return { startMs: start.getTime(), endMs: end.getTime() };
+}
+
+export type FeedbackListScope = {
+  from: string;
+  to: string;
+  allTime: boolean;
+};
+
+export function defaultFeedbackListScope(): FeedbackListScope {
+  const range = last30DaysRange();
+  return { from: range.from, to: range.to, allTime: false };
+}
+
+export function feedbackQueryFromListScope(
+  scope: FeedbackListScope
+): { startMs?: number; endMs?: number } {
+  if (scope.allTime) return {};
+  const window = customRangeToWindow(scope);
+  return window ? window : {};
+}
+
+export function feedbackMatchesListScope(
+  item: { createdAt: string },
+  scope: FeedbackListScope
+): boolean {
+  if (scope.allTime) return true;
+  const window = customRangeToWindow(scope);
+  if (!window) return true;
+  const t = new Date(item.createdAt).getTime();
+  return t >= window.startMs && t <= window.endMs;
+}
+
 export function rangesEqual(
   a: Partial<CustomDateRange> | null | undefined,
   b: CustomDateRange

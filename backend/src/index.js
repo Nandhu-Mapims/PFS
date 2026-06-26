@@ -120,6 +120,16 @@ function attachVoicePlaybackUrl(doc) {
   return plain;
 }
 
+/** Drop bulky fields from list responses (bot audio transcripts, voice paths). */
+function toFeedbackListRow(doc) {
+  const plain = attachVoicePlaybackUrl(doc);
+  delete plain.botConversationAnswers;
+  delete plain.voiceRecordingRelPath;
+  delete plain.voiceRecordingUrl;
+  delete plain.botVoiceSourceFeedbackId;
+  return plain;
+}
+
 const DEFAULT_VOICE_RECORDING_MAX_SECONDS = 120;
 const DEFAULT_BOT_THINK_SECONDS = 3;
 const DEFAULT_BOT_SKIP_INTRO = false;
@@ -2264,9 +2274,14 @@ app.post("/api/feedback/:id/voice-recording", (req, res, next) => {
 app.get("/api/feedback", async (req, res) => {
   try {
     const mongoFilter = buildFeedbackInsightsFilter(req.query);
+    const lite = String(req.query.lite || "").trim() === "1";
     // Sort by insertion time from ObjectId to avoid skew from synthetic createdAt values.
     const feedback = await Feedback.find(mongoFilter).sort({ _id: -1 }).lean();
-    return res.json(await enrichFeedbackListWithGroupDonor(feedback));
+    const enriched = await enrichFeedbackListWithGroupDonor(feedback);
+    if (lite) {
+      return res.json(enriched.map(toFeedbackListRow));
+    }
+    return res.json(enriched);
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch feedback" });
   }

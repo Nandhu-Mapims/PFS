@@ -12,6 +12,11 @@ export function buildFeedbackInsightsFilter(query = {}) {
     };
   }
 
+  const sinceMs = Number(query.sinceMs);
+  if (Number.isFinite(sinceMs) && sinceMs > 0) {
+    filter.updatedAt = { $gte: new Date(sinceMs) };
+  }
+
   const encounter = String(query.encounter || "all").toLowerCase();
   if (encounter === "op") {
     filter.patientEncounterType = "op";
@@ -29,6 +34,7 @@ export function buildFeedbackInsightsFilter(query = {}) {
 export function hasInsightsFilterQuery(query = {}) {
   return (
     (Number.isFinite(Number(query.startMs)) && Number.isFinite(Number(query.endMs))) ||
+    (Number.isFinite(Number(query.sinceMs)) && Number(query.sinceMs) > 0) ||
     ["op", "ip", "op-ip", "name-only"].includes(String(query.encounter || "").toLowerCase())
   );
 }

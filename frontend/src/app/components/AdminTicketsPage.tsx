@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { TicketFiltersPanel } from "./TicketFiltersPanel";
 import { filterBySubmittedDate } from "./SubmittedDateFilterBar";
@@ -22,10 +22,14 @@ import {
   type TicketStatusFilter,
 } from "../lib/ticketFilters";
 import { buildFlatTicketGroups } from "../lib/patientFeedbackGroups";
+import {
+  fetchFeedbackChanges,
+  fetchFeedbackList,
+  mergeFeedbackLists,
+} from "../lib/feedbackListSync";
 import { PatientGroupedFeedbackTable } from "./PatientGroupedFeedbackTable";
 import {
   deleteFeedback,
-  getFeedback,
   getHospitalDepartments,
   getServices,
   getUsers,
@@ -84,8 +88,10 @@ export function AdminTicketsPage() {
   const [catalogDepartments, setCatalogDepartments] = useState<string[]>([]);
   const [catalogServices, setCatalogServices] = useState<string[]>([]);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const repairDoneRef = useRef(false);
+  const lastFeedbackSyncMsRef = useRef(0);
 
-  const loadTickets = useCallback(async (opts?: { silent?: boolean }) => {
+  const loadTickets = useCallback(async (opts?: { silent?: boolean; incremental?: boolean }) => {
     try {
       if (opts?.silent) {
         setIsRefreshing(true);
@@ -93,9 +99,26 @@ export function AdminTicketsPage() {
         setIsLoading(true);
       }
       setError(null);
-      await repairSplitTickets().catch(() => {});
-      const data = await getFeedback();
-      setItems(data);
+      if (!repairDoneRef.current) {
+        await repairSplitTickets().catch(() => {});
+        repairDoneRef.current = true;
+      }
+
+      const query = { lite: true as const };
+      const useIncremental = Boolean(opts?.incremental && lastFeedbackSyncMsRef.current > 0);
+
+      const data = useIncremental
+        ? await fetchFeedbackChanges(query, lastFeedbackSyncMsRef.current)
+        : await fetchFeedbackList(query);
+
+      if (useIncremental) {
+        if (data.length) {
+          setItems((current) => mergeFeedbackLists(current, data));
+        }
+      } else {
+        setItems(data);
+      }
+      lastFeedbackSyncMsRef.current = Date.now();
     } catch {
       setError("Failed to load tickets. Please check API and database.");
     } finally {
@@ -116,7 +139,7 @@ export function AdminTicketsPage() {
       setSyncMessage(
         `Updated ${result.updated} row(s). ${result.negativeWithTicket} negative item(s) now have tickets.`
       );
-      await loadTickets({ silent: true });
+      await loadTickets({ silent: true, incremental: true });
     } catch {
       setError("Could not assign tickets. Is the API running?");
     } finally {
@@ -147,8 +170,9 @@ export function AdminTicketsPage() {
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      void loadTickets({ silent: true });
-    }, 5000);
+      if (document.visibilityState !== "visible") return;
+      void loadTickets({ silent: true, incremental: true });
+    }, 30_000);
     return () => window.clearInterval(interval);
   }, [loadTickets]);
 

@@ -38,6 +38,7 @@ export function useInsightsData() {
         startMs: filterWindow.start.getTime(),
         endMs: filterWindow.end.getTime(),
         encounter: encounterFilter,
+        lite: true,
       });
       setItems(feedbackRows);
     } catch {

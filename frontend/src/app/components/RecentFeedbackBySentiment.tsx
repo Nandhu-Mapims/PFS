@@ -4,7 +4,13 @@ import type { FeedbackItem } from "../lib/api";
 import { getTotalPages, paginateSlice } from "../lib/pagination";
 import { getAiSentimentBucket } from "../lib/sentiment";
 import { ticketDepartment, ticketService, uniqueSorted } from "../lib/ticketFilters";
-import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
+import {
+  last12WeeksRange,
+  last30DaysRange,
+  matchesEncounterType,
+  type EncounterTypeFilter,
+  type FeedbackListScope,
+} from "../lib/insightsFilters";
 import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
 import { FeedbackDetailDialog } from "./FeedbackDetailDialog";
 import { ListPagination } from "./ListPagination";
@@ -37,8 +43,11 @@ type RecentFeedbackBySentimentProps = {
   isRefreshing: boolean;
   error: string | null;
   isDeleteMode?: boolean;
+  listScope: FeedbackListScope;
+  onListScopeChange: (scope: FeedbackListScope) => void;
   onRefresh: () => void;
   onDownloadAll: () => void;
+  excelDownloadBusy?: boolean;
   onDownloadRange: (rows: FeedbackItem[]) => void;
   onDeleteItem?: (item: FeedbackItem) => void;
 };
@@ -56,8 +65,11 @@ export function RecentFeedbackBySentiment({
   isRefreshing,
   error,
   isDeleteMode = false,
+  listScope,
+  onListScopeChange,
   onRefresh,
   onDownloadAll,
+  excelDownloadBusy = false,
   onDownloadRange,
   onDeleteItem,
 }: RecentFeedbackBySentimentProps) {
@@ -67,12 +79,17 @@ export function RecentFeedbackBySentiment({
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [serviceFilter, setServiceFilter] = useState("all");
   const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const [draftFrom, setDraftFrom] = useState(listScope.from);
+  const [draftTo, setDraftTo] = useState(listScope.to);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [detailItem, setDetailItem] = useState<FeedbackItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+
+  useEffect(() => {
+    setDraftFrom(listScope.from);
+    setDraftTo(listScope.to);
+  }, [listScope.from, listScope.to, listScope.allTime]);
 
   const sorted = useMemo(
     () => [...items].sort((a, b) => b._id.localeCompare(a._id)),
@@ -102,26 +119,28 @@ export function RecentFeedbackBySentiment({
 
       if (!matchesEncounterType(item.patientEncounterType, encounterFilter)) return false;
 
-      if (fromDate || toDate) {
-        const created = new Date(item.createdAt);
-        if (fromDate) {
-          const start = new Date(`${fromDate}T00:00:00`);
-          if (created < start) return false;
-        }
-        if (toDate) {
-          const end = new Date(`${toDate}T23:59:59.999`);
-          if (created > end) return false;
-        }
-      }
       return true;
     });
-  }, [sorted, sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter, fromDate, toDate]);
+  }, [sorted, sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter]);
 
   const patientGroups = useMemo(() => buildPatientFeedbackGroups(filtered), [filtered]);
 
   useEffect(() => {
     setPage(1);
-  }, [sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter, fromDate, toDate, pageSize]);
+  }, [sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter, pageSize, listScope]);
+
+  const listScopeLabel = listScope.allTime
+    ? "all time"
+    : `${listScope.from} → ${listScope.to}`;
+
+  function applyDraftRange() {
+    if (!draftFrom || !draftTo) return;
+    onListScopeChange({ from: draftFrom, to: draftTo, allTime: false });
+  }
+
+  function applyPreset(scope: FeedbackListScope) {
+    onListScopeChange(scope);
+  }
 
   const totalPages = getTotalPages(patientGroups.length, pageSize);
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -140,8 +159,7 @@ export function RecentFeedbackBySentiment({
     statusFilter !== "all" ||
     departmentFilter !== "all" ||
     serviceFilter !== "all" ||
-    encounterFilter !== "all" ||
-    Boolean(fromDate || toDate);
+    encounterFilter !== "all";
 
   const clearFilters = () => {
     setSentimentFilter("all");
@@ -149,9 +167,14 @@ export function RecentFeedbackBySentiment({
     setDepartmentFilter("all");
     setServiceFilter("all");
     setEncounterFilter("all");
-    setFromDate("");
-    setToDate("");
   };
+
+  const presetChip = (active: boolean) =>
+    `rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
+      active
+        ? "bg-[#2A6FDB] text-white"
+        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+    }`;
 
   const selectClass = "h-9 w-full max-w-[200px] rounded-lg text-sm";
 
@@ -196,29 +219,67 @@ export function RecentFeedbackBySentiment({
               {isRefreshing ? "Refreshing…" : "Refresh"}
             </button>
             <span className="text-xs text-gray-500 tabular-nums">
-              {filtered.length} submission{filtered.length !== 1 ? "s" : ""} (incl. split) ·{" "}
-              {patientGroups.length} patient{patientGroups.length !== 1 ? "s" : ""}
-              {filtered.length !== items.length ? ` · ${items.length} total in system` : ""}
+              {filtered.length} in view · {patientGroups.length} patient
+              {patientGroups.length !== 1 ? "s" : ""} · loaded {listScopeLabel}
             </span>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={!fromDate || !toDate || !filtered.length}
+              disabled={!filtered.length}
               onClick={() => onDownloadRange(filtered)}
               className="h-9 px-3 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
-              Download filtered (Excel)
+              Download view (Excel)
             </button>
             <button
               type="button"
-              disabled={!items.length}
+              disabled={excelDownloadBusy}
               onClick={onDownloadAll}
               className="h-9 px-3 rounded-lg bg-[#2A6FDB] text-white text-sm font-semibold hover:bg-[#1e5bbd] disabled:opacity-50"
             >
-              Download all (Excel)
+              {excelDownloadBusy ? "Preparing…" : "Download all time (Excel)"}
             </button>
           </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wide w-full sm:w-auto">
+            Load period
+          </span>
+          <button
+            type="button"
+            className={presetChip(
+              !listScope.allTime && listScope.from === last30DaysRange().from && listScope.to === last30DaysRange().to
+            )}
+            onClick={() => {
+              const r = last30DaysRange();
+              applyPreset({ from: r.from, to: r.to, allTime: false });
+            }}
+          >
+            Last 30 days
+          </button>
+          <button
+            type="button"
+            className={presetChip(
+              !listScope.allTime &&
+                listScope.from === last12WeeksRange().from &&
+                listScope.to === last12WeeksRange().to
+            )}
+            onClick={() => {
+              const r = last12WeeksRange();
+              applyPreset({ from: r.from, to: r.to, allTime: false });
+            }}
+          >
+            Last 12 weeks
+          </button>
+          <button
+            type="button"
+            className={presetChip(listScope.allTime)}
+            onClick={() => applyPreset({ from: "", to: "", allTime: true })}
+          >
+            All time
+          </button>
         </div>
 
         <EncounterTypeFilterTabs
@@ -308,9 +369,10 @@ export function RecentFeedbackBySentiment({
             <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">From</label>
             <input
               type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="h-9 px-2 border border-gray-200 rounded-lg text-sm w-[140px]"
+              value={draftFrom}
+              disabled={listScope.allTime}
+              onChange={(e) => setDraftFrom(e.target.value)}
+              className="h-9 px-2 border border-gray-200 rounded-lg text-sm w-[140px] disabled:bg-gray-50"
             />
           </div>
 
@@ -318,12 +380,22 @@ export function RecentFeedbackBySentiment({
             <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">To</label>
             <input
               type="date"
-              value={toDate}
-              min={fromDate || undefined}
-              onChange={(e) => setToDate(e.target.value)}
-              className="h-9 px-2 border border-gray-200 rounded-lg text-sm w-[140px]"
+              value={draftTo}
+              min={draftFrom || undefined}
+              disabled={listScope.allTime}
+              onChange={(e) => setDraftTo(e.target.value)}
+              className="h-9 px-2 border border-gray-200 rounded-lg text-sm w-[140px] disabled:bg-gray-50"
             />
           </div>
+
+          <button
+            type="button"
+            disabled={listScope.allTime || !draftFrom || !draftTo || isLoading || isRefreshing}
+            onClick={applyDraftRange}
+            className="h-9 px-3 rounded-lg bg-gray-800 text-white text-sm font-semibold hover:bg-gray-900 disabled:opacity-50"
+          >
+            Apply dates
+          </button>
 
           {hasActiveFilters ? (
             <button

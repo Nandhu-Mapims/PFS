@@ -6,18 +6,18 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import type { FeedbackItem } from "../lib/api";
-import { BotConversationFeedbackSection } from "./BotConversationFeedbackSection";
-import { VoiceAudioPlayer } from "./VoiceAudioPlayer";
-import { resolveUploadUrl } from "../lib/api";
+import { getFeedbackById, resolveUploadUrl } from "../lib/api";
 import {
   displaySentimentForItem,
   effectiveFeedbackMode,
   feedbackModeLabel,
   ticketAiSummaryForItem,
 } from "../lib/feedbackDisplay";
-import { filterAiTopicsForTranscript } from "../lib/aiTopicsFilter";
+import { BotConversationFeedbackSection } from "./BotConversationFeedbackSection";
+import { VoiceAudioPlayer } from "./VoiceAudioPlayer";
 import { ticketDepartment, ticketService } from "../lib/ticketFilters";
 import { displayOptionalLabel } from "../lib/fieldSanitize";
+import { filterAiTopicsForTranscript } from "../lib/aiTopicsFilter";
 
 const ratingLabel: Record<number, string> = {
   1: "Very Poor",
@@ -38,21 +38,49 @@ type FeedbackDetailDialogProps = {
 };
 
 export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetailDialogProps) {
-  if (!item) return null;
-
-  const voiceSrc = audioSrc(item.voiceRecordingUrl);
+  const [fullItem, setFullItem] = useState<FeedbackItem | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [voiceAudioVisible, setVoiceAudioVisible] = useState(true);
+
+  useEffect(() => {
+    if (!open || !item?._id) {
+      setFullItem(null);
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    void getFeedbackById(item._id)
+      .then((row) => {
+        if (!cancelled) setFullItem(row);
+      })
+      .catch(() => {
+        if (!cancelled) setFullItem(item);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, item]);
+
+  const display = fullItem ?? item;
+
   useEffect(() => {
     setVoiceAudioVisible(true);
-  }, [item._id, voiceSrc]);
-  const botAnswers = [...(item.botConversationAnswers ?? [])].sort(
+  }, [display?._id, display?.voiceRecordingUrl]);
+
+  if (!open || !display) return null;
+
+  const voiceSrc = audioSrc(display.voiceRecordingUrl);
+  const botAnswers = [...(display.botConversationAnswers ?? [])].sort(
     (a, b) => a.questionOrder - b.questionOrder
   );
-  const displayMode = effectiveFeedbackMode(item);
+  const displayMode = effectiveFeedbackMode(display);
   const isBot = displayMode === "bot" && botAnswers.length > 0;
   const hasVoice = Boolean(voiceSrc);
-  const transcript = item.comments?.trim() || "";
-  const ticketSummary = ticketAiSummaryForItem(item);
+  const transcript = display.comments?.trim() || "";
+  const ticketSummary = ticketAiSummaryForItem(display);
   const transcriptFallbackSummary = transcript
     ? `${transcript.replace(/\s+/g, " ").trim().slice(0, 220)}${
         transcript.length > 220 ? "..." : ""
@@ -60,10 +88,10 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
     : "";
   const aiSummary =
     ticketSummary ||
-    (item.aiSentiment
-      ? `AI sentiment: ${item.aiSentiment}. Review the full feedback below.`
+    (display.aiSentiment
+      ? `AI sentiment: ${display.aiSentiment}. Review the full feedback below.`
       : transcriptFallbackSummary || "AI summary not generated yet.");
-  const displayTopics = filterAiTopicsForTranscript(item.aiTopics, transcript);
+  const displayTopics = filterAiTopicsForTranscript(display.aiTopics, transcript);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -71,10 +99,14 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
         <DialogHeader>
           <DialogTitle className="text-xl">Feedback details</DialogTitle>
           <p className="text-sm text-gray-500">
-            {item.patientName} · {new Date(item.createdAt).toLocaleString()}
-            {item.ticketId ? ` · ${item.ticketId}` : ""}
+            {display.patientName} · {new Date(display.createdAt).toLocaleString()}
+            {display.ticketId ? ` · ${display.ticketId}` : ""}
           </p>
         </DialogHeader>
+
+        {detailLoading ? (
+          <p className="text-sm text-gray-500 py-4">Loading full feedback…</p>
+        ) : null}
 
         <div className="space-y-5">
           <div className="flex flex-wrap gap-2 text-sm">
@@ -82,20 +114,20 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
               {feedbackModeLabel[displayMode]}
             </span>
             <span className="px-2 py-1 rounded-md bg-gray-100 text-gray-700">
-              Rating: {item.rating} · {ratingLabel[item.rating] ?? "—"}
+              Rating: {display.rating} · {ratingLabel[display.rating] ?? "—"}
             </span>
-            <span className="px-2 py-1 rounded-md bg-gray-100 text-gray-700">{item.status}</span>
-            {displaySentimentForItem(item) ? (
+            <span className="px-2 py-1 rounded-md bg-gray-100 text-gray-700">{display.status}</span>
+            {displaySentimentForItem(display) ? (
               <span
                 className={`px-2 py-1 rounded-md capitalize ${
-                  displaySentimentForItem(item) === "positive"
+                  displaySentimentForItem(display) === "positive"
                     ? "bg-emerald-50 text-emerald-800"
-                    : displaySentimentForItem(item) === "negative"
+                    : displaySentimentForItem(display) === "negative"
                       ? "bg-red-50 text-red-700"
                       : "bg-blue-50 text-blue-800"
                 }`}
               >
-                AI {displaySentimentForItem(item)}
+                AI {displaySentimentForItem(display)}
               </span>
             ) : null}
           </div>
@@ -104,12 +136,12 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
             <div>
               <p className="text-gray-500">Department</p>
               <p className="font-medium text-gray-800">
-                {displayOptionalLabel(ticketDepartment(item) || item.department)}
+                {displayOptionalLabel(ticketDepartment(display) || display.department)}
               </p>
             </div>
             <div>
               <p className="text-gray-500">Service</p>
-              <p className="font-medium text-gray-800">{ticketService(item) || "—"}</p>
+              <p className="font-medium text-gray-800">{ticketService(display) || "—"}</p>
             </div>
           </div>
 
@@ -118,11 +150,11 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
               AI summary
             </h3>
             <p className="text-gray-800 leading-relaxed">{aiSummary}</p>
-            {(item.aiUrgency || displayTopics.length > 0) && (
+            {(display.aiUrgency || displayTopics.length > 0) && (
               <div className="mt-3 flex flex-wrap gap-2">
-                {item.aiUrgency ? (
+                {display.aiUrgency ? (
                   <span className="text-xs px-2 py-1 rounded-full bg-white border capitalize">
-                    Urgency: {item.aiUrgency}
+                    Urgency: {display.aiUrgency}
                   </span>
                 ) : null}
                 {displayTopics.map((t) => (
@@ -132,7 +164,7 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
                 ))}
               </div>
             )}
-            {item.isSplitChild ? (
+            {display.isSplitChild ? (
               <p className="text-xs text-gray-500 mt-2">
                 This is one service ticket from a longer voice message. Speech-to-text below is the full
                 voice session.
@@ -143,12 +175,12 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
           {isBot ? (
             <BotConversationFeedbackSection
               answers={botAnswers}
-              combinedSessionUrl={item.voiceRecordingUrl}
-              fullTranscript={item.comments}
+              combinedSessionUrl={display.voiceRecordingUrl}
+              fullTranscript={display.comments}
               groupNote={
-                item.isSplitChild
+                display.isSplitChild
                   ? "Full bot conversation for this patient. This row is one service from that session."
-                  : item.botVoiceSourceFeedbackId
+                  : display.botVoiceSourceFeedbackId
                     ? "Voice Q&A from linked bot submission."
                     : null
               }
@@ -179,12 +211,12 @@ export function FeedbackDetailDialog({ item, open, onOpenChange }: FeedbackDetai
             </>
           )}
 
-          {item.staffRemarks?.trim() ? (
+          {display.staffRemarks?.trim() ? (
             <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
               <h3 className="text-sm font-bold text-amber-900 uppercase tracking-wide mb-2">
                 Staff remarks
               </h3>
-              <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{item.staffRemarks.trim()}</p>
+              <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{display.staffRemarks.trim()}</p>
             </section>
           ) : null}
 

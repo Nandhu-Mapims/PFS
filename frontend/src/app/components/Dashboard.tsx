@@ -265,7 +265,7 @@ export function Dashboard() {
         setIsLoading(true);
         setError(null);
         const [data, analyticsData] = await Promise.all([
-          getFeedback(),
+          getFeedback({ lite: true }),
           getFeedbackAnalytics(),
         ]);
         setItems(data);
