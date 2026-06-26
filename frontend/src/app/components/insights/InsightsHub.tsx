@@ -30,7 +30,7 @@ export function InsightsHub() {
     return <Navigate to={`${basePath}/submissions`} replace />;
   }
 
-  if (data.isLoading) {
+  if (data.isLoading && !data.hasData) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center text-muted-foreground">
         Loading insights…

@@ -1,3 +1,5 @@
+import mongoose from "mongoose";
+
 /** Build Mongo filter for insights list queries (date window + OP/IP/name-only). */
 
 export function buildFeedbackInsightsFilter(query = {}) {
@@ -15,6 +17,11 @@ export function buildFeedbackInsightsFilter(query = {}) {
   const sinceMs = Number(query.sinceMs);
   if (Number.isFinite(sinceMs) && sinceMs > 0) {
     filter.updatedAt = { $gte: new Date(sinceMs) };
+  }
+
+  const assignedToUserId = String(query.assignedToUserId || "").trim();
+  if (assignedToUserId && mongoose.Types.ObjectId.isValid(assignedToUserId)) {
+    filter.assignedToUserId = new mongoose.Types.ObjectId(assignedToUserId);
   }
 
   const encounter = String(query.encounter || "all").toLowerCase();
@@ -35,6 +42,7 @@ export function hasInsightsFilterQuery(query = {}) {
   return (
     (Number.isFinite(Number(query.startMs)) && Number.isFinite(Number(query.endMs))) ||
     (Number.isFinite(Number(query.sinceMs)) && Number(query.sinceMs) > 0) ||
+    Boolean(String(query.assignedToUserId || "").trim()) ||
     ["op", "ip", "op-ip", "name-only"].includes(String(query.encounter || "").toLowerCase())
   );
 }

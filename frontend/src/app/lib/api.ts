@@ -429,6 +429,8 @@ export type FeedbackInsightsQuery = {
   lite?: boolean;
   /** Return only rows updated at or after this time (incremental refresh). */
   sinceMs?: number;
+  /** HOD queue — only tickets assigned to this user id. */
+  assignedToUserId?: string;
 };
 
 function feedbackQueryString(query?: FeedbackInsightsQuery): string {
@@ -445,6 +447,9 @@ function feedbackQueryString(query?: FeedbackInsightsQuery): string {
   }
   if (query?.sinceMs != null && query.sinceMs > 0) {
     params.set("sinceMs", String(query.sinceMs));
+  }
+  if (query?.assignedToUserId?.trim()) {
+    params.set("assignedToUserId", query.assignedToUserId.trim());
   }
   const qs = params.toString();
   return qs ? `?${qs}` : "";

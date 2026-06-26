@@ -19,6 +19,7 @@ import {
 } from "../lib/api";
 import { getSession } from "../lib/auth";
 import { displayOptionalLabel, sanitizeOptionalLabel } from "../lib/fieldSanitize";
+import { ticketAiSummaryForItem } from "../lib/feedbackDisplay";
 import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
 import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
 import { Badge } from "./ui/badge";
@@ -106,7 +107,7 @@ function FeedbackTable({
             <TableHead>Service</TableHead>
             <TableHead>Rating</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead className="min-w-[200px]">Comments</TableHead>
+            <TableHead className="min-w-[200px] max-w-[280px]">AI summary</TableHead>
             <TableHead className="min-w-[160px]">Remark</TableHead>
             <TableHead className="pr-4">Submitted</TableHead>
             {onOpenTicket ? <TableHead className="pr-4 text-right"> </TableHead> : null}
@@ -156,11 +157,22 @@ function FeedbackTable({
                   </SelectContent>
                 </Select>
               </TableCell>
-              <TableCell className="text-muted-foreground text-sm whitespace-normal">
-                {item.comments || "—"}
+              <TableCell className="text-muted-foreground text-sm max-w-[280px] align-top">
+                {(() => {
+                  const summary = ticketAiSummaryForItem(item);
+                  return summary ? (
+                    <p className="line-clamp-3 leading-snug" title={summary}>
+                      {summary}
+                    </p>
+                  ) : (
+                    <span className="text-muted-foreground/70 italic">—</span>
+                  );
+                })()}
               </TableCell>
-              <TableCell className="text-muted-foreground text-sm whitespace-normal max-w-[200px]">
-                {item.staffRemarks?.trim() || "—"}
+              <TableCell className="text-muted-foreground text-sm max-w-[180px] align-top">
+                <p className="line-clamp-2 leading-snug" title={item.staffRemarks?.trim() || undefined}>
+                  {item.staffRemarks?.trim() || "—"}
+                </p>
               </TableCell>
               <TableCell className="text-muted-foreground pr-4 text-sm">
                 {new Date(item.createdAt).toLocaleString()}
@@ -265,11 +277,15 @@ export function Dashboard() {
         setIsLoading(true);
         setError(null);
         const [data, analyticsData] = await Promise.all([
-          getFeedback({ lite: true }),
-          getFeedbackAnalytics(),
+          getFeedback(
+            isHod && hodUserId
+              ? { lite: true, assignedToUserId: hodUserId }
+              : { lite: true }
+          ),
+          isHod ? Promise.resolve(null) : getFeedbackAnalytics(),
         ]);
         setItems(data);
-        setAnalytics(analyticsData);
+        if (analyticsData) setAnalytics(analyticsData);
       } catch {
         setError("Failed to load staff queue.");
       } finally {
@@ -278,7 +294,7 @@ export function Dashboard() {
     }
 
     void loadData();
-  }, []);
+  }, [isHod, hodUserId]);
 
   const visibleItems = useMemo(() => {
     if (!isHod) return items;
@@ -318,7 +334,7 @@ export function Dashboard() {
       const matchesSearch =
         !search ||
         item.patientName.toLowerCase().includes(search) ||
-        (item.comments || "").toLowerCase().includes(search) ||
+        (item.aiSummary || "").toLowerCase().includes(search) ||
         (item.staffRemarks || "").toLowerCase().includes(search);
       const dept = departmentKey(item);
       const svc = serviceKey(item);
@@ -540,7 +556,7 @@ export function Dashboard() {
               />
               <Input
                 type="text"
-                placeholder="Search patient or comments…"
+                placeholder="Search patient or AI summary…"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-9"

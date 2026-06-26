@@ -127,6 +127,12 @@ function toFeedbackListRow(doc) {
   delete plain.voiceRecordingRelPath;
   delete plain.voiceRecordingUrl;
   delete plain.botVoiceSourceFeedbackId;
+  if (plain.aiSummary?.trim()) {
+    delete plain.comments;
+  } else if (plain.comments) {
+    const text = String(plain.comments).trim();
+    plain.comments = text.length > 200 ? `${text.slice(0, 197)}…` : text;
+  }
   return plain;
 }
 

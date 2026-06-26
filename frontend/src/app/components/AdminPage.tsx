@@ -13,6 +13,12 @@ import {
   mergeFeedbackLists,
 } from "../lib/feedbackListSync";
 import {
+  feedbackCacheKey,
+  getFeedbackCache,
+  patchFeedbackCache,
+  setFeedbackCache,
+} from "../lib/feedbackCache";
+import {
   defaultFeedbackListScope,
   feedbackMatchesListScope,
   feedbackQueryFromListScope,
@@ -108,19 +114,29 @@ export function AdminPage() {
 
   const loadData = useCallback(
     async (opts?: { silent?: boolean; incremental?: boolean }) => {
+      const query = listQuery();
+      const key = feedbackCacheKey(query);
+      const cached = getFeedbackCache(key);
+
       try {
         if (opts?.silent) {
           setIsRefreshing(true);
+        } else if (cached) {
+          setItems(cached.items);
+          lastFeedbackSyncMsRef.current = cached.lastSyncMs;
+          setIsLoading(false);
         } else {
           setIsLoading(true);
         }
-        setError(null);
+        if (!opts?.silent) setError(null);
 
-        const query = listQuery();
-        const useIncremental = Boolean(opts?.incremental && lastFeedbackSyncMsRef.current > 0);
+        const useIncremental = Boolean(
+          opts?.incremental && (lastFeedbackSyncMsRef.current > 0 || cached?.lastSyncMs)
+        );
+        const sinceMs = lastFeedbackSyncMsRef.current || cached?.lastSyncMs || 0;
 
         const feedbackPromise = useIncremental
-          ? fetchFeedbackChanges(query, lastFeedbackSyncMsRef.current)
+          ? fetchFeedbackChanges(query, sinceMs)
           : fetchFeedbackList(query);
 
         const [feedbackData, analyticsData] = await Promise.all([
@@ -135,11 +151,18 @@ export function AdminPage() {
               if (!listScope.allTime) {
                 merged = merged.filter((row) => feedbackMatchesListScope(row, listScope));
               }
+              patchFeedbackCache(key, merged, Date.now());
               return merged;
+            });
+          } else {
+            setItems((current) => {
+              patchFeedbackCache(key, current, Date.now());
+              return current;
             });
           }
         } else {
           setItems(feedbackData);
+          setFeedbackCache(key, feedbackData, Date.now());
         }
         markFeedbackSynced();
 
@@ -147,7 +170,9 @@ export function AdminPage() {
           setAnalytics(analyticsData);
         }
       } catch {
-        setError("Failed to load feedback. Please check API and database.");
+        if (!opts?.silent && !cached) {
+          setError("Failed to load feedback. Please check API and database.");
+        }
       } finally {
         if (opts?.silent) {
           setIsRefreshing(false);
@@ -161,16 +186,16 @@ export function AdminPage() {
 
   const reloadFeedbackList = useCallback(
     async (scope: FeedbackListScope, opts?: { silent?: boolean }) => {
+      const query = { lite: true as const, ...feedbackQueryFromListScope(scope) };
+      const key = feedbackCacheKey(query);
       try {
         if (opts?.silent) setIsRefreshing(true);
         else setIsLoading(true);
         setError(null);
         lastFeedbackSyncMsRef.current = 0;
-        const feedbackData = await fetchFeedbackList({
-          lite: true,
-          ...feedbackQueryFromListScope(scope),
-        });
+        const feedbackData = await fetchFeedbackList(query);
         setItems(feedbackData);
+        setFeedbackCache(key, feedbackData, Date.now());
         markFeedbackSynced();
       } catch {
         setError("Failed to load feedback. Please check API and database.");
@@ -206,6 +231,16 @@ export function AdminPage() {
   );
 
   useEffect(() => {
+    const query = listQuery();
+    const key = feedbackCacheKey(query);
+    const cached = getFeedbackCache(key);
+    if (cached) {
+      setItems(cached.items);
+      lastFeedbackSyncMsRef.current = cached.lastSyncMs;
+      setIsLoading(false);
+      void loadData({ silent: true, incremental: true });
+      return;
+    }
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
