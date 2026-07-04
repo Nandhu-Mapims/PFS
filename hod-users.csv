@@ -1,0 +1,25 @@
+﻿Name,Username,Email,Password,Type,Assigned To
+Dr. Sadhul Hak,sadhul.hak,sadhul.hak@mapims.org,mapims,department,Cardiology
+Dr. Mathivathani,mathivathani,mathivathani@mapims.org,mapims,department,Dermatology
+Dr. Umesh Raj,umesh.raj,umesh.raj@mapims.org,mapims,department,"Emergency Medicine; General Surgery; Medical Oncology; Medical Gastroenterology & Hepatology; Neurosurgery; Surgical Gastroenterology; Emergency Services"
+Dr. Apan Raj,apan.raj,apan.raj@mapims.org,mapims,department,General Medicine
+Dr. Baskaran,baskaran,baskaran@mapims.org,mapims,department,Nephrology
+Dr. Gowmathi,gowmathi,gowmathi@mapims.org,mapims,department,Obstetrics and Gynaecology
+Mr. Manikandan S,manikandan.s,manikandan.s@mapims.org,mapims,mixed,"Operations Department; OP Billing; Reception / Front Office"
+Dr. Venkatesan,venkatesan,venkatesan@mapims.org,mapims,department,Ophthalmology
+Dr. Mahendra Varman,mahendra.varman,mahendra.varman@mapims.org,mapims,department,Orthopaedics
+Dr. Pavendran,pavendran,pavendran@mapims.org,mapims,department,Otorhinolaryngology (ENT)
+Dr. Sivagami Sundari,sivagami.sundari,sivagami.sundari@mapims.org,mapims,department,Paediatric
+Dr. Arul Varman,arul.varman,arul.varman@mapims.org,mapims,department,Psychiatry
+Dr. Samson,samson,samson@mapims.org,mapims,department,Urology
+Ms. Uma (Dietician),uma.dietician,uma.dietician@mapims.org,mapims,service,Food & Catering Service
+Ms. Kavitha Nathakumar,kavitha.nathakumar,kavitha.nathakumar@mapims.org,mapims,service,Housekeeping
+Dr. Prabhakaran,prabhakaran,prabhakaran@mapims.org,mapims,service,ICU Services
+Mr. Murali,murali,murali@mapims.org,mapims,service,"Insurance Department; IP Billing Services"
+Ms. Divya,divya,divya@mapims.org,mapims,service,Laboratory Services
+Mr. Raj Kumar,raj.kumar,raj.kumar@mapims.org,mapims,service,Maintenance Service
+Mrs. Uma (Nursing),uma.nursing,uma.nursing@mapims.org,mapims,service,Nursing Services
+Mr. Somasundram,somasundram,somasundram@mapims.org,mapims,service,Pharmacy Services
+Dr. Ashraf,ashraf,ashraf@mapims.org,mapims,service,Radiology Service
+Mr. Dinesh,dinesh,dinesh@mapims.org,mapims,service,Security Service
+Mr. Balaji,balaji,balaji@mapims.org,mapims,service,Transport Service

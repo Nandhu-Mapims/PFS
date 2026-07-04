@@ -49,6 +49,27 @@ export function serviceNamesForHod(
     .filter(Boolean);
 }
 
+export function departmentNamesForHod(
+  departments: Department[],
+  hodUserId: string
+): string[] {
+  return departments
+    .filter((d) => d.hodUserId?._id === hodUserId)
+    .map((d) => d.name.trim())
+    .filter(Boolean);
+}
+
+export function hodScopeForUser(
+  departments: Department[],
+  services: ServiceCatalogItem[],
+  hodUserId: string
+) {
+  return {
+    departmentNames: departmentNamesForHod(departments, hodUserId),
+    serviceNames: serviceNamesForHod(services, hodUserId),
+  };
+}
+
 function ticketServiceKeys(item: FeedbackItem): string[] {
   const keys = new Set<string>();
   const primary = normKey(ticketService(item));
@@ -141,8 +162,12 @@ export function matchesHodServices(item: FeedbackItem, serviceNames: string[]): 
 export function visibleToHod(
   item: FeedbackItem,
   hodUserId: string,
-  _hodDepartment: string,
-  _hodServiceNames: string[]
+  hodDepartmentNames: string[],
+  hodServiceNames: string[]
 ): boolean {
-  return Boolean(hodUserId && item.assignedToUserId === hodUserId);
+  if (!hodUserId) return false;
+  if (item.assignedToUserId === hodUserId) return true;
+  if (hodDepartmentNames.some((name) => matchesHodDepartment(item, name))) return true;
+  if (matchesHodServices(item, hodServiceNames)) return true;
+  return false;
 }

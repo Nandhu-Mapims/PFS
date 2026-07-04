@@ -33,8 +33,10 @@ import {
 import { getSession } from "../lib/auth";
 import {
   defaultHodForTicket,
+  hodScopeForUser,
   sortHodAssignees,
   userDepartmentName,
+  visibleToHod,
 } from "../lib/hodRouting";
 import { ticketDepartment, ticketService } from "../lib/ticketFilters";
 
@@ -65,19 +67,31 @@ export function TicketDetail() {
   const showDeleteAction = location.pathname.includes("/delete");
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdmin && !isHod) return;
     void Promise.all([getUsers(), getHospitalDepartments(), getServices()])
       .then(([userRows, deptRows, serviceRows]) => {
-        setUsers(userRows.filter((u) => u.role === "hod"));
+        if (isAdmin) {
+          setUsers(userRows.filter((u) => u.role === "hod"));
+        }
         setDepartments(deptRows);
         setServices(serviceRows);
       })
       .catch(() => {
-        setUsers([]);
+        if (isAdmin) setUsers([]);
         setDepartments([]);
         setServices([]);
       });
-  }, [isAdmin]);
+  }, [isAdmin, isHod]);
+
+  const hodScope = useMemo(
+    () => (session?._id ? hodScopeForUser(departments, services, session._id) : null),
+    [departments, services, session?._id]
+  );
+
+  const canViewTicket = useMemo(() => {
+    if (!isHod || !ticket || !session?._id || !hodScope) return true;
+    return visibleToHod(ticket, session._id, hodScope.departmentNames, hodScope.serviceNames);
+  }, [isHod, ticket, session?._id, hodScope]);
 
   const hodUsers = users;
 
@@ -299,6 +313,10 @@ export function TicketDetail() {
       ) : !ticket ? (
         <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm text-gray-600">
           Ticket not found.
+        </div>
+      ) : !canViewTicket ? (
+        <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm text-red-600">
+          You do not have access to this ticket. It is outside your mapped departments and services.
         </div>
       ) : (
         <>

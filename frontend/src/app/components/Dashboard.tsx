@@ -13,13 +13,18 @@ import { useNavigate } from "react-router";
 import {
   getFeedback,
   getFeedbackAnalytics,
+  getHospitalDepartments,
+  getServices,
   updateFeedbackStatus,
+  type Department,
   type FeedbackAnalytics,
   type FeedbackItem,
+  type ServiceCatalogItem,
 } from "../lib/api";
 import { getSession } from "../lib/auth";
 import { displayOptionalLabel, sanitizeOptionalLabel } from "../lib/fieldSanitize";
 import { ticketAiSummaryForItem } from "../lib/feedbackDisplay";
+import { hodScopeForUser, visibleToHod } from "../lib/hodRouting";
 import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
 import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
 import { Badge } from "./ui/badge";
@@ -270,6 +275,21 @@ export function Dashboard() {
   const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("department");
   const [error, setError] = useState<string | null>(null);
+  const [hodDepartments, setHodDepartments] = useState<Department[]>([]);
+  const [hodServices, setHodServices] = useState<ServiceCatalogItem[]>([]);
+
+  useEffect(() => {
+    if (!isHod) return;
+    void Promise.all([getHospitalDepartments(), getServices()])
+      .then(([departments, services]) => {
+        setHodDepartments(departments);
+        setHodServices(services);
+      })
+      .catch(() => {
+        setHodDepartments([]);
+        setHodServices([]);
+      });
+  }, [isHod]);
 
   useEffect(() => {
     async function loadData() {
@@ -277,11 +297,7 @@ export function Dashboard() {
         setIsLoading(true);
         setError(null);
         const [data, analyticsData] = await Promise.all([
-          getFeedback(
-            isHod && hodUserId
-              ? { lite: true, assignedToUserId: hodUserId }
-              : { lite: true }
-          ),
+          getFeedback({ lite: true }),
           isHod ? Promise.resolve(null) : getFeedbackAnalytics(),
         ]);
         setItems(data);
@@ -294,12 +310,19 @@ export function Dashboard() {
     }
 
     void loadData();
-  }, [isHod, hodUserId]);
+  }, [isHod]);
+
+  const hodScope = useMemo(
+    () => hodScopeForUser(hodDepartments, hodServices, hodUserId),
+    [hodDepartments, hodServices, hodUserId]
+  );
 
   const visibleItems = useMemo(() => {
     if (!isHod) return items;
-    return items.filter((item) => item.assignedToUserId === hodUserId);
-  }, [items, isHod, hodUserId]);
+    return items.filter((item) =>
+      visibleToHod(item, hodUserId, hodScope.departmentNames, hodScope.serviceNames)
+    );
+  }, [items, isHod, hodUserId, hodScope]);
 
   const departments = useMemo(() => {
     const keys = new Set<string>();
@@ -496,7 +519,7 @@ export function Dashboard() {
         </h2>
         <p className="text-muted-foreground text-sm md:text-base">
           {isHod
-            ? "Tickets assigned to you by admin or staff"
+            ? "Tickets for your mapped departments and services"
             : "View and resolve feedback by hospital department and routing service"}
         </p>
       </div>
