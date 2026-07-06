@@ -675,11 +675,11 @@ async function resolveHodUserIdFromBody(hodUserId) {
   return { value: String(hodUserId) };
 }
 
-function serializeUserOut(user) {
+function serializeUserOut(user, hodMappings = null) {
   const dept =
     user.departmentId && typeof user.departmentId === "object" ? user.departmentId : null;
   const svc = user.serviceId && typeof user.serviceId === "object" ? user.serviceId : null;
-  return {
+  const base = {
     _id: String(user._id),
     username: user.username,
     role: user.role,
@@ -687,6 +687,12 @@ function serializeUserOut(user) {
     serviceId: svc ? { _id: String(svc._id), name: svc.name } : null,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
+  };
+  if (user.role !== "hod") return base;
+  return {
+    ...base,
+    hodDepartments: hodMappings?.hodDepartments || [],
+    hodServices: hodMappings?.hodServices || [],
   };
 }
 
@@ -696,38 +702,130 @@ function parseOptionalObjectId(value) {
   return mongoose.Types.ObjectId.isValid(s) ? s : null;
 }
 
-function validateUserAssignment(role, departmentId, serviceId) {
-  const deptId = parseOptionalObjectId(departmentId);
-  const svcId = parseOptionalObjectId(serviceId);
+function parseObjectIdList(...sources) {
+  const ids = [];
+  for (const source of sources) {
+    if (Array.isArray(source)) {
+      for (const value of source) {
+        const id = parseOptionalObjectId(value);
+        if (id && !ids.includes(id)) ids.push(id);
+      }
+    } else {
+      const id = parseOptionalObjectId(source);
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
+function validateUserAssignment(role, body = {}) {
+  const { departmentId, serviceId, departmentIds, serviceIds } = body;
+  const allDeptIds = parseObjectIdList(departmentIds, departmentId);
+  const allSvcIds = parseObjectIdList(serviceIds, serviceId);
 
   if (role === "staff") {
-    if (!deptId) return { error: "departmentId is required for staff" };
-    if (svcId) return { error: "Staff accounts cannot be assigned to a service" };
-    return { departmentId: deptId, serviceId: null };
+    if (allDeptIds.length !== 1) return { error: "departmentId is required for staff" };
+    if (allSvcIds.length) return { error: "Staff accounts cannot be assigned to a service" };
+    return {
+      departmentIds: allDeptIds,
+      serviceIds: [],
+      departmentId: allDeptIds[0],
+      serviceId: null,
+    };
   }
 
   if (role === "hod") {
-    if (!deptId && !svcId) {
-      return { error: "HOD must be assigned to a department or a service" };
+    if (!allDeptIds.length && !allSvcIds.length) {
+      return { error: "HOD must be assigned to at least one department or service" };
     }
-    if (deptId && svcId) {
-      return { error: "HOD can be assigned to a department or a service, not both" };
-    }
-    return { departmentId: deptId, serviceId: svcId };
+    return {
+      departmentIds: allDeptIds,
+      serviceIds: allSvcIds,
+      departmentId: allDeptIds[0] || null,
+      serviceId: allSvcIds[0] || null,
+    };
   }
 
-  return { departmentId: deptId, serviceId: null };
+  return { departmentIds: [], serviceIds: [], departmentId: null, serviceId: null };
 }
 
-async function syncHodCatalogMappings(userId, { departmentId, serviceId }) {
+async function loadHodMappingsForUserIds(userIds) {
+  const hodIds = userIds.map((id) => String(id));
+  const deptByHod = new Map();
+  const svcByHod = new Map();
+  if (!hodIds.length) {
+    return { deptByHod, svcByHod };
+  }
+
+  const [deptRows, svcRows] = await Promise.all([
+    Department.find({ hodUserId: { $in: hodIds } })
+      .select("name hodUserId")
+      .sort({ name: 1 })
+      .lean(),
+    RoutingService.find({ hodUserId: { $in: hodIds } })
+      .select("name hodUserId")
+      .sort({ name: 1 })
+      .lean(),
+  ]);
+
+  for (const row of deptRows) {
+    const key = String(row.hodUserId);
+    if (!deptByHod.has(key)) deptByHod.set(key, []);
+    deptByHod.get(key).push({ _id: String(row._id), name: row.name });
+  }
+  for (const row of svcRows) {
+    const key = String(row.hodUserId);
+    if (!svcByHod.has(key)) svcByHod.set(key, []);
+    svcByHod.get(key).push({ _id: String(row._id), name: row.name });
+  }
+
+  return { deptByHod, svcByHod };
+}
+
+async function serializeUserWithHodMappings(user) {
+  if (!user || user.role !== "hod") return serializeUserOut(user);
+  const { deptByHod, svcByHod } = await loadHodMappingsForUserIds([user._id]);
+  const uid = String(user._id);
+  return serializeUserOut(user, {
+    hodDepartments: deptByHod.get(uid) || [],
+    hodServices: svcByHod.get(uid) || [],
+  });
+}
+
+async function listUsersWithHodMappings() {
+  const list = await User.find()
+    .select("-passwordHash")
+    .populate("departmentId", "name")
+    .populate("serviceId", "name")
+    .sort({ username: 1 })
+    .lean();
+
+  const hodIds = list.filter((user) => user.role === "hod").map((user) => user._id);
+  const { deptByHod, svcByHod } = await loadHodMappingsForUserIds(hodIds);
+
+  return list.map((user) => {
+    if (user.role !== "hod") return serializeUserOut(user);
+    const uid = String(user._id);
+    return serializeUserOut(user, {
+      hodDepartments: deptByHod.get(uid) || [],
+      hodServices: svcByHod.get(uid) || [],
+    });
+  });
+}
+
+async function syncHodCatalogMappings(userId, { departmentIds = [], serviceIds = [] }) {
   const uid = String(userId);
   await Department.updateMany({ hodUserId: uid }, { $set: { hodUserId: null } });
   await RoutingService.updateMany({ hodUserId: uid }, { $set: { hodUserId: null } });
-  if (departmentId) {
-    await Department.updateOne({ _id: departmentId }, { $set: { hodUserId: uid } });
+  for (const departmentId of departmentIds) {
+    if (departmentId) {
+      await Department.updateOne({ _id: departmentId }, { $set: { hodUserId: uid } });
+    }
   }
-  if (serviceId) {
-    await RoutingService.updateOne({ _id: serviceId }, { $set: { hodUserId: uid } });
+  for (const serviceId of serviceIds) {
+    if (serviceId) {
+      await RoutingService.updateOne({ _id: serviceId }, { $set: { hodUserId: uid } });
+    }
   }
 }
 
@@ -1058,13 +1156,7 @@ app.patch("/api/hospital-departments/:id", async (req, res) => {
 
 app.get("/api/users", async (_req, res) => {
   try {
-    const list = await User.find()
-      .select("-passwordHash")
-      .populate("departmentId", "name")
-      .populate("serviceId", "name")
-      .sort({ username: 1 })
-      .lean();
-    return res.json(list.map(serializeUserOut));
+    return res.json(await listUsersWithHodMappings());
   } catch (error) {
     return res.status(500).json({ message: "Failed to list users" });
   }
@@ -1072,14 +1164,14 @@ app.get("/api/users", async (_req, res) => {
 
 app.post("/api/users", async (req, res) => {
   try {
-    const { username, password, role, departmentId, serviceId } = req.body;
+    const { username, password, role } = req.body;
     if (!username || !password || !role) {
       return res.status(400).json({ message: "username, password, and role are required" });
     }
     if (!["admin", "staff", "hod"].includes(role)) {
       return res.status(400).json({ message: "Invalid role" });
     }
-    const assignment = validateUserAssignment(role, departmentId, serviceId);
+    const assignment = validateUserAssignment(role, req.body);
     if (assignment.error) {
       return res.status(400).json({ message: assignment.error });
     }
@@ -1100,7 +1192,7 @@ app.post("/api/users", async (req, res) => {
       .populate("departmentId", "name")
       .populate("serviceId", "name")
       .lean();
-    return res.status(201).json(serializeUserOut(out));
+    return res.status(201).json(await serializeUserWithHodMappings(out));
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: "Username already exists" });
@@ -1112,7 +1204,7 @@ app.post("/api/users", async (req, res) => {
 app.patch("/api/users/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { username, password, role, departmentId, serviceId } = req.body;
+    const { username, password, role } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid user id" });
@@ -1123,7 +1215,7 @@ app.patch("/api/users/:id", async (req, res) => {
     if (!["admin", "staff", "hod"].includes(role)) {
       return res.status(400).json({ message: "Invalid role" });
     }
-    const assignment = validateUserAssignment(role, departmentId, serviceId);
+    const assignment = validateUserAssignment(role, req.body);
     if (assignment.error) {
       return res.status(400).json({ message: assignment.error });
     }
@@ -1155,9 +1247,9 @@ app.patch("/api/users/:id", async (req, res) => {
     if (role === "hod") {
       await syncHodCatalogMappings(updated._id, assignment);
     } else {
-      await syncHodCatalogMappings(updated._id, { departmentId: null, serviceId: null });
+      await syncHodCatalogMappings(updated._id, { departmentIds: [], serviceIds: [] });
     }
-    return res.json(serializeUserOut(updated));
+    return res.json(await serializeUserWithHodMappings(updated));
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: "Username already exists" });
@@ -1176,7 +1268,7 @@ app.delete("/api/users/:id", async (req, res) => {
     if (!deleted) {
       return res.status(404).json({ message: "User not found" });
     }
-    await syncHodCatalogMappings(id, { departmentId: null, serviceId: null });
+    await syncHodCatalogMappings(id, { departmentIds: [], serviceIds: [] });
     return res.json({ ok: true });
   } catch (error) {
     return res.status(500).json({ message: "Failed to delete user" });

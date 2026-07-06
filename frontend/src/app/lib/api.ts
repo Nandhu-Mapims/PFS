@@ -736,6 +736,8 @@ export interface UserRow {
   role: "admin" | "staff" | "hod";
   departmentId?: { _id: string; name: string } | null;
   serviceId?: { _id: string; name: string } | null;
+  hodDepartments?: Array<{ _id: string; name: string }>;
+  hodServices?: Array<{ _id: string; name: string }>;
 }
 
 export async function getUsers(): Promise<UserRow[]> {
@@ -750,6 +752,8 @@ export async function createUser(payload: {
   role: "admin" | "staff" | "hod";
   departmentId?: string | null;
   serviceId?: string | null;
+  departmentIds?: string[];
+  serviceIds?: string[];
 }): Promise<UserRow> {
   const response = await fetch(`${API_BASE_URL}/api/users`, {
     method: "POST",
@@ -770,6 +774,8 @@ export async function updateUser(
     role: "admin" | "staff" | "hod";
     departmentId?: string | null;
     serviceId?: string | null;
+    departmentIds?: string[];
+    serviceIds?: string[];
     password?: string;
   }
 ): Promise<UserRow> {
