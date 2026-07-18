@@ -1,8 +1,68 @@
 import type { Department, FeedbackItem, ServiceCatalogItem, UserRow } from "./api";
 import { ticketDepartment, ticketService, ticketServices } from "./ticketFilters";
 
-function normKey(value: string | null | undefined): string {
-  return String(value || "").trim().toLowerCase();
+/** Lowercase + strip punctuation so EMR labels can match catalog names. */
+export function normKey(value: string | null | undefined): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** British → American spelling for canonical word comparison. */
+const SPELLING_CANON: Array<[string, string]> = [
+  ["paediatric", "pediatric"],
+  ["orthopaedic", "orthopedic"],
+  ["gynaecology", "gynecology"],
+  ["haematology", "hematology"],
+  ["anaesthesio", "anesthesio"],
+];
+
+function canonWord(word: string): string {
+  let w = word;
+  for (const [from, to] of SPELLING_CANON) {
+    if (w.includes(from)) w = w.split(from).join(to);
+  }
+  if (w.endsWith("ies") && w.length > 4) return `${w.slice(0, -3)}y`;
+  if (w.endsWith("s") && !w.endsWith("ss") && w.length > 3) return w.slice(0, -1);
+  return w;
+}
+
+function canonWords(value: string | null | undefined): string[] {
+  return normKey(value).split(" ").filter(Boolean).map(canonWord);
+}
+
+/**
+ * Fuzzy match for department/service labels.
+ * Matches: PAEDIATRICS ↔ Paediatric, Orthopaedics ↔ Orthopedics,
+ * Housekeeping ↔ House Keeping, Front Office ↔ Reception / Front Office.
+ * Does NOT match single generic words into longer names (General vs General Medicine).
+ */
+export function labelsMatch(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  const left = canonWords(a);
+  const right = canonWords(b);
+  if (!left.length || !right.length) return false;
+
+  const leftJoin = left.join(" ");
+  const rightJoin = right.join(" ");
+  if (leftJoin === rightJoin) return true;
+  // Compact compare covers spacing variants: House Keeping ↔ Housekeeping.
+  if (left.join("") === right.join("")) return true;
+
+  // Multi-word subset: every word of the shorter label appears in the longer.
+  const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
+  if (shorter.length >= 2) {
+    const longerSet = new Set(longer);
+    if (shorter.every((w) => longerSet.has(w))) return true;
+  }
+
+  return false;
 }
 
 export function userDepartmentName(user: UserRow): string {
@@ -19,13 +79,38 @@ export function userServiceName(user: UserRow): string {
   return "";
 }
 
+/** All department names this HOD owns (multi-map + primary). */
+export function userHodDepartmentNames(user: UserRow): string[] {
+  const names = (user.hodDepartments || []).map((d) => d.name.trim()).filter(Boolean);
+  const primary = userDepartmentName(user);
+  if (primary && !names.some((n) => labelsMatch(n, primary))) names.push(primary);
+  return names;
+}
+
+/** All service names this HOD owns (multi-map + primary). */
+export function userHodServiceNames(user: UserRow): string[] {
+  const names = (user.hodServices || []).map((s) => s.name.trim()).filter(Boolean);
+  const primary = userServiceName(user);
+  if (primary && !names.some((n) => labelsMatch(n, primary))) names.push(primary);
+  return names;
+}
+
+export function hodLabelForSelect(user: UserRow): string {
+  const depts = userHodDepartmentNames(user);
+  const svcs = userHodServiceNames(user);
+  const parts = [...depts, ...svcs];
+  if (!parts.length) return user.username;
+  const shown = parts.slice(0, 2).join(", ");
+  const more = parts.length > 2 ? ` +${parts.length - 2}` : "";
+  return `${user.username} · ${shown}${more}`;
+}
+
 export function hodIdForDepartmentName(
   departments: Department[],
   departmentName: string
 ): string | null {
-  const key = normKey(departmentName);
-  if (!key) return null;
-  const dept = departments.find((d) => normKey(d.name) === key);
+  if (!normKey(departmentName)) return null;
+  const dept = departments.find((d) => labelsMatch(d.name, departmentName));
   return dept?.hodUserId?._id ?? null;
 }
 
@@ -33,58 +118,76 @@ export function hodIdForServiceName(
   services: ServiceCatalogItem[],
   serviceName: string
 ): string | null {
-  const key = normKey(serviceName);
-  if (!key) return null;
-  const svc = services.find((s) => normKey(s.name) === key);
+  if (!normKey(serviceName)) return null;
+  const svc = services.find((s) => labelsMatch(s.name, serviceName));
   return svc?.hodUserId?._id ?? null;
 }
 
-export function serviceNamesForHod(
-  services: ServiceCatalogItem[],
-  hodUserId: string
-): string[] {
-  return services
-    .filter((s) => s.hodUserId?._id === hodUserId)
-    .map((s) => normKey(s.name))
-    .filter(Boolean);
-}
-
-export function departmentNamesForHod(
-  departments: Department[],
-  hodUserId: string
-): string[] {
-  return departments
-    .filter((d) => d.hodUserId?._id === hodUserId)
-    .map((d) => d.name.trim())
-    .filter(Boolean);
-}
-
-export function hodScopeForUser(
-  departments: Department[],
-  services: ServiceCatalogItem[],
-  hodUserId: string
-) {
-  return {
-    departmentNames: departmentNamesForHod(departments, hodUserId),
-    serviceNames: serviceNamesForHod(services, hodUserId),
-  };
-}
-
-function ticketServiceKeys(item: FeedbackItem): string[] {
+/**
+ * Departments this ticket itself belongs to.
+ * Split children carry the parent's FULL feedbackIssues array, so we must NOT
+ * scan all issues — only the ticket's own visit/issue department. Otherwise a
+ * Paediatrics ticket whose sibling issue is General Medicine leaks into the
+ * General Medicine HOD queue.
+ */
+function ticketDepartmentKeys(item: FeedbackItem): string[] {
   const keys = new Set<string>();
-  const primary = normKey(ticketService(item));
+  const primary = ticketDepartment(item);
   if (primary) keys.add(primary);
-  for (const svc of ticketServices(item)) {
-    const k = normKey(svc);
-    if (k) keys.add(k);
-  }
-  for (const issue of item.feedbackIssues || []) {
-    const k = normKey(issue.recommendedService);
-    if (k) keys.add(k);
+  const own = String(item.department || "").trim();
+  if (own) keys.add(own);
+  if (!item.isSplitChild) {
+    // Parent row represents the first issue only; siblings have their own tickets.
+    const firstIssue = (item.feedbackIssues || [])[0];
+    const d = String(firstIssue?.department || "").trim();
+    if (d) keys.add(d);
   }
   return [...keys];
 }
 
+/** Services this ticket itself is routed to (same own-issue rule as departments). */
+function ticketServiceKeys(item: FeedbackItem): string[] {
+  const keys = new Set<string>();
+  const primary = ticketService(item);
+  if (primary) keys.add(primary);
+  if (item.isSplitChild) return [...keys];
+  const services = ticketServices(item);
+  if (services.length === 1) {
+    keys.add(services[0]);
+  } else {
+    const firstIssue = (item.feedbackIssues || [])[0];
+    const s = String(firstIssue?.recommendedService || "").trim();
+    if (s) keys.add(s);
+  }
+  return [...keys];
+}
+
+function hodIdFromUserMappings(
+  hodUsers: UserRow[],
+  departmentNames: string[],
+  serviceNames: string[]
+): string | null {
+  for (const dept of departmentNames) {
+    const match = hodUsers.find((u) =>
+      userHodDepartmentNames(u).some((name) => labelsMatch(name, dept))
+    );
+    if (match) return match._id;
+  }
+  for (const svc of serviceNames) {
+    const match = hodUsers.find((u) =>
+      userHodServiceNames(u).some((name) => labelsMatch(name, svc))
+    );
+    if (match) return match._id;
+  }
+  return null;
+}
+
+/**
+ * Recommend HOD by:
+ * 1) department.hodUserId (catalog map)
+ * 2) service.hodUserId (catalog map)
+ * 3) HOD user multi-mappings (hodDepartments / hodServices)
+ */
 export function defaultHodForTicket(
   ticket: FeedbackItem | null,
   departments: Department[],
@@ -93,27 +196,19 @@ export function defaultHodForTicket(
 ): string | null {
   if (!ticket) return null;
 
-  const deptName = ticketDepartment(ticket);
-  const fromDeptMap = hodIdForDepartmentName(departments, deptName);
-  if (fromDeptMap) return fromDeptMap;
+  const deptNames = ticketDepartmentKeys(ticket);
+  for (const deptName of deptNames) {
+    const fromDeptMap = hodIdForDepartmentName(departments, deptName);
+    if (fromDeptMap) return fromDeptMap;
+  }
 
-  for (const svcKey of ticketServiceKeys(ticket)) {
-    const fromSvc = hodIdForServiceName(services, svcKey);
+  const svcNames = ticketServiceKeys(ticket);
+  for (const svcName of svcNames) {
+    const fromSvc = hodIdForServiceName(services, svcName);
     if (fromSvc) return fromSvc;
   }
 
-  for (const svcKey of ticketServiceKeys(ticket)) {
-    const fromUserSvc = hodUsers.find((u) => normKey(userServiceName(u)) === svcKey);
-    if (fromUserSvc) return fromUserSvc._id;
-  }
-
-  const deptKey = normKey(deptName);
-  if (deptKey) {
-    const fromUserDept = hodUsers.find((u) => normKey(userDepartmentName(u)) === deptKey);
-    if (fromUserDept) return fromUserDept._id;
-  }
-
-  return null;
+  return hodIdFromUserMappings(hodUsers, deptNames, svcNames);
 }
 
 export function sortHodAssignees(
@@ -123,22 +218,38 @@ export function sortHodAssignees(
   departments: Department[],
   services: ServiceCatalogItem[]
 ): UserRow[] {
-  const ticketDept = ticket ? normKey(ticketDepartment(ticket)) : "";
-  const ticketSvcKeys = ticket ? new Set(ticketServiceKeys(ticket)) : new Set<string>();
-  const deptHodId = ticket ? hodIdForDepartmentName(departments, ticketDepartment(ticket)) : null;
+  const ticketDeptNames = ticket ? ticketDepartmentKeys(ticket) : [];
+  const ticketSvcNames = ticket ? ticketServiceKeys(ticket) : [];
+  const deptHodIds = new Set(
+    ticketDeptNames
+      .map((name) => hodIdForDepartmentName(departments, name))
+      .filter((id): id is string => Boolean(id))
+  );
   const serviceHodIds = new Set(
-    [...ticketSvcKeys]
-      .map((k) => hodIdForServiceName(services, k))
+    ticketSvcNames
+      .map((name) => hodIdForServiceName(services, name))
       .filter((id): id is string => Boolean(id))
   );
 
   return [...hods].sort((a, b) => {
     const rank = (u: UserRow) => {
       if (defaultHodId && u._id === defaultHodId) return 0;
-      if (deptHodId && u._id === deptHodId) return 1;
+      if (deptHodIds.has(u._id)) return 1;
       if (serviceHodIds.has(u._id)) return 2;
-      if (ticketDept && normKey(userDepartmentName(u)) === ticketDept) return 3;
-      if ([...ticketSvcKeys].some((k) => normKey(userServiceName(u)) === k)) return 3;
+      if (
+        ticketDeptNames.some((dept) =>
+          userHodDepartmentNames(u).some((name) => labelsMatch(name, dept))
+        )
+      ) {
+        return 3;
+      }
+      if (
+        ticketSvcNames.some((svc) =>
+          userHodServiceNames(u).some((name) => labelsMatch(name, svc))
+        )
+      ) {
+        return 3;
+      }
       return 4;
     };
     const diff = rank(a) - rank(b);
@@ -146,28 +257,10 @@ export function sortHodAssignees(
   });
 }
 
-export function matchesHodDepartment(item: FeedbackItem, departmentName: string): boolean {
-  const target = normKey(departmentName);
-  if (!target) return false;
-  if (normKey(ticketDepartment(item)) === target) return true;
-  return (item.feedbackIssues || []).some((issue) => normKey(issue.department) === target);
-}
-
-export function matchesHodServices(item: FeedbackItem, serviceNames: string[]): boolean {
-  if (!serviceNames.length) return false;
-  const allowed = new Set(serviceNames);
-  return ticketServiceKeys(item).some((k) => allowed.has(k));
-}
-
-export function visibleToHod(
-  item: FeedbackItem,
-  hodUserId: string,
-  hodDepartmentNames: string[],
-  hodServiceNames: string[]
-): boolean {
-  if (!hodUserId) return false;
-  if (item.assignedToUserId === hodUserId) return true;
-  if (hodDepartmentNames.some((name) => matchesHodDepartment(item, name))) return true;
-  if (matchesHodServices(item, hodServiceNames)) return true;
-  return false;
+/**
+ * HODs see ONLY tickets manually assigned to them by admin/staff.
+ * Department/service mappings are used purely to recommend an assignee.
+ */
+export function visibleToHod(item: FeedbackItem, hodUserId: string): boolean {
+  return Boolean(hodUserId && item.assignedToUserId === hodUserId);
 }

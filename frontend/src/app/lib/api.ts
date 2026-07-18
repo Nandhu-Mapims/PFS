@@ -135,6 +135,9 @@ export interface FeedbackItem extends Omit<FeedbackPayload, "voiceRecording"> {
   /** Set when split ticket borrows bot Q&A from parent submission */
   botVoiceSourceFeedbackId?: string | null;
   staffRemarks?: string;
+  /** HOD comment when resolving — visible to admin */
+  resolutionNote?: string;
+  resolutionNoteAt?: string | null;
   assignedToUserId?: string | null;
   assignedToUsername?: string;
   assignedAt?: string | null;
@@ -480,19 +483,26 @@ export async function getFeedbackById(id: string): Promise<FeedbackItem> {
 
 export async function updateFeedbackStatus(
   id: string,
-  status: FeedbackItem["status"]
+  status: FeedbackItem["status"],
+  options?: { resolutionNote?: string }
 ): Promise<FeedbackItem> {
   const response = await fetch(`${API_BASE_URL}/api/feedback/${id}/status`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({
+      status,
+      ...(options?.resolutionNote != null
+        ? { resolutionNote: options.resolutionNote }
+        : {}),
+    }),
   });
 
+  const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error("Could not update status");
+    throw new Error(readApiErrorMessage(body) || "Could not update status");
   }
 
-  return response.json();
+  return body as FeedbackItem;
 }
 
 export async function assignFeedbackTicket(

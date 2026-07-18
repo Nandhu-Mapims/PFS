@@ -238,8 +238,9 @@ export function TicketFiltersPanel({
                   <SelectValue placeholder="All" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All assignees</SelectItem>
-                  <SelectItem value="unassigned">Unassigned</SelectItem>
+                  <SelectItem value="all">All tickets</SelectItem>
+                  <SelectItem value="assigned">Assigned (any HOD)</SelectItem>
+                  <SelectItem value="unassigned">Unassigned only</SelectItem>
                   {assigneeOptions.map((opt) => (
                     <SelectItem key={opt.id} value={opt.id}>
                       {opt.label}
@@ -248,6 +249,39 @@ export function TicketFiltersPanel({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wide self-center mr-1">
+              Quick assign
+            </span>
+            {(
+              [
+                { id: "all" as const, label: "All" },
+                { id: "assigned" as const, label: "Assigned" },
+                { id: "unassigned" as const, label: "Unassigned" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => onAssigneeFilterChange(opt.id)}
+                className={chipClass(assigneeFilter === opt.id)}
+              >
+                {opt.label}
+              </button>
+            ))}
+            {assigneeOptions.slice(0, 6).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => onAssigneeFilterChange(opt.id)}
+                className={chipClass(assigneeFilter === opt.id)}
+                title={opt.label}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
 
           <div className="space-y-2">

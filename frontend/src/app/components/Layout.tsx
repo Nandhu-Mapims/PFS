@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
-import { Home, BarChart3, Building2, ClipboardList, Settings, UserRound, Users } from "lucide-react";
+import { Home, BarChart3, Building2, ClipboardList, KeyRound, Settings, UserRound, Users } from "lucide-react";
 import { getSession, logout } from "../lib/auth";
 import { isUserFeedPath, patientRoutes } from "../lib/patientRoutes";
 import feedbackLogo from "./image/feedback_logo.png";
@@ -11,12 +11,14 @@ import {
   onBrandingSettingsChange,
 } from "../lib/branding";
 import { FeedbackOutboxStatus } from "./FeedbackOutboxStatus";
+import { HodChangePasswordDialog } from "./HodChangePasswordDialog";
 import { MOBILE_NETWORK_BAR_OFFSET_CLASS, NetworkStatusIndicator } from "./NetworkStatusIndicator";
 
 export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [branding, setBranding] = useState(() => getBrandingSettings());
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   const session = getSession();
   const isAdmin = session?.role === "admin";
@@ -276,6 +278,17 @@ export function Layout() {
                 )}
                 </>
               )}
+              {isHod && session ? (
+                <button
+                  type="button"
+                  onClick={() => setChangePasswordOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-all duration-200 text-sm font-medium"
+                >
+                  <KeyRound className="h-4 w-4" />
+                  <span className="hidden sm:inline">Change password</span>
+                  <span className="sm:hidden">Password</span>
+                </button>
+              ) : null}
               {session ? (
                 <button
                   type="button"
@@ -430,6 +443,13 @@ export function Layout() {
           </div>
         </nav>
       )}
+      {isHod && session ? (
+        <HodChangePasswordDialog
+          open={changePasswordOpen}
+          onOpenChange={setChangePasswordOpen}
+          userId={session._id}
+        />
+      ) : null}
     </div>
   );
 }

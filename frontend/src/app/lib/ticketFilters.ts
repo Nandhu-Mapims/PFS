@@ -63,7 +63,11 @@ export function ticketServices(item: FeedbackItem): string[] {
   return single ? [single] : [];
 }
 
-export type TicketAssigneeFilter = "all" | "unassigned" | string;
+export type TicketAssigneeFilter = "all" | "assigned" | "unassigned" | string;
+
+export function isTicketAssigned(row: FeedbackItem): boolean {
+  return Boolean(row.assignedToUserId?.trim());
+}
 
 export function filterTicketsByDimensions(
   rows: FeedbackItem[],
@@ -96,7 +100,9 @@ export function filterTicketsByDimensions(
 
     const assignee = opts.assignee ?? "all";
     if (assignee === "unassigned") {
-      if (row.assignedToUserId) return false;
+      if (isTicketAssigned(row)) return false;
+    } else if (assignee === "assigned") {
+      if (!isTicketAssigned(row)) return false;
     } else if (assignee !== "all") {
       if (row.assignedToUserId !== assignee) return false;
     }
@@ -123,6 +129,7 @@ export function buildFilterSummary(opts: {
   if (opts.department !== "all") parts.push(`Dept: ${opts.department}`);
   if (opts.service !== "all") parts.push(`Service: ${opts.service}`);
   if (opts.assignee === "unassigned") parts.push("Unassigned");
+  else if (opts.assignee === "assigned") parts.push("Assigned (any HOD)");
   else if (opts.assignee && opts.assignee !== "all") {
     parts.push(`Assigned: ${opts.assigneeLabel || opts.assignee}`);
   }

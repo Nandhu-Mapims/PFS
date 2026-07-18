@@ -13,18 +13,14 @@ import { useNavigate } from "react-router";
 import {
   getFeedback,
   getFeedbackAnalytics,
-  getHospitalDepartments,
-  getServices,
   updateFeedbackStatus,
-  type Department,
   type FeedbackAnalytics,
   type FeedbackItem,
-  type ServiceCatalogItem,
 } from "../lib/api";
 import { getSession } from "../lib/auth";
 import { displayOptionalLabel, sanitizeOptionalLabel } from "../lib/fieldSanitize";
 import { ticketAiSummaryForItem } from "../lib/feedbackDisplay";
-import { hodScopeForUser, visibleToHod } from "../lib/hodRouting";
+import { visibleToHod } from "../lib/hodRouting";
 import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
 import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
 import { Badge } from "./ui/badge";
@@ -90,10 +86,19 @@ function FeedbackTable({
   onOpenTicket,
 }: {
   rows: FeedbackItem[];
-  onStatusChange: (id: string, status: FeedbackItem["status"]) => void;
+  onStatusChange: (
+    id: string,
+    status: FeedbackItem["status"],
+    options?: { resolutionNote?: string }
+  ) => void | Promise<void>;
   hodUserId?: string;
   onOpenTicket?: (id: string) => void;
 }) {
+  const [resolveTarget, setResolveTarget] = useState<FeedbackItem | null>(null);
+  const [resolveNote, setResolveNote] = useState("");
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const [resolveSaving, setResolveSaving] = useState(false);
+
   if (rows.length === 0) {
     return (
       <div className="text-muted-foreground p-8 text-center text-sm">
@@ -102,8 +107,69 @@ function FeedbackTable({
     );
   }
 
+  async function confirmResolve() {
+    if (!resolveTarget) return;
+    if (!resolveNote.trim()) {
+      setResolveError("Resolution comment is required.");
+      return;
+    }
+    try {
+      setResolveSaving(true);
+      setResolveError(null);
+      await onStatusChange(resolveTarget._id, "Resolved", {
+        resolutionNote: resolveNote.trim(),
+      });
+      setResolveTarget(null);
+      setResolveNote("");
+    } catch (err) {
+      setResolveError(err instanceof Error ? err.message : "Could not resolve ticket.");
+    } finally {
+      setResolveSaving(false);
+    }
+  }
+
   return (
     <div className="max-h-[50vh] overflow-auto">
+      {resolveTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-5 shadow-xl">
+            <h4 className="text-lg font-semibold text-gray-900">Resolve ticket</h4>
+            <p className="mt-1 text-sm text-gray-600">
+              Add a resolution comment for {resolveTarget.patientName}. Admin will see this note.
+            </p>
+            <textarea
+              value={resolveNote}
+              onChange={(e) => setResolveNote(e.target.value)}
+              rows={4}
+              className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#2A6FDB] focus:ring-2 focus:ring-blue-100"
+              placeholder="Describe what was done / how this was resolved…"
+            />
+            {resolveError ? <p className="mt-2 text-sm text-red-600">{resolveError}</p> : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={resolveSaving}
+                onClick={() => {
+                  setResolveTarget(null);
+                  setResolveNote("");
+                  setResolveError(null);
+                }}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={resolveSaving || !resolveNote.trim()}
+                onClick={() => void confirmResolve()}
+                className="rounded-lg bg-[#2FBF71] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {resolveSaving ? "Saving…" : "Mark Resolved"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <Table>
         <TableHeader className="bg-muted/30 sticky top-0 z-10">
           <TableRow>
@@ -146,9 +212,16 @@ function FeedbackTable({
                 </Badge>
                 <Select
                   value={item.status}
-                  onValueChange={(value) =>
-                    onStatusChange(item._id, value as FeedbackItem["status"])
-                  }
+                  onValueChange={(value) => {
+                    const next = value as FeedbackItem["status"];
+                    if (next === "Resolved") {
+                      setResolveTarget(item);
+                      setResolveNote(item.resolutionNote || "");
+                      setResolveError(null);
+                      return;
+                    }
+                    void onStatusChange(item._id, next);
+                  }}
                 >
                   <SelectTrigger size="sm" className="w-36">
                     <SelectValue placeholder="Update status" />
@@ -175,8 +248,15 @@ function FeedbackTable({
                 })()}
               </TableCell>
               <TableCell className="text-muted-foreground text-sm max-w-[180px] align-top">
-                <p className="line-clamp-2 leading-snug" title={item.staffRemarks?.trim() || undefined}>
-                  {item.staffRemarks?.trim() || "—"}
+                <p
+                  className="line-clamp-2 leading-snug"
+                  title={
+                    item.resolutionNote?.trim() ||
+                    item.staffRemarks?.trim() ||
+                    undefined
+                  }
+                >
+                  {item.resolutionNote?.trim() || item.staffRemarks?.trim() || "—"}
                 </p>
               </TableCell>
               <TableCell className="text-muted-foreground pr-4 text-sm">
@@ -275,21 +355,6 @@ export function Dashboard() {
   const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("department");
   const [error, setError] = useState<string | null>(null);
-  const [hodDepartments, setHodDepartments] = useState<Department[]>([]);
-  const [hodServices, setHodServices] = useState<ServiceCatalogItem[]>([]);
-
-  useEffect(() => {
-    if (!isHod) return;
-    void Promise.all([getHospitalDepartments(), getServices()])
-      .then(([departments, services]) => {
-        setHodDepartments(departments);
-        setHodServices(services);
-      })
-      .catch(() => {
-        setHodDepartments([]);
-        setHodServices([]);
-      });
-  }, [isHod]);
 
   useEffect(() => {
     async function loadData() {
@@ -297,7 +362,11 @@ export function Dashboard() {
         setIsLoading(true);
         setError(null);
         const [data, analyticsData] = await Promise.all([
-          getFeedback({ lite: true }),
+          getFeedback(
+            isHod && hodUserId
+              ? { lite: true, assignedToUserId: hodUserId }
+              : { lite: true }
+          ),
           isHod ? Promise.resolve(null) : getFeedbackAnalytics(),
         ]);
         setItems(data);
@@ -310,19 +379,12 @@ export function Dashboard() {
     }
 
     void loadData();
-  }, [isHod]);
-
-  const hodScope = useMemo(
-    () => hodScopeForUser(hodDepartments, hodServices, hodUserId),
-    [hodDepartments, hodServices, hodUserId]
-  );
+  }, [isHod, hodUserId]);
 
   const visibleItems = useMemo(() => {
     if (!isHod) return items;
-    return items.filter((item) =>
-      visibleToHod(item, hodUserId, hodScope.departmentNames, hodScope.serviceNames)
-    );
-  }, [items, isHod, hodUserId, hodScope]);
+    return items.filter((item) => visibleToHod(item, hodUserId));
+  }, [items, isHod, hodUserId]);
 
   const departments = useMemo(() => {
     const keys = new Set<string>();
@@ -471,13 +533,18 @@ export function Dashboard() {
   const inProgressCount = visibleItems.filter((item) => item.status === "In Progress").length;
   const resolvedCount = visibleItems.filter((item) => item.status === "Resolved").length;
 
-  async function handleStatusChange(id: string, status: FeedbackItem["status"]) {
+  async function handleStatusChange(
+    id: string,
+    status: FeedbackItem["status"],
+    options?: { resolutionNote?: string }
+  ) {
     try {
       setError(null);
-      const updated = await updateFeedbackStatus(id, status);
+      const updated = await updateFeedbackStatus(id, status, options);
       setItems((current) => current.map((item) => (item._id === id ? updated : item)));
-    } catch {
-      setError("Failed to update status.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update status.");
+      throw err;
     }
   }
 
@@ -519,7 +586,7 @@ export function Dashboard() {
         </h2>
         <p className="text-muted-foreground text-sm md:text-base">
           {isHod
-            ? "Tickets for your mapped departments and services"
+            ? "Tickets assigned to you by admin or staff"
             : "View and resolve feedback by hospital department and routing service"}
         </p>
       </div>

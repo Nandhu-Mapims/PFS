@@ -612,6 +612,38 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+app.post("/api/auth/change-password", async (req, res) => {
+  try {
+    const { userId, currentPassword, newPassword } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(String(userId || ""))) {
+      return res.status(400).json({ message: "Invalid user" });
+    }
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: "Current and new passwords are required" });
+    }
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ message: "New password must be at least 6 characters" });
+    }
+    if (String(currentPassword) === String(newPassword)) {
+      return res.status(400).json({ message: "New password must be different" });
+    }
+
+    const user = await User.findById(userId).select("passwordHash role");
+    if (!user || user.role !== "hod") {
+      return res.status(404).json({ message: "HOD user not found" });
+    }
+    if (!(await bcrypt.compare(String(currentPassword), user.passwordHash))) {
+      return res.status(401).json({ message: "Current password is incorrect" });
+    }
+
+    user.passwordHash = await bcrypt.hash(String(newPassword), 10);
+    await user.save();
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to change password" });
+  }
+});
+
 function serviceNameKey(name) {
   return String(name || "").trim().toLowerCase();
 }
@@ -2522,16 +2554,28 @@ app.patch("/api/feedback/:id/status", async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
+    const resolutionNote = String(req.body.resolutionNote || "").trim().slice(0, 2000);
 
     if (!["New", "In Progress", "Resolved"].includes(status)) {
       return res.status(400).json({ message: "Invalid status value" });
     }
 
-    const updated = await Feedback.findByIdAndUpdate(
-      id,
-      { status },
-      { new: true, runValidators: true }
-    ).lean();
+    if (status === "Resolved" && !resolutionNote) {
+      return res.status(400).json({
+        message: "Resolution comment is required when marking a ticket as Resolved",
+      });
+    }
+
+    const update = { status };
+    if (status === "Resolved") {
+      update.resolutionNote = resolutionNote;
+      update.resolutionNoteAt = new Date();
+    }
+
+    const updated = await Feedback.findByIdAndUpdate(id, { $set: update }, {
+      new: true,
+      runValidators: true,
+    }).lean();
 
     if (!updated) {
       return res.status(404).json({ message: "Feedback not found" });

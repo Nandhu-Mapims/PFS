@@ -15,6 +15,7 @@ import {
 } from "../lib/insightsFilters";
 import {
   filterTicketsByDimensions,
+  isTicketAssigned,
   ticketDepartment,
   ticketService,
   uniqueSorted,
@@ -95,7 +96,7 @@ export function AdminTicketsPage() {
   const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
   const [catalogDepartments, setCatalogDepartments] = useState<string[]>([]);
   const [catalogServices, setCatalogServices] = useState<string[]>([]);
-  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [filtersExpanded, setFiltersExpanded] = useState(true);
   const repairDoneRef = useRef(false);
   const lastFeedbackSyncMsRef = useRef(0);
 
@@ -301,6 +302,7 @@ export function AdminTicketsPage() {
     if (departmentFilter !== "all") chips.push({ key: "dept", label: departmentFilter });
     if (serviceFilter !== "all") chips.push({ key: "svc", label: serviceFilter });
     if (assigneeFilter === "unassigned") chips.push({ key: "assignee", label: "Unassigned" });
+    else if (assigneeFilter === "assigned") chips.push({ key: "assignee", label: "Assigned" });
     else if (assigneeFilter !== "all") {
       const label = assigneeOptions.find((o) => o.id === assigneeFilter)?.label || "Assigned";
       chips.push({ key: "assignee", label });
@@ -376,6 +378,8 @@ export function AdminTicketsPage() {
     }));
 
     const pendingInView = sortedItems.filter(isOpenTicket).length;
+    const assignedCount = ticketRows.filter(isTicketAssigned).length;
+    const unassignedCount = ticketRows.length - assignedCount;
 
     return {
       totalTickets: ticketRows.length,
@@ -385,6 +389,8 @@ export function AdminTicketsPage() {
       inProgressCount,
       pendingInView,
       pendingByWeek,
+      assignedCount,
+      unassignedCount,
     };
   }, [ticketRows, sortedItems]);
 
@@ -423,7 +429,7 @@ export function AdminTicketsPage() {
           <p className="text-sm text-gray-500 mt-1">
             {isDeleteMode
               ? "Delete mode — remove test or duplicate tickets. This view is not linked in the main menu."
-              : "Complaint tickets (AI-negative). Filter by status, department, service, and date — then open a ticket to update progress."}
+              : "Complaint tickets (AI-negative / neutral). Use Assigned / Unassigned cards or Filters → Assigned to."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -466,32 +472,92 @@ export function AdminTicketsPage() {
         </p>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
-        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 min-w-[88px]">
-          <p className="text-[10px] font-medium text-gray-500">Total</p>
-          <p className="text-lg font-bold tabular-nums">{ticketStats.totalTickets}</p>
-        </div>
-        <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 min-w-[88px]">
-          <p className="text-[10px] font-medium text-amber-800">Pending</p>
-          <p className="text-lg font-bold tabular-nums text-amber-900">{ticketStats.pendingOverall}</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            clearAllFilters();
+            setFiltersExpanded(true);
+          }}
+          className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+            !hasDimensionFilters
+              ? "border-[#2A6FDB] bg-blue-50/60 ring-1 ring-[#2A6FDB]/20"
+              : "border-gray-200 bg-white hover:bg-gray-50"
+          }`}
+        >
+          <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Total</p>
+          <p className="text-xl font-bold tabular-nums text-gray-900">{ticketStats.totalTickets}</p>
+          <p className="text-[10px] text-gray-400">All tickets</p>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter("pending");
+            setAssigneeFilter("all");
+            setFiltersExpanded(true);
+          }}
+          className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+            statusFilter === "pending"
+              ? "border-amber-400 bg-amber-50 ring-1 ring-amber-200"
+              : "border-amber-200 bg-amber-50/60 hover:bg-amber-50"
+          }`}
+        >
+          <p className="text-[10px] font-medium text-amber-800 uppercase tracking-wide">Pending</p>
+          <p className="text-xl font-bold tabular-nums text-amber-900">{ticketStats.pendingOverall}</p>
           <p className="text-[10px] text-amber-700/80">
             {ticketStats.newCount} new · {ticketStats.inProgressCount} active
           </p>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setAssigneeFilter("assigned");
+            setFiltersExpanded(true);
+          }}
+          className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+            assigneeFilter === "assigned"
+              ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200"
+              : "border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50"
+          }`}
+          title="Show all tickets assigned to any HOD"
+        >
+          <p className="text-[10px] font-medium text-emerald-800 uppercase tracking-wide">Assigned</p>
+          <p className="text-xl font-bold tabular-nums text-emerald-800">{ticketStats.assignedCount}</p>
+          <p className="text-[10px] text-emerald-700/80">Click to list</p>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setAssigneeFilter("unassigned");
+            setFiltersExpanded(true);
+          }}
+          className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+            assigneeFilter === "unassigned"
+              ? "border-rose-400 bg-rose-50 ring-1 ring-rose-200"
+              : "border-rose-200 bg-rose-50/40 hover:bg-rose-50"
+          }`}
+          title="Show tickets not yet assigned to an HOD"
+        >
+          <p className="text-[10px] font-medium text-rose-800 uppercase tracking-wide">Unassigned</p>
+          <p className="text-xl font-bold tabular-nums text-rose-800">{ticketStats.unassignedCount}</p>
+          <p className="text-[10px] text-rose-700/80">Needs HOD</p>
+        </button>
+        <div className="rounded-xl border border-blue-200 bg-blue-50/50 px-3 py-2.5">
+          <p className="text-[10px] font-medium text-[#1e5bbd] uppercase tracking-wide">This week</p>
+          <p className="text-xl font-bold tabular-nums text-[#2A6FDB]">{ticketStats.pendingThisWeek}</p>
+          <p className="text-[10px] text-[#1e5bbd]/80">Open this week</p>
         </div>
-        <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2 min-w-[88px]">
-          <p className="text-[10px] font-medium text-[#1e5bbd]">This week</p>
-          <p className="text-lg font-bold tabular-nums text-[#2A6FDB]">{ticketStats.pendingThisWeek}</p>
+        <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5">
+          <p className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Resolved</p>
+          <p className="text-xl font-bold tabular-nums text-emerald-700">{resolvedCount}</p>
+          {hasDimensionFilters ? (
+            <p className="text-[10px] text-[#1e5bbd] mt-0.5">
+              In view: <span className="font-semibold tabular-nums">{sortedItems.length}</span>
+            </p>
+          ) : (
+            <p className="text-[10px] text-gray-400">Closed tickets</p>
+          )}
         </div>
-        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 min-w-[88px]">
-          <p className="text-[10px] font-medium text-gray-500">Resolved</p>
-          <p className="text-lg font-bold tabular-nums text-emerald-700">{resolvedCount}</p>
-        </div>
-        {hasDimensionFilters ? (
-          <div className="rounded-lg border border-[#2A6FDB]/30 bg-blue-50/40 px-3 py-2 min-w-[88px]">
-            <p className="text-[10px] font-medium text-[#1e5bbd]">In view</p>
-            <p className="text-lg font-bold tabular-nums text-[#2A6FDB]">{sortedItems.length}</p>
-          </div>
-        ) : null}
       </div>
 
       <details className="group rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">

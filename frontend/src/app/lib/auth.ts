@@ -57,6 +57,22 @@ export function logout(): void {
   localStorage.removeItem(SESSION_KEY);
 }
 
+export async function changeHodPassword(
+  userId: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/auth/change-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, currentPassword, newPassword }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { message?: string };
+    throw new Error(body.message || "Could not change password");
+  }
+}
+
 export function isInternalUser(session: SessionUser | null): boolean {
   return session?.role === "staff" || session?.role === "hod";
 }

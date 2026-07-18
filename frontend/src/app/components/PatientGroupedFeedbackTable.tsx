@@ -92,10 +92,18 @@ function assigneeSummary(items: FeedbackItem[]): string {
 
 function groupRemark(group: PatientFeedbackGroup): string {
   for (const item of group.items) {
+    const resolution = item.resolutionNote?.trim();
+    if (resolution) return resolution;
+  }
+  for (const item of group.items) {
     const text = item.staffRemarks?.trim();
     if (text) return text;
   }
-  return group.representative.staffRemarks?.trim() || "";
+  return (
+    group.representative.resolutionNote?.trim() ||
+    group.representative.staffRemarks?.trim() ||
+    ""
+  );
 }
 
 export function PatientGroupedFeedbackTable({
@@ -760,7 +768,9 @@ function ChildRow({
             {ticketAiSummaryForItem(item) || "—"}
           </td>
           <td className="px-4 py-2 text-xs text-gray-600 max-w-[160px]">
-            <span className="line-clamp-3 whitespace-pre-wrap">{item.staffRemarks?.trim() || "—"}</span>
+            <span className="line-clamp-3 whitespace-pre-wrap">
+              {item.resolutionNote?.trim() || item.staffRemarks?.trim() || "—"}
+            </span>
           </td>
           <td className="px-4 py-2 text-xs text-gray-500 hidden lg:table-cell">
             {new Date(item.createdAt).toLocaleString()}

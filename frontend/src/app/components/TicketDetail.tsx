@@ -33,9 +33,9 @@ import {
 import { getSession } from "../lib/auth";
 import {
   defaultHodForTicket,
+  hodLabelForSelect,
   hodScopeForUser,
   sortHodAssignees,
-  userDepartmentName,
   visibleToHod,
 } from "../lib/hodRouting";
 import { ticketDepartment, ticketService } from "../lib/ticketFilters";
@@ -57,6 +57,7 @@ export function TicketDetail() {
   const assignSuggestDone = useRef<string | null>(null);
   const [assigneeId, setAssigneeId] = useState<string>("");
   const [status, setStatus] = useState<FeedbackItem["status"]>("New");
+  const [resolutionNote, setResolutionNote] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,31 +68,24 @@ export function TicketDetail() {
   const showDeleteAction = location.pathname.includes("/delete");
 
   useEffect(() => {
-    if (!isAdmin && !isHod) return;
+    if (!isAdmin) return;
     void Promise.all([getUsers(), getHospitalDepartments(), getServices()])
       .then(([userRows, deptRows, serviceRows]) => {
-        if (isAdmin) {
-          setUsers(userRows.filter((u) => u.role === "hod"));
-        }
+        setUsers(userRows.filter((u) => u.role === "hod"));
         setDepartments(deptRows);
         setServices(serviceRows);
       })
       .catch(() => {
-        if (isAdmin) setUsers([]);
+        setUsers([]);
         setDepartments([]);
         setServices([]);
       });
-  }, [isAdmin, isHod]);
-
-  const hodScope = useMemo(
-    () => (session?._id ? hodScopeForUser(departments, services, session._id) : null),
-    [departments, services, session?._id]
-  );
+  }, [isAdmin]);
 
   const canViewTicket = useMemo(() => {
-    if (!isHod || !ticket || !session?._id || !hodScope) return true;
-    return visibleToHod(ticket, session._id, hodScope.departmentNames, hodScope.serviceNames);
-  }, [isHod, ticket, session?._id, hodScope]);
+    if (!isHod || !ticket || !session?._id) return true;
+    return visibleToHod(ticket, session._id);
+  }, [isHod, ticket, session?._id]);
 
   const hodUsers = users;
 
@@ -128,6 +122,7 @@ export function TicketDetail() {
         const row = await getFeedbackById(id);
         setTicket(row);
         setStatus(row.status);
+        setResolutionNote(row.resolutionNote || "");
         const assignedId = row.assignedToUserId || "";
         setAssigneeId(assignedId);
         assignSuggestDone.current = null;
@@ -168,12 +163,20 @@ export function TicketDetail() {
 
   async function handleSave() {
     if (!ticket || !id) return;
+    if (status === "Resolved" && !resolutionNote.trim()) {
+      setError("Please add a resolution comment before marking this ticket Resolved.");
+      return;
+    }
     try {
       setIsSaving(true);
-      const updated = await updateFeedbackStatus(ticket._id, status);
+      setError(null);
+      const updated = await updateFeedbackStatus(ticket._id, status, {
+        ...(status === "Resolved" ? { resolutionNote: resolutionNote.trim() } : {}),
+      });
       setTicket(updated);
-    } catch {
-      setError("Could not update ticket status.");
+      setResolutionNote(updated.resolutionNote || resolutionNote.trim());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update ticket status.");
     } finally {
       setIsSaving(false);
     }
@@ -316,7 +319,7 @@ export function TicketDetail() {
         </div>
       ) : !canViewTicket ? (
         <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm text-red-600">
-          You do not have access to this ticket. It is outside your mapped departments and services.
+          You do not have access to this ticket. It has not been assigned to you.
         </div>
       ) : (
         <>
@@ -524,6 +527,23 @@ export function TicketDetail() {
             </div>
           ) : null}
 
+          {ticket.resolutionNote?.trim() ? (
+            <div className="bg-emerald-50 rounded-xl p-6 border border-emerald-200 shadow-sm">
+              <h3 className="text-lg font-semibold text-emerald-900 mb-2">HOD resolution comment</h3>
+              <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">
+                {ticket.resolutionNote.trim()}
+              </p>
+              {ticket.resolutionNoteAt ? (
+                <p className="text-xs text-emerald-800/80 mt-2">
+                  Saved {new Date(ticket.resolutionNoteAt).toLocaleString()}
+                  {ticket.assignedToUsername?.trim()
+                    ? ` · ${ticket.assignedToUsername.trim()}`
+                    : ""}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           {ticket.feedbackIssues && ticket.feedbackIssues.length > 0 && (
             <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
               <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
@@ -585,15 +605,19 @@ export function TicketDetail() {
                 <h3 className="text-lg font-semibold text-gray-800 mb-4">Assign to HOD</h3>
                 {!ticket.assignedToUserId && defaultHodUser ? (
                   <p className="text-xs text-emerald-700 mb-3">
-                    Suggested HOD
+                    Recommended HOD
                     {ticketDepartment(ticket) ? ` for ${ticketDepartment(ticket)}` : ""}
                     {ticketService(ticket) ? ` / ${ticketService(ticket)}` : ""}:{" "}
                     <span className="font-semibold">{defaultHodUser.username}</span>
+                    {" — "}pre-selected below. Click Assign to confirm.
                   </p>
                 ) : !ticket.assignedToUserId && (ticketDepartment(ticket) || ticketService(ticket)) ? (
                   <p className="text-xs text-amber-700 mb-3">
-                    No mapped HOD for this ticket. Assign one in Admin → Departments or Services, or
-                    pick any HOD below.
+                    No mapped HOD for{" "}
+                    <span className="font-semibold">
+                      {[ticketDepartment(ticket), ticketService(ticket)].filter(Boolean).join(" / ")}
+                    </span>
+                    . Map one in Admin → Users (or Departments/Services), or pick any HOD below.
                   </p>
                 ) : null}
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -607,9 +631,8 @@ export function TicketDetail() {
                   <option value="">Unassigned</option>
                   {hodAssignees.map((u) => (
                     <option key={u._id} value={u._id}>
-                      {u.username}
-                      {userDepartmentName(u) ? ` · ${userDepartmentName(u)}` : ""}
-                      {u._id === defaultHodId ? " · Mapped HOD" : ""}
+                      {hodLabelForSelect(u)}
+                      {u._id === defaultHodId ? " · Recommended" : ""}
                     </option>
                   ))}
                 </select>
@@ -678,7 +701,7 @@ export function TicketDetail() {
             <h3 className="text-lg font-semibold text-gray-800 mb-4">Update Status</h3>
             {isHod ? (
               <p className="text-sm text-gray-600 mb-4">
-                Update progress after you review this ticket.
+                Update progress after you review this ticket. Resolving requires a comment for admin.
               </p>
             ) : null}
             <select
@@ -691,10 +714,33 @@ export function TicketDetail() {
               <option value="Resolved">Resolved</option>
             </select>
 
+            {status === "Resolved" ? (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Resolution comment <span className="text-red-600">*</span>
+                </label>
+                <textarea
+                  value={resolutionNote}
+                  onChange={(e) => setResolutionNote(e.target.value)}
+                  rows={4}
+                  required
+                  placeholder="Describe what was done / how this was resolved…"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none resize-y"
+                />
+                <p className="text-xs text-gray-500 mt-1">This comment is visible to admin.</p>
+              </div>
+            ) : null}
+
             <button
               onClick={handleSave}
-              disabled={isSaving || status === ticket.status}
-              className="w-full bg-[#2FBF71] text-white py-3 rounded-lg font-bold shadow-lg hover:bg-[#28a962] hover:shadow-xl hover:scale-[1.02] transition-all duration-200 flex items-center justify-center gap-2"
+              disabled={
+                isSaving ||
+                (status === ticket.status &&
+                  (status !== "Resolved" ||
+                    resolutionNote.trim() === (ticket.resolutionNote || "").trim())) ||
+                (status === "Resolved" && !resolutionNote.trim())
+              }
+              className="w-full bg-[#2FBF71] text-white py-3 rounded-lg font-bold shadow-lg hover:bg-[#28a962] hover:shadow-xl hover:scale-[1.02] transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:hover:scale-100"
             >
               <Save size={20} />
               {isSaving ? "Saving..." : "Save Changes"}

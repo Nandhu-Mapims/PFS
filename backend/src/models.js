@@ -75,6 +75,9 @@ const feedbackSchema = new mongoose.Schema(
     comments: { type: String, default: "", trim: true },
     /** Internal note when staff/HOD submits on behalf of patient */
     staffRemarks: { type: String, default: "", trim: true },
+    /** HOD note required when marking a ticket Resolved (visible to admin). */
+    resolutionNote: { type: String, default: "", trim: true },
+    resolutionNoteAt: { type: Date, default: null },
     assignedToUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     assignedToUsername: { type: String, default: "", trim: true },
     assignedAt: { type: Date, default: null },
