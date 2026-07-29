@@ -12,6 +12,7 @@ import { InsightsHub } from "./components/insights/InsightsHub";
 import { SubmissionTrendsRoute } from "./components/insights/SubmissionTrendsRoute";
 import { TicketsTrendsRoute } from "./components/insights/TicketsTrendsRoute";
 import { SentimentLeaderboardRoute } from "./components/insights/SentimentLeaderboardRoute";
+import { SummaryReportRoute } from "./components/insights/SummaryReportRoute";
 import { WorkflowDiagram } from "./components/WorkflowDiagram";
 import { AdminPage } from "./components/AdminPage";
 import { AdminHospitalDepartmentsPage } from "./components/AdminHospitalDepartmentsPage";
@@ -64,6 +65,7 @@ export const router = createBrowserRouter([
               { path: "submissions", Component: SubmissionTrendsRoute },
               { path: "tickets", Component: TicketsTrendsRoute },
               { path: "sentiment", Component: SentimentLeaderboardRoute },
+              { path: "summary-report", Component: SummaryReportRoute },
             ],
           },
           { path: "analytics", element: <Navigate to="/management/submissions" replace /> },
@@ -81,6 +83,7 @@ export const router = createBrowserRouter([
               { path: "submissions", Component: SubmissionTrendsRoute },
               { path: "tickets", Component: TicketsTrendsRoute },
               { path: "sentiment", Component: SentimentLeaderboardRoute },
+              { path: "summary-report", Component: SummaryReportRoute },
             ],
           },
           { path: "admin/insights", element: <Navigate to="/admin/management-overview/submissions" replace /> },

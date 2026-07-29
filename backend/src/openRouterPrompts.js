@@ -79,6 +79,35 @@ each:{department,recommendedService,issueSummary,suggestedAction,sentiment per i
 }
 
 /**
+ * @param {{
+ *   groupLabel: string;
+ *   periodLabel: string;
+ *   sentimentCounts: { positive: number; neutral: number; negative: number };
+ *   urgencyCounts: { low: number; medium: number; high: number };
+ *   topTopics: { topic: string; count: number }[];
+ *   summaries: string[];
+ * }} params
+ */
+export function buildSummaryReportUserPrompt(params) {
+  const { groupLabel, periodLabel, sentimentCounts, urgencyCounts, topTopics, summaries } = params;
+  const summaryLines = summaries.map((s) => esc(s.slice(0, 150))).join("\n");
+  const topicsLine = topTopics.map((t) => `${esc(t.topic)}(${t.count})`).join("|");
+
+  return `<j>Synthesize ${summaries.length} negative-sentiment patient-feedback summaries into one short complaint rollup report for a department/service over a period</j>
+<ctx group="${esc(groupLabel)}" period="${esc(periodLabel)}"/>
+<stats pos=${sentimentCounts.positive} neu=${sentimentCounts.neutral} neg=${sentimentCounts.negative} urgLow=${urgencyCounts.low} urgMed=${urgencyCounts.medium} urgHigh=${urgencyCounts.high}/>
+<topics>${topicsLine}</topics>
+<s>${summaryLines}</s>
+<r>
+Each line in &lt;s&gt; is one prior AI summary of a negative patient review only.
+Write narrative: 2-4 sentences, plain English, for hospital staff review.
+Focus only on recurring complaint themes, their severity, and any urgent/high-risk pattern if present.
+Do not mention praise or positive feedback; do not invent facts not implied by the lines; do not repeat raw counts already in &lt;stats&gt;.
+</r>
+<o>{"narrative":""}</o>`;
+}
+
+/**
  * @param {string} hint
  * @param {{ name: string; description?: string }[]} choices
  */

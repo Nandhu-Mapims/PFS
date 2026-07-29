@@ -543,6 +543,81 @@ export async function getFeedbackAnalytics(): Promise<FeedbackAnalytics> {
   return response.json();
 }
 
+export type SummaryReportPeriodType = "weekly" | "monthly";
+
+export interface SummaryReportPeriod {
+  periodKey: string;
+  periodStart: string | null;
+  periodEnd: string | null;
+  generatedAt: string | null;
+}
+
+export interface SummaryReportGroupRow {
+  groupName: string;
+  feedbackCount: number;
+  sentimentCounts: { positive: number; neutral: number; negative: number };
+  averageRating: number;
+  urgencyCounts: { low: number; medium: number; high: number };
+  topTopics: Array<{ topic: string; count: number }>;
+  narrative: string;
+  sourceSummaryCount: number;
+  generatedAt: string | null;
+}
+
+export interface SummaryReport {
+  periodType: SummaryReportPeriodType;
+  periodKey: string;
+  periodStart: string | null;
+  periodEnd: string | null;
+  departments: SummaryReportGroupRow[];
+  services: SummaryReportGroupRow[];
+}
+
+export async function fetchSummaryReportPeriods(
+  periodType: SummaryReportPeriodType
+): Promise<SummaryReportPeriod[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/summary-reports/periods?periodType=${periodType}`,
+    { cache: "no-store" }
+  );
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not load report periods");
+  }
+  return (body as { periods: SummaryReportPeriod[] }).periods;
+}
+
+export async function fetchSummaryReport(
+  periodType: SummaryReportPeriodType,
+  periodKey: string
+): Promise<SummaryReport> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/summary-reports?periodType=${periodType}&periodKey=${encodeURIComponent(periodKey)}`,
+    { cache: "no-store" }
+  );
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not load summary report");
+  }
+  return body as SummaryReport;
+}
+
+export async function triggerSummaryReportGenerate(
+  periodType: SummaryReportPeriodType,
+  periodKey: string
+): Promise<SummaryReport> {
+  const response = await fetch(`${API_BASE_URL}/api/summary-reports/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ periodType, periodKey }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(readApiErrorMessage(body) || "Could not generate summary report");
+  }
+  return body as SummaryReport;
+}
+
 export async function seedOpenNegativeTickets(): Promise<{
   updated: number;
   negativeWithTicket: number;

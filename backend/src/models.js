@@ -190,11 +190,49 @@ const brandingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const summaryReportSchema = new mongoose.Schema(
+  {
+    periodType: { type: String, enum: ["weekly", "monthly"], required: true },
+    /** weekly: local Sunday date "YYYY-MM-DD"; monthly: "YYYY-MM" */
+    periodKey: { type: String, required: true, trim: true },
+    periodStart: { type: Date, required: true },
+    periodEnd: { type: Date, required: true },
+    groupType: { type: String, enum: ["department", "service"], required: true },
+    groupName: { type: String, required: true, trim: true },
+    feedbackCount: { type: Number, default: 0 },
+    sentimentCounts: {
+      positive: { type: Number, default: 0 },
+      neutral: { type: Number, default: 0 },
+      negative: { type: Number, default: 0 },
+    },
+    averageRating: { type: Number, default: 0 },
+    urgencyCounts: {
+      low: { type: Number, default: 0 },
+      medium: { type: Number, default: 0 },
+      high: { type: Number, default: 0 },
+    },
+    topTopics: {
+      type: [{ topic: { type: String, trim: true }, count: { type: Number, default: 0 } }],
+      default: [],
+    },
+    narrative: { type: String, default: "" },
+    sourceSummaryCount: { type: Number, default: 0 },
+    generatedAt: { type: Date, default: null },
+  },
+  { timestamps: true }
+);
+
+summaryReportSchema.index(
+  { periodType: 1, periodKey: 1, groupType: 1, groupName: 1 },
+  { unique: true }
+);
+
 export const Department = mongoose.model("Department", departmentSchema);
 export const RoutingService = mongoose.model("RoutingService", routingServiceSchema);
 export const User = mongoose.model("User", userSchema);
 export const Feedback = mongoose.model("Feedback", feedbackSchema);
 export const Branding = mongoose.model("Branding", brandingSchema);
+export const SummaryReport = mongoose.model("SummaryReport", summaryReportSchema);
 export const BotConversationConfig = mongoose.model(
   "BotConversationConfig",
   botConversationConfigSchema

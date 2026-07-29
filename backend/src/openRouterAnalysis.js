@@ -5,6 +5,7 @@ import {
   SYSTEM_JSON_ONLY,
   buildFeedbackAnalysisUserPrompt,
   buildServiceHintResolveUserPrompt,
+  buildSummaryReportUserPrompt,
   buildVoiceRatingUserPrompt,
 } from "./openRouterPrompts.js";
 
@@ -422,6 +423,111 @@ export async function analyzePatientFeedback(input, options = {}) {
   });
 
   return result;
+}
+
+/**
+ * Synthesize many individual negative-sentiment feedback `aiSummary` texts into one complaint
+ * rollup narrative for a department/service over a period. Returns a canned message (no API
+ * call) when there are no negative summaries to synthesize.
+ *
+ * @param {{
+ *   groupLabel: string;
+ *   periodLabel: string;
+ *   stats: {
+ *     sentimentCounts: { positive: number; neutral: number; negative: number };
+ *     urgencyCounts: { low: number; medium: number; high: number };
+ *     topTopics: { topic: string; count: number }[];
+ *   };
+ *   summaries: string[];
+ * }} params
+ * @returns {Promise<string>} narrative text
+ */
+export async function synthesizeSummaryReport({ groupLabel, periodLabel, stats, summaries }) {
+  if (!summaries.length) {
+    return "No negative feedback in this period.";
+  }
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    // eslint-disable-next-line no-console
+    console.log("[openrouter] summary-report synthesis skipped (OPENROUTER_API_KEY not set)");
+    return "";
+  }
+
+  const model = getModel();
+  const userContent = buildSummaryReportUserPrompt({
+    groupLabel: String(groupLabel || "").slice(0, 120),
+    periodLabel: String(periodLabel || "").slice(0, 60),
+    sentimentCounts: stats.sentimentCounts,
+    urgencyCounts: stats.urgencyCounts,
+    topTopics: stats.topTopics,
+    summaries,
+  });
+
+  // eslint-disable-next-line no-console
+  console.log("[openrouter] summary-report request", {
+    groupLabel,
+    periodLabel,
+    model,
+    summaryCount: summaries.length,
+  });
+
+  const requestBody = JSON.stringify({
+    model,
+    messages: [
+      { role: "system", content: SYSTEM_JSON_ONLY },
+      { role: "user", content: userContent },
+    ],
+    temperature: 0.3,
+    max_tokens: 400,
+  });
+
+  let parsed = null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(OPENROUTER_URL, {
+        method: "POST",
+        headers: openRouterHeaders(apiKey),
+        body: requestBody,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        throw new Error(`OpenRouter HTTP ${response.status}: ${errText.slice(0, 500)}`);
+      }
+
+      const data = await response.json();
+      const raw = data.choices?.[0]?.message?.content?.trim();
+      if (!raw) {
+        throw new Error("Empty OpenRouter completion");
+      }
+
+      parsed = parseModelJson(raw, { feedbackId: `summary-report:${groupLabel}` });
+      break;
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2) {
+        // eslint-disable-next-line no-console
+        console.warn("[openrouter] summary-report attempt failed, retrying", {
+          groupLabel,
+          attempt,
+          message: err?.message || String(err),
+        });
+      }
+    }
+  }
+
+  if (!parsed) {
+    // eslint-disable-next-line no-console
+    console.error("[openrouter] summary-report synthesis failed", {
+      groupLabel,
+      message: lastError?.message || String(lastError),
+    });
+    return "";
+  }
+
+  return String(parsed.narrative || "").trim().slice(0, 1500);
 }
 
 /**

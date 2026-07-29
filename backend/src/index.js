@@ -20,6 +20,12 @@ import {
   resolveServiceHeuristic,
 } from "./feedbackIssueProcessing.js";
 import { sanitizeOptionalLabel } from "./fieldSanitize.js";
+import {
+  analyticsDepartmentFromFeedback,
+  analyticsSlicesFromFeedback,
+  bumpCount,
+  counterToSortedList,
+} from "./feedbackSlices.js";
 import { combineFeedbackTextForAi } from "./feedbackText.js";
 import { filterAiTopicsForTranscript } from "./aiTopicsFilter.js";
 import {
@@ -32,6 +38,7 @@ import {
   Department,
   Feedback,
   RoutingService,
+  SummaryReport,
   User,
   mongoose,
 } from "./models.js";
@@ -48,8 +55,12 @@ import {
 } from "./botConversation.js";
 import { createPendingAiWorker } from "./pendingAiWorker.js";
 import { buildFeedbackInsightsFilter } from "./insightsFeedbackQuery.js";
+import { createSummaryReportWorker } from "./summaryReportScheduler.js";
+import { generateSummaryReports } from "./summaryReportBuilder.js";
+import { currentPeriodKey, periodRangeForKey } from "./reportPeriods.js";
 
 let pendingAiWorker = null;
+let summaryReportWorker = null;
 
 dotenv.config();
 
@@ -2433,42 +2444,6 @@ app.get("/api/feedback/:id", async (req, res) => {
   }
 });
 
-/** EMR/UHID department for analytics — prefer frozen lookup value. */
-function analyticsDepartmentFromFeedback(item, issue) {
-  return sanitizeOptionalLabel(
-    item.lookupDepartment || issue?.department || item.department
-  );
-}
-
-function analyticsSlicesFromFeedback(item) {
-  const sentiment = item.aiSentiment;
-  if (!["positive", "neutral", "negative"].includes(sentiment)) return [];
-
-  const lookupDept = analyticsDepartmentFromFeedback(item);
-  const issueRows =
-    Array.isArray(item.feedbackIssues) && item.feedbackIssues.length > 0
-      ? item.feedbackIssues
-      : [{ department: lookupDept, recommendedService: item.service }];
-
-  return issueRows.map((issue) => ({
-    department: analyticsDepartmentFromFeedback(item, issue),
-    service: sanitizeOptionalLabel(issue.recommendedService || item.service),
-    sentiment,
-  }));
-}
-
-function bumpCount(counter, key) {
-  const k = sanitizeOptionalLabel(key);
-  if (!k) return;
-  counter[k] = (counter[k] || 0) + 1;
-}
-
-function counterToSortedList(counter, keyName) {
-  return Object.entries(counter)
-    .map(([name, count]) => ({ [keyName]: name, count }))
-    .sort((a, b) => b.count - a.count);
-}
-
 app.get("/api/analytics", async (_req, res) => {
   try {
     const rows = await Feedback.find().lean();
@@ -2547,6 +2522,117 @@ app.get("/api/analytics", async (_req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ message: "Failed to build analytics" });
+  }
+});
+
+function shapeSummaryReportRow(row) {
+  return {
+    groupName: row.groupName,
+    feedbackCount: row.feedbackCount,
+    sentimentCounts: row.sentimentCounts,
+    averageRating: row.averageRating,
+    urgencyCounts: row.urgencyCounts,
+    topTopics: row.topTopics,
+    narrative: row.narrative,
+    sourceSummaryCount: row.sourceSummaryCount,
+    generatedAt: row.generatedAt,
+  };
+}
+
+async function loadSummaryReportResponse(periodType, periodKey) {
+  const range = periodRangeForKey(periodType, periodKey);
+  const rows = await SummaryReport.find({ periodType, periodKey }).lean();
+  const departments = rows
+    .filter((r) => r.groupType === "department")
+    .sort((a, b) => b.feedbackCount - a.feedbackCount)
+    .map(shapeSummaryReportRow);
+  const services = rows
+    .filter((r) => r.groupType === "service")
+    .sort((a, b) => b.feedbackCount - a.feedbackCount)
+    .map(shapeSummaryReportRow);
+
+  return {
+    periodType,
+    periodKey,
+    periodStart: range?.start ?? null,
+    periodEnd: range?.end ?? null,
+    departments,
+    services,
+  };
+}
+
+app.get("/api/summary-reports/periods", async (req, res) => {
+  try {
+    const periodType = req.query.periodType === "monthly" ? "monthly" : "weekly";
+    const grouped = await SummaryReport.aggregate([
+      { $match: { periodType } },
+      {
+        $group: {
+          _id: "$periodKey",
+          periodStart: { $first: "$periodStart" },
+          periodEnd: { $first: "$periodEnd" },
+          generatedAt: { $max: "$generatedAt" },
+        },
+      },
+      { $sort: { _id: -1 } },
+    ]);
+
+    const periods = grouped.map((g) => ({
+      periodKey: g._id,
+      periodStart: g.periodStart,
+      periodEnd: g.periodEnd,
+      generatedAt: g.generatedAt,
+    }));
+
+    const currentKey = currentPeriodKey(periodType);
+    if (!periods.some((p) => p.periodKey === currentKey)) {
+      const range = periodRangeForKey(periodType, currentKey);
+      periods.unshift({
+        periodKey: currentKey,
+        periodStart: range?.start ?? null,
+        periodEnd: range?.end ?? null,
+        generatedAt: null,
+      });
+    }
+
+    return res.json({ periodType, periods });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to list summary report periods" });
+  }
+});
+
+app.get("/api/summary-reports", async (req, res) => {
+  try {
+    const periodType = req.query.periodType === "monthly" ? "monthly" : "weekly";
+    const periodKey = String(req.query.periodKey || currentPeriodKey(periodType)).trim();
+    if (!periodRangeForKey(periodType, periodKey)) {
+      return res.status(400).json({ message: "Invalid periodKey for periodType" });
+    }
+    return res.json(await loadSummaryReportResponse(periodType, periodKey));
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to load summary report" });
+  }
+});
+
+app.post("/api/summary-reports/generate", async (req, res) => {
+  try {
+    const periodType = req.body.periodType === "monthly" ? "monthly" : "weekly";
+    const periodKey = String(req.body.periodKey || currentPeriodKey(periodType)).trim();
+    const range = periodRangeForKey(periodType, periodKey);
+    if (!range) {
+      return res.status(400).json({ message: "Invalid periodKey for periodType" });
+    }
+
+    await generateSummaryReports({
+      periodType,
+      periodKey,
+      periodStart: range.start,
+      periodEnd: range.end,
+    });
+
+    return res.json(await loadSummaryReportResponse(periodType, periodKey));
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to generate summary report" });
   }
 });
 
@@ -2741,6 +2827,11 @@ async function startServer() {
       isEnabled: () => Boolean(process.env.OPENROUTER_API_KEY?.trim()),
     });
     pendingAiWorker.start();
+
+    summaryReportWorker = createSummaryReportWorker({
+      isEnabled: () => Boolean(process.env.OPENROUTER_API_KEY?.trim()),
+    });
+    summaryReportWorker.start();
 
     const server = app.listen(PORT, () => {
       // eslint-disable-next-line no-console
