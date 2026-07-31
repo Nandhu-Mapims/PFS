@@ -22,49 +22,80 @@ function topicMatchesIssueText(topic, issueText) {
 }
 
 /**
- * Scope doc-level aiTopics to the issue(s) whose own issueSummary text mentions them — a
- * multi-issue submission (e.g. one complaint about food, another about housekeeping) should not
- * have every topic attributed to every issue's department/service. A topic matching no issue text
- * (paraphrase mismatch) is kept on all issues rather than dropped.
+ * Scope a row's stored aiTopics (which may cover a whole multi-issue conversation) down to the
+ * topics that plausibly belong to one specific issue's own text. A topic matching no issue text
+ * (paraphrase mismatch) is kept rather than dropped.
  */
-function topicsPerIssue(topics, issues) {
+function topicsForIssueText(topics, issueText, isMultiIssue) {
   const all = Array.isArray(topics) ? topics.filter(Boolean) : [];
-  if (!all.length || issues.length <= 1) return issues.map(() => all);
-  return issues.map((issue) => {
-    const matched = all.filter((t) => topicMatchesIssueText(t, issue.issueSummary));
-    return matched.length ? matched : all;
-  });
+  if (!all.length || !isMultiIssue) return all;
+  const matched = all.filter((t) => topicMatchesIssueText(t, issueText));
+  return matched.length ? matched : all;
 }
 
-/** One slice per issue (or the whole row when it has no feedbackIssues[]). */
+function sentimentOrFallback(sentiment, fallback) {
+  return ["positive", "neutral", "negative"].includes(sentiment) ? sentiment : fallback;
+}
+
+/** True once an issue is ticket-worthy — i.e. it gets materialized as its own split-child row
+ * (see materializeMissingSplitChildrenForParent / applyPendingAiToFeedback in index.js). */
+function issueGetsOwnRow(sentiment) {
+  return sentiment === "negative" || sentiment === "neutral";
+}
+
+/**
+ * One analytics slice per *logical issue*, deduplicated across however many Feedback documents a
+ * multi-issue submission produced.
+ *
+ * A multi-issue bot/voice session becomes one parent row (representing its first issue) plus one
+ * split-child row per ticket-worthy (negative/neutral) issue after it. Every row — parent or
+ * child — carries the *entire* session's feedbackIssues[] for ticket bookkeeping, so fanning out
+ * over that array on every row would recount the same issue once per row it appears on (an N²
+ * blow-up for an N-issue session, cross-attributing e.g. a bathroom complaint onto a Transport
+ * ticket). Instead:
+ *  - a split-child row always represents exactly its own top-level fields (one slice).
+ *  - a non-split row represents its own top-level fields (issue 0) plus any *positive* sibling
+ *    issues, which never get a row of their own and would otherwise vanish from analytics.
+ */
 export function analyticsSlicesFromFeedback(item) {
   const docSentiment = item.aiSentiment;
   if (!["positive", "neutral", "negative"].includes(docSentiment)) return [];
 
-  const lookupDept = analyticsDepartmentFromFeedback(item);
-  const hasIssues = Array.isArray(item.feedbackIssues) && item.feedbackIssues.length > 0;
-  const issueRows = hasIssues
-    ? item.feedbackIssues
-    : [
-        {
-          department: lookupDept,
-          recommendedService: item.service,
-          issueSummary: item.aiSummary || "",
-          sentiment: docSentiment,
-        },
-      ];
+  const allIssues = Array.isArray(item.feedbackIssues) ? item.feedbackIssues : [];
+  const isMultiIssue = allIssues.length > 1;
 
-  const topicsByIssue = topicsPerIssue(item.aiTopics, issueRows);
+  // For a non-split multi-issue row, item.aiSummary is the *overall* session summary (may
+  // reference every topic discussed) — prefer issue 0's own scoped issueSummary instead. A
+  // split-child row's aiSummary was already set to its own issue's issueSummary at creation.
+  const ownIssueSummary =
+    (isMultiIssue && !item.isSplitChild ? allIssues[0]?.issueSummary : "") ||
+    item.aiSummary ||
+    "";
 
-  return issueRows.map((issue, idx) => ({
-    department: analyticsDepartmentFromFeedback(item, issue),
-    service: sanitizeOptionalLabel(issue.recommendedService || item.service),
-    sentiment: ["positive", "neutral", "negative"].includes(issue.sentiment)
-      ? issue.sentiment
-      : docSentiment,
-    issueSummary: String(issue.issueSummary || "").trim(),
-    topics: topicsByIssue[idx],
-  }));
+  const ownSlice = {
+    department: analyticsDepartmentFromFeedback(item),
+    service: sanitizeOptionalLabel(item.service),
+    sentiment: docSentiment,
+    issueSummary: String(ownIssueSummary).trim(),
+    topics: topicsForIssueText(item.aiTopics, ownIssueSummary, isMultiIssue),
+  };
+
+  if (item.isSplitChild || !isMultiIssue) {
+    return [ownSlice];
+  }
+
+  const siblingSlices = allIssues
+    .slice(1)
+    .filter((issue) => !issueGetsOwnRow(sentimentOrFallback(issue?.sentiment, docSentiment)))
+    .map((issue) => ({
+      department: analyticsDepartmentFromFeedback(item, issue),
+      service: sanitizeOptionalLabel(issue.recommendedService || item.service),
+      sentiment: sentimentOrFallback(issue?.sentiment, docSentiment),
+      issueSummary: String(issue.issueSummary || "").trim(),
+      topics: topicsForIssueText(item.aiTopics, issue.issueSummary, true),
+    }));
+
+  return [ownSlice, ...siblingSlices];
 }
 
 export function bumpCount(counter, key) {

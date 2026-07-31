@@ -323,7 +323,6 @@ async function materializeMissingSplitChildrenForParent(parentRow) {
   const visitDepartment = sanitizeOptionalLabel(
     parentRow.lookupDepartment || parentRow.department
   );
-  const recommendedService = sanitizeOptionalLabel(parentRow.service);
   let created = 0;
 
   const base = {
@@ -380,7 +379,9 @@ async function materializeMissingSplitChildrenForParent(parentRow) {
       ...base,
       aiSentiment: issueSentiment,
       department: issue.department || visitDepartment,
-      service: issue.recommendedService || recommendedService,
+      /** `issue.recommendedService` was already catalog-validated at analysis time (normalizeIssueFromAi);
+       * never fall back to parentRow.service — that's a *different* issue's (issue 0's) resolved value. */
+      service: sanitizeOptionalLabel(issue.recommendedService),
       comments: String(parentRow.comments || "").trim(),
       aiSummary: issue.issueSummary,
       aiTopics: childTopics,
@@ -1553,10 +1554,17 @@ async function applyPendingAiToFeedback({
     if (!n || !serviceCatalog.length) return "";
     return resolveServiceFromAi(n, serviceCatalog) ? n : "";
   };
-  const recommendedService =
-    pickCatalogService(primaryIssue?.recommendedService) ||
+  /**
+   * Each issue resolves its own service independently — a sibling issue's resolved value must
+   * never be used as another issue's fallback (e.g. a "transport wait" issue's service leaking
+   * onto an unrelated "doctor delay" issue just because the latter's own recommendation didn't
+   * match the catalog).
+   */
+  const resolveServiceForIssue = (issue) =>
+    pickCatalogService(issue?.recommendedService) ||
     pickCatalogService(ai.recommendedService) ||
     pickCatalogService(normalizedService);
+  const recommendedService = resolveServiceForIssue(primaryIssue);
   let primarySentiment =
     aiSentimentOnly(primaryIssue?.sentiment) || aiSentimentOnly(ai.sentiment);
   if (!primarySentiment) {
@@ -1701,7 +1709,7 @@ async function applyPendingAiToFeedback({
         ...base,
         aiSentiment: issueSentiment,
         department: issue.department || visitDepartment,
-        service: issue.recommendedService || recommendedService,
+        service: resolveServiceForIssue(issue),
         comments: String(comments || "").trim(),
         aiSummary: issue.issueSummary,
         aiTopics: childTopics,
