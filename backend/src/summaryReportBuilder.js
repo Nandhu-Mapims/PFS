@@ -10,6 +10,10 @@ function emptyGroup() {
     feedbackCount: 0,
     sentimentCounts: { positive: 0, neutral: 0, negative: 0 },
     docIds: new Set(),
+    topicCounts: new Map(),
+    negativeTopicCounts: new Map(),
+    /** Per-issue negative text (not the whole doc's aiSummary) — see analyticsSlicesFromFeedback. */
+    negativeCandidates: [],
   };
 }
 
@@ -18,15 +22,21 @@ function bumpSentiment(group, sentiment) {
   if (group.sentimentCounts[sentiment] != null) group.sentimentCounts[sentiment] += 1;
 }
 
+/** Folds one issue-slice's topics into the group, scoped to that issue only (see topicsPerIssue). */
+function bumpTopics(group, topics, sentiment) {
+  const isNegative = sentiment === "negative";
+  for (const topic of topics || []) {
+    const key = String(topic).trim();
+    if (!key) continue;
+    group.topicCounts.set(key, (group.topicCounts.get(key) || 0) + 1);
+    if (isNegative) group.negativeTopicCounts.set(key, (group.negativeTopicCounts.get(key) || 0) + 1);
+  }
+}
+
 function periodLabelFor(periodType, periodKey) {
   return periodType === "weekly" ? `Week of ${periodKey}` : periodKey;
 }
 
-/**
- * Doc-level stats (urgency/rating/topics) for a group, deduped by feedback _id — covers all
- * sentiments for full-picture context. `negativeSummaries` (the narrative input) is filtered to
- * negative-sentiment feedback only, most recent first.
- */
 function topTopicsFromCounts(topicCounts) {
   return [...topicCounts.entries()]
     .map(([topic, count]) => ({ topic, count }))
@@ -34,13 +44,15 @@ function topTopicsFromCounts(topicCounts) {
     .slice(0, MAX_TOPICS_PER_GROUP);
 }
 
+/**
+ * Urgency/rating are doc-level fields (no per-issue equivalent), so those are still deduped by
+ * feedback _id. Topics and negative-summary text come from the group's accumulated issue-slices
+ * (see bumpTopics / negativeCandidates), not recomputed from the whole document here.
+ */
 function docStats(group, rowsById) {
   const urgencyCounts = { low: 0, medium: 0, high: 0 };
-  const topicCounts = new Map();
-  const negativeTopicCounts = new Map();
   let ratingSum = 0;
   let ratingCount = 0;
-  const negativeCandidates = [];
 
   for (const id of group.docIds) {
     const row = rowsById.get(id);
@@ -50,20 +62,9 @@ function docStats(group, rowsById) {
       ratingSum += row.rating;
       ratingCount += 1;
     }
-    const isNegative = row.aiSentiment === "negative";
-    for (const topic of row.aiTopics || []) {
-      const key = String(topic).trim();
-      if (!key) continue;
-      topicCounts.set(key, (topicCounts.get(key) || 0) + 1);
-      if (isNegative) negativeTopicCounts.set(key, (negativeTopicCounts.get(key) || 0) + 1);
-    }
-    const text = String(row.aiSummary || "").trim();
-    if (text && isNegative) {
-      negativeCandidates.push({ text, createdAt: row.createdAt });
-    }
   }
 
-  const orderedNegativeSummaries = [...negativeCandidates].sort(
+  const orderedNegativeSummaries = [...group.negativeCandidates].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 
@@ -71,9 +72,9 @@ function docStats(group, rowsById) {
     averageRating: ratingCount ? Number((ratingSum / ratingCount).toFixed(1)) : 0,
     urgencyCounts,
     /** All-sentiment topics — stored/displayed for full-picture context. */
-    topTopics: topTopicsFromCounts(topicCounts),
+    topTopics: topTopicsFromCounts(group.topicCounts),
     /** Negative-only topics — fed to the narrative prompt so it can't reference praise topics. */
-    negativeTopTopics: topTopicsFromCounts(negativeTopicCounts),
+    negativeTopTopics: topTopicsFromCounts(group.negativeTopicCounts),
     allNegativeSummaries: orderedNegativeSummaries,
     cappedNegativeSummaries: orderedNegativeSummaries
       .slice(0, MAX_SUMMARIES_PER_GROUP)
@@ -98,16 +99,26 @@ export async function generateSummaryReports({ periodType, periodKey, periodStar
   for (const row of rows) {
     const id = String(row._id);
     for (const slice of analyticsSlicesFromFeedback(row)) {
+      const negativeText = slice.issueSummary || String(row.aiSummary || "").trim();
+
       if (slice.department) {
         const g = deptGroups.get(slice.department) || emptyGroup();
         bumpSentiment(g, slice.sentiment);
+        bumpTopics(g, slice.topics, slice.sentiment);
         g.docIds.add(id);
+        if (slice.sentiment === "negative" && negativeText) {
+          g.negativeCandidates.push({ text: negativeText, createdAt: row.createdAt });
+        }
         deptGroups.set(slice.department, g);
       }
       if (slice.service) {
         const g = svcGroups.get(slice.service) || emptyGroup();
         bumpSentiment(g, slice.sentiment);
+        bumpTopics(g, slice.topics, slice.sentiment);
         g.docIds.add(id);
+        if (slice.sentiment === "negative" && negativeText) {
+          g.negativeCandidates.push({ text: negativeText, createdAt: row.createdAt });
+        }
         svcGroups.set(slice.service, g);
       }
     }
