@@ -8,6 +8,7 @@ import {
 import {
   feedbackCacheKey,
   getFeedbackCache,
+  hydrateFeedbackCache,
   patchFeedbackCache,
   setFeedbackCache,
 } from "../../lib/feedbackCache";
@@ -115,7 +116,24 @@ export function useInsightsData() {
       void loadData({ silent: true, incremental: true });
       return;
     }
-    void loadData();
+
+    // Memory misses on a fresh page load. Check the persistent cache before
+    // falling back to a full download; a hit turns this into an incremental sync.
+    let cancelled = false;
+    void (async () => {
+      const restored = await hydrateFeedbackCache(cacheKey);
+      if (cancelled) return;
+      if (restored) {
+        setItems(restored.items);
+        setIsLoading(false);
+        void loadData({ silent: true, incremental: true });
+      } else {
+        void loadData();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [cacheKey, loadData]);
 
   const filteredByPeriod = useMemo(

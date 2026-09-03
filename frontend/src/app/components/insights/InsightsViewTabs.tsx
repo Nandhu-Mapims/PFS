@@ -1,4 +1,4 @@
-import { BarChart2, ClipboardList, FileText, TrendingUp } from "lucide-react";
+import { BarChart2, ClipboardList, FileText, LayoutDashboard, TrendingUp } from "lucide-react";
 import { NavLink } from "react-router";
 
 function tabClass({ isActive }: { isActive: boolean }) {
@@ -10,6 +10,7 @@ function tabClass({ isActive }: { isActive: boolean }) {
 }
 
 export function InsightsViewTabs({ basePath }: { basePath: string }) {
+  const overviewPath = `${basePath}/overview`;
   const submissionsPath = `${basePath}/submissions`;
   const ticketsPath = `${basePath}/tickets`;
   const sentimentPath = `${basePath}/sentiment`;
@@ -17,10 +18,14 @@ export function InsightsViewTabs({ basePath }: { basePath: string }) {
 
   return (
     <div
-      className="grid w-full grid-cols-4 rounded-xl border border-gray-200 bg-gray-50 p-1"
+      className="grid w-full grid-cols-5 rounded-xl border border-gray-200 bg-gray-50 p-1"
       role="tablist"
       aria-label="Insights views"
     >
+      <NavLink to={overviewPath} className={tabClass}>
+        <LayoutDashboard size={16} className="shrink-0" />
+        Management
+      </NavLink>
       <NavLink to={submissionsPath} className={tabClass} end>
         <TrendingUp size={16} className="shrink-0" />
         Submissions

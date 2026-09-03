@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { CATEGORICAL_PALETTE, SENTIMENT_COLORS, colorsForKeys } from "../../lib/chartPalette";
 import {
   Bar,
   BarChart,
@@ -7,8 +8,6 @@ import {
   Legend,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -46,7 +45,9 @@ import { InsightsKpiDetailDialog } from "./InsightsKpiDetailDialog";
 import { matchesFollowUp, THEME_RULES, type InsightsKpiKind, type SubmissionChartFilter, type SubmissionSelection } from "./insightsKpiDetail";
 import type { InsightsDataState } from "./useInsightsData";
 
-const DEPT_COLORS = ["#2A6FDB", "#2FBF71", "#8B5CF6", "#F4A261", "#E5533D", "#6B7280"];
+// Colour comes from the shared, validated chart palette (see chartPalette.ts) --
+// keyed to the department name so an entity keeps its colour across re-sorts
+// and date-range changes, rather than to its position in the current array.
 const CHART_CARD = "rounded-2xl shadow-sm border border-gray-100 transition-shadow hover:shadow-md hover:border-blue-200";
 
 type VolumePoint = { key: string; label: string; count: number };
@@ -151,14 +152,11 @@ export function SubmissionTrendsDashboard({
       if (!key) continue;
       byDept[key] = (byDept[key] || 0) + 1;
     }
-    return Object.entries(byDept)
+    const top = Object.entries(byDept)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([name, value], index) => ({
-        name,
-        value,
-        color: DEPT_COLORS[index % DEPT_COLORS.length],
-      }));
+      .slice(0, 6);
+    const colors = colorsForKeys(top.map(([name]) => name));
+    return top.map(([name, value]) => ({ name, value, color: colors[name] }));
   }, [submissionRows]);
 
   /** Where AI routed each complaint (can differ from visit dept — e.g. House Keeping for bathroom). */
@@ -177,14 +175,11 @@ export function SubmissionTrendsDashboard({
         }
       }
     }
-    return Object.entries(byDept)
+    const top = Object.entries(byDept)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([name, value], index) => ({
-        name,
-        value,
-        color: DEPT_COLORS[index % DEPT_COLORS.length],
-      }));
+      .slice(0, 6);
+    const colors = colorsForKeys(top.map(([name]) => name));
+    return top.map(([name, value]) => ({ name, value, color: colors[name] }));
   }, [submissionRows]);
 
   const categoryData = useMemo(() => {
@@ -442,7 +437,7 @@ export function SubmissionTrendsDashboard({
                   <Legend />
                   <Bar
                     dataKey="positive"
-                    fill="#10b981"
+                    fill={SENTIMENT_COLORS.positive}
                     name="Positive"
                     stackId="mix"
                     cursor="pointer"
@@ -456,7 +451,7 @@ export function SubmissionTrendsDashboard({
                   />
                   <Bar
                     dataKey="negative"
-                    fill="#ef4444"
+                    fill={SENTIMENT_COLORS.negative}
                     name="Negative"
                     stackId="mix"
                     radius={[0, 6, 6, 0]}
@@ -511,7 +506,7 @@ export function SubmissionTrendsDashboard({
                     <Legend />
                     <Bar
                       dataKey="positive"
-                      fill="#10b981"
+                      fill={SENTIMENT_COLORS.positive}
                       name="Positive"
                       stackId="t"
                       cursor="pointer"
@@ -525,7 +520,7 @@ export function SubmissionTrendsDashboard({
                     />
                     <Bar
                       dataKey="neutral"
-                      fill="#f59e0b"
+                      fill={SENTIMENT_COLORS.neutral}
                       name="Neutral"
                       stackId="t"
                       cursor="pointer"
@@ -539,7 +534,7 @@ export function SubmissionTrendsDashboard({
                     />
                     <Bar
                       dataKey="negative"
-                      fill="#ef4444"
+                      fill={SENTIMENT_COLORS.negative}
                       name="Negative"
                       stackId="t"
                       radius={[6, 6, 0, 0]}
@@ -578,7 +573,7 @@ export function SubmissionTrendsDashboard({
                     <Tooltip />
                     <Bar
                       dataKey="count"
-                      fill="#8B5CF6"
+                      fill={CATEGORICAL_PALETTE[0]}
                       name="Submissions"
                       radius={[4, 4, 0, 0]}
                       cursor="pointer"
@@ -605,29 +600,30 @@ export function SubmissionTrendsDashboard({
                   No EMR visit department on submissions in this period.
                 </p>
               ) : (
-                <ResponsiveContainer width="100%" height={280}>
-                  <PieChart>
-                    <Pie
-                      data={departmentVolume}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) =>
-                        `${name} ${((percent ?? 0) * 100).toFixed(0)}%`
-                      }
-                      outerRadius={90}
+                <ResponsiveContainer width="100%" height={Math.max(220, departmentVolume.length * 40)}>
+                  <BarChart
+                    data={departmentVolume}
+                    layout="vertical"
+                    margin={{ left: 8, right: 24, top: 8, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
+                    <XAxis type="number" allowDecimals={false} />
+                    <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11 }} />
+                    <Tooltip formatter={(value: number) => [`${value} submission(s)`, "Count"]} />
+                    <Bar
                       dataKey="value"
+                      radius={[0, 4, 4, 0]}
                       cursor="pointer"
                       onClick={(d) => {
-                        if (d?.name) openChart({ type: "visit-department", name: String(d.name) });
+                        const name = (d.payload as { name?: string })?.name;
+                        if (name) openChart({ type: "visit-department", name });
                       }}
                     >
                       {departmentVolume.map((entry) => (
                         <Cell key={entry.name} fill={entry.color} />
                       ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
+                    </Bar>
+                  </BarChart>
                 </ResponsiveContainer>
               )}
             </CardContent>
@@ -645,29 +641,33 @@ export function SubmissionTrendsDashboard({
                   No AI routing departments in this period.
                 </p>
               ) : (
-                <ResponsiveContainer width="100%" height={280}>
-                  <PieChart>
-                    <Pie
-                      data={routingDepartmentVolume}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) =>
-                        `${name} ${((percent ?? 0) * 100).toFixed(0)}%`
-                      }
-                      outerRadius={90}
+                <ResponsiveContainer
+                  width="100%"
+                  height={Math.max(220, routingDepartmentVolume.length * 40)}
+                >
+                  <BarChart
+                    data={routingDepartmentVolume}
+                    layout="vertical"
+                    margin={{ left: 8, right: 24, top: 8, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
+                    <XAxis type="number" allowDecimals={false} />
+                    <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11 }} />
+                    <Tooltip formatter={(value: number) => [`${value} complaint(s)`, "Count"]} />
+                    <Bar
                       dataKey="value"
+                      radius={[0, 4, 4, 0]}
                       cursor="pointer"
                       onClick={(d) => {
-                        if (d?.name) openChart({ type: "routing-department", name: String(d.name) });
+                        const name = (d.payload as { name?: string })?.name;
+                        if (name) openChart({ type: "routing-department", name });
                       }}
                     >
                       {routingDepartmentVolume.map((entry) => (
                         <Cell key={entry.name} fill={entry.color} />
                       ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
+                    </Bar>
+                  </BarChart>
                 </ResponsiveContainer>
               )}
             </CardContent>
@@ -691,7 +691,7 @@ export function SubmissionTrendsDashboard({
                 <Tooltip />
                 <Bar
                   dataKey="count"
-                  fill="#2563eb"
+                  fill={CATEGORICAL_PALETTE[0]}
                   radius={[0, 8, 8, 0]}
                   cursor="pointer"
                   onClick={(d) => {
@@ -751,7 +751,7 @@ function TrendLineCard({
               <Line
                 type="monotone"
                 dataKey="count"
-                stroke="#2563eb"
+                stroke={CATEGORICAL_PALETTE[0]}
                 strokeWidth={3}
                 name="Submissions"
                 dot={(props) => {
@@ -766,7 +766,7 @@ function TrendLineCard({
                       cx={cx}
                       cy={cy}
                       r={payload.count > 0 ? 5 : 3}
-                      fill="#2563eb"
+                      fill={CATEGORICAL_PALETTE[0]}
                       style={{ cursor: payload.count > 0 ? "pointer" : "default" }}
                       onClick={() => onPointClick?.(payload)}
                     />

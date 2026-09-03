@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import cors from "cors";
 import dotenv from "dotenv";
 import multer from "multer";
@@ -19,7 +20,7 @@ import {
   newSubmissionGroupId,
   resolveServiceHeuristic,
 } from "./feedbackIssueProcessing.js";
-import { sanitizeOptionalLabel } from "./fieldSanitize.js";
+import { sanitizeOptionalLabel, sanitizePatientName } from "./fieldSanitize.js";
 import {
   analyticsDepartmentFromFeedback,
   analyticsSlicesFromFeedback,
@@ -37,6 +38,7 @@ import {
   Branding,
   Department,
   Feedback,
+  Role,
   RoutingService,
   SummaryReport,
   User,
@@ -53,6 +55,27 @@ import {
   registerBotConversationRoutes,
   saveBotAnswerRecording,
 } from "./botConversation.js";
+import {
+  CAPABILITIES,
+  attachUser,
+  buildCorsOptions,
+  capabilitiesForRole,
+  requireAuth,
+  requireCapability,
+  signAuthToken,
+  userHasCapability,
+} from "./auth.js";
+import { ALL_CAPABILITIES, CAPABILITY_CATALOG } from "./capabilities.js";
+import {
+  SUPERADMIN_ROLE,
+  ensureRolesSeeded,
+  getCachedRole,
+  isKnownRole,
+  isProtectedRole,
+  listCachedRoles,
+  refreshRoleCache,
+  serializeRole,
+} from "./roles.js";
 import { createPendingAiWorker } from "./pendingAiWorker.js";
 import { buildFeedbackInsightsFilter } from "./insightsFeedbackQuery.js";
 import { createSummaryReportWorker } from "./summaryReportScheduler.js";
@@ -69,8 +92,15 @@ const PORT = process.env.PORT || 5000;
 const MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://localhost:27017/feedbacksystem";
 
-app.use(cors());
+// Feedback list responses are large JSON arrays (a 30-day insights window is
+// ~6.5 MB uncompressed, ~0.54 MB gzipped). Compress before anything else runs so
+// every route below benefits.
+app.use(compression());
+app.use(cors(buildCorsOptions()));
 app.use(express.json());
+// Decodes the bearer token when present. Routes opt in to enforcement with
+// requireAuth / requireCapability — the patient kiosk endpoints stay anonymous.
+app.use(attachUser);
 
 const speechUpload = multer({
   storage: multer.memoryStorage(),
@@ -245,7 +275,15 @@ async function enrichFeedbackWithGroupDonor(row) {
   return mergeRowWithGroupDonor(plain, attachVoicePlaybackUrl(donor));
 }
 
-async function enrichFeedbackListWithGroupDonor(rows) {
+/**
+ * Bot Q&A transcripts dominate a feedback document's size but are stripped from
+ * every list row by toFeedbackListRow. Excluding them in the query keeps them out
+ * of the Mongo→Node transfer entirely instead of paying for them and discarding
+ * them. Everything else is kept, so list output is byte-identical.
+ */
+const LITE_LIST_PROJECTION = "-botConversationAnswers";
+
+async function enrichFeedbackListWithGroupDonor(rows, { lite = false } = {}) {
   const plainRows = rows.map((row) => attachVoicePlaybackUrl(row));
   const groupIds = new Set();
   for (const row of plainRows) {
@@ -257,12 +295,14 @@ async function enrichFeedbackListWithGroupDonor(rows) {
     return plainRows;
   }
 
-  const donors = await Feedback.find({
+  const donorQuery = Feedback.find({
     submissionGroupId: { $in: [...groupIds] },
     isSplitChild: { $ne: true },
-  })
-    .sort({ _id: 1 })
-    .lean();
+  }).sort({ _id: 1 });
+  // The donor only contributes comments/submissionMode to a lite row — its bot
+  // answers would be stripped by toFeedbackListRow anyway.
+  if (lite) donorQuery.select(LITE_LIST_PROJECTION);
+  const donors = await donorQuery.lean();
 
   const donorByGroup = new Map();
   for (const donor of donors) {
@@ -461,8 +501,18 @@ async function ensureDefaults() {
 /** Backfill voice path on split rows when parent already has audio (e.g. upload before AI split). */
 /** Mongoose used to default clientSubmissionId to null — only one row could exist per unique sparse index. */
 async function repairClientSubmissionIds() {
+  // `{ clientSubmissionId: null }` also matches documents where the field is
+  // ABSENT, so the previous filter re-matched every already-repaired row and
+  // rewrote it on each boot. That bumped updatedAt on thousands of documents,
+  // which made the client's incremental sync (sinceMs vs updatedAt) re-download
+  // the whole window after every restart. $type:"null" matches real nulls only.
   const cleared = await Feedback.updateMany(
-    { $or: [{ clientSubmissionId: null }, { clientSubmissionId: "" }] },
+    {
+      $or: [
+        { clientSubmissionId: { $type: "null" } },
+        { clientSubmissionId: "" },
+      ],
+    },
     { $unset: { clientSubmissionId: "" } }
   );
   if (cleared.modifiedCount > 0) {
@@ -618,15 +668,22 @@ app.post("/api/auth/login", async (req, res) => {
       departmentName: dept?.name || null,
       serviceId: svc?._id ? String(svc._id) : user.serviceId ? String(user.serviceId) : null,
       serviceName: svc?.name || null,
+      // The client sends this back as `Authorization: Bearer <token>`. Roles in
+      // localStorage are advisory only — the server re-derives them from here.
+      token: signAuthToken(user),
+      capabilities: capabilitiesForRole(user.role),
     });
   } catch (error) {
     return res.status(500).json({ message: "Login failed" });
   }
 });
 
-app.post("/api/auth/change-password", async (req, res) => {
+app.post("/api/auth/change-password", requireAuth, async (req, res) => {
   try {
-    const { userId, currentPassword, newPassword } = req.body;
+    const { currentPassword, newPassword } = req.body;
+    // Always the authenticated user — a client-supplied userId could target
+    // someone else's account.
+    const userId = req.user.id;
     if (!mongoose.Types.ObjectId.isValid(String(userId || ""))) {
       return res.status(400).json({ message: "Invalid user" });
     }
@@ -641,8 +698,8 @@ app.post("/api/auth/change-password", async (req, res) => {
     }
 
     const user = await User.findById(userId).select("passwordHash role");
-    if (!user || user.role !== "hod") {
-      return res.status(404).json({ message: "HOD user not found" });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
     }
     if (!(await bcrypt.compare(String(currentPassword), user.passwordHash))) {
       return res.status(401).json({ message: "Current password is incorrect" });
@@ -906,7 +963,7 @@ async function listHospitalDepartmentsFromDb() {
   }));
 }
 
-app.get("/api/departments", async (_req, res) => {
+app.get("/api/departments", requireAuth, async (_req, res) => {
   try {
     return res.json(await listHospitalDepartmentsFromDb());
   } catch (error) {
@@ -948,7 +1005,7 @@ app.get("/api/hospital-departments", async (_req, res) => {
 });
 
 /** Routing catalog for AI / ticket routing (TMS + locally managed services). */
-app.get("/api/services", async (_req, res) => {
+app.get("/api/services", requireAuth, async (_req, res) => {
   try {
     return res.json(await listServiceCatalogForUi());
   } catch (error) {
@@ -956,7 +1013,7 @@ app.get("/api/services", async (_req, res) => {
   }
 });
 
-app.post("/api/services", async (req, res) => {
+app.post("/api/services", requireCapability(CAPABILITIES.SERVICES_MANAGE), async (req, res) => {
   try {
     const { name, description } = req.body;
     if (!name || !String(name).trim()) {
@@ -983,7 +1040,7 @@ app.post("/api/services", async (req, res) => {
   }
 });
 
-app.patch("/api/services/:id", async (req, res) => {
+app.patch("/api/services/:id", requireCapability(CAPABILITIES.SERVICES_MANAGE), async (req, res) => {
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -1037,7 +1094,7 @@ app.patch("/api/services/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/services/:id", async (req, res) => {
+app.delete("/api/services/:id", requireCapability(CAPABILITIES.SERVICES_MANAGE), async (req, res) => {
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -1053,7 +1110,7 @@ app.delete("/api/services/:id", async (req, res) => {
   }
 });
 
-app.post("/api/departments", async (req, res) => {
+app.post("/api/departments", requireCapability(CAPABILITIES.DEPARTMENTS_MANAGE), async (req, res) => {
   try {
     const { name, description, services } = req.body;
     if (!name || !String(name).trim()) {
@@ -1073,7 +1130,7 @@ app.post("/api/departments", async (req, res) => {
   }
 });
 
-app.post("/api/hospital-departments", async (req, res) => {
+app.post("/api/hospital-departments", requireCapability(CAPABILITIES.DEPARTMENTS_MANAGE), async (req, res) => {
   try {
     const { name, description, services } = req.body;
     if (!name || !String(name).trim()) {
@@ -1093,7 +1150,7 @@ app.post("/api/hospital-departments", async (req, res) => {
   }
 });
 
-app.delete("/api/departments/:id", async (req, res) => {
+app.delete("/api/departments/:id", requireCapability(CAPABILITIES.DEPARTMENTS_MANAGE), async (req, res) => {
   try {
     const deleted = await Department.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ message: "Not found" });
@@ -1103,7 +1160,7 @@ app.delete("/api/departments/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/hospital-departments/:id", async (req, res) => {
+app.delete("/api/hospital-departments/:id", requireCapability(CAPABILITIES.DEPARTMENTS_MANAGE), async (req, res) => {
   try {
     const deleted = await Department.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ message: "Not found" });
@@ -1113,7 +1170,7 @@ app.delete("/api/hospital-departments/:id", async (req, res) => {
   }
 });
 
-app.patch("/api/departments/:id", async (req, res) => {
+app.patch("/api/departments/:id", requireCapability(CAPABILITIES.DEPARTMENTS_MANAGE), async (req, res) => {
   try {
     const { name, description, services } = req.body;
     if (!name || !String(name).trim()) {
@@ -1140,7 +1197,7 @@ app.patch("/api/departments/:id", async (req, res) => {
   }
 });
 
-app.patch("/api/hospital-departments/:id", async (req, res) => {
+app.patch("/api/hospital-departments/:id", requireCapability(CAPABILITIES.DEPARTMENTS_MANAGE), async (req, res) => {
   try {
     const { name, description, services, hodUserId } = req.body;
     if (!name || !String(name).trim()) {
@@ -1198,7 +1255,28 @@ app.patch("/api/hospital-departments/:id", async (req, res) => {
   }
 });
 
-app.get("/api/users", async (_req, res) => {
+
+/**
+ * Only a superadmin may mint or alter another superadmin — otherwise any user
+ * with users.manage could promote themselves to full control.
+ */
+function canActOnRole(req, role) {
+  if (String(role || "").toLowerCase() !== SUPERADMIN_ROLE) return true;
+  return req.user?.role === SUPERADMIN_ROLE;
+}
+
+/** Refuses to remove the final superadmin, which would lock everyone out of role management. */
+async function wouldOrphanSuperadmin(userId) {
+  const target = await User.findById(userId).select("role").lean();
+  if (!target || target.role !== SUPERADMIN_ROLE) return false;
+  const remaining = await User.countDocuments({
+    role: SUPERADMIN_ROLE,
+    _id: { $ne: target._id },
+  });
+  return remaining === 0;
+}
+
+app.get("/api/users", requireAuth, async (_req, res) => {
   try {
     return res.json(await listUsersWithHodMappings());
   } catch (error) {
@@ -1206,14 +1284,17 @@ app.get("/api/users", async (_req, res) => {
   }
 });
 
-app.post("/api/users", async (req, res) => {
+app.post("/api/users", requireCapability(CAPABILITIES.USERS_MANAGE), async (req, res) => {
   try {
     const { username, password, role } = req.body;
     if (!username || !password || !role) {
       return res.status(400).json({ message: "username, password, and role are required" });
     }
-    if (!["admin", "staff", "hod"].includes(role)) {
+    if (!isKnownRole(role)) {
       return res.status(400).json({ message: "Invalid role" });
+    }
+    if (!canActOnRole(req, role)) {
+      return res.status(403).json({ message: "Only a Super Admin can create a Super Admin" });
     }
     const assignment = validateUserAssignment(role, req.body);
     if (assignment.error) {
@@ -1245,7 +1326,7 @@ app.post("/api/users", async (req, res) => {
   }
 });
 
-app.patch("/api/users/:id", async (req, res) => {
+app.patch("/api/users/:id", requireCapability(CAPABILITIES.USERS_MANAGE), async (req, res) => {
   try {
     const { id } = req.params;
     const { username, password, role } = req.body;
@@ -1256,8 +1337,21 @@ app.patch("/api/users/:id", async (req, res) => {
     if (!username || !role) {
       return res.status(400).json({ message: "username and role are required" });
     }
-    if (!["admin", "staff", "hod"].includes(role)) {
+    if (!isKnownRole(role)) {
       return res.status(400).json({ message: "Invalid role" });
+    }
+    const existingUser = await User.findById(id).select("role").lean();
+    if (!existingUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    // Guard both directions: becoming a superadmin, and editing one.
+    if (!canActOnRole(req, role) || !canActOnRole(req, existingUser.role)) {
+      return res.status(403).json({ message: "Only a Super Admin can manage a Super Admin" });
+    }
+    if (role !== SUPERADMIN_ROLE && (await wouldOrphanSuperadmin(id))) {
+      return res
+        .status(409)
+        .json({ message: "This is the last Super Admin — promote another one first" });
     }
     const assignment = validateUserAssignment(role, req.body);
     if (assignment.error) {
@@ -1302,25 +1396,116 @@ app.patch("/api/users/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/users/:id", async (req, res) => {
+app.delete("/api/users/:id", requireCapability(CAPABILITIES.USERS_MANAGE), async (req, res) => {
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid user id" });
+    }
+    if (id === req.user.id) {
+      return res.status(409).json({ message: "You cannot delete your own account" });
+    }
+    const doomed = await User.findById(id).select("role").lean();
+    if (doomed && !canActOnRole(req, doomed.role)) {
+      return res.status(403).json({ message: "Only a Super Admin can delete a Super Admin" });
+    }
+    if (await wouldOrphanSuperadmin(id)) {
+      return res
+        .status(409)
+        .json({ message: "This is the last Super Admin — promote another one first" });
     }
     const deleted = await User.findByIdAndDelete(id).lean();
     if (!deleted) {
       return res.status(404).json({ message: "User not found" });
     }
     await syncHodCatalogMappings(id, { departmentIds: [], serviceIds: [] });
-    return res.json({ ok: true });
+    // Release their queue. Without this the tickets keep pointing at a deleted
+    // user: invisible in every HOD queue, yet still shown as assigned — which is
+    // exactly how the orphans repaired in Phase 1 were created.
+    const released = await Feedback.updateMany(
+      { assignedToUserId: id },
+      { $set: { assignedToUserId: null, assignedToUsername: "", assignedAt: null } }
+    );
+    if (released.modifiedCount) {
+      // eslint-disable-next-line no-console
+      console.log("[users] released tickets from deleted user", {
+        userId: String(id),
+        tickets: released.modifiedCount,
+      });
+    }
+    return res.json({ ok: true, releasedTickets: released.modifiedCount ?? 0 });
   } catch (error) {
     return res.status(500).json({ message: "Failed to delete user" });
   }
 });
 
 /** Ensures every AI-negative feedback has a ticket id (open in Ticket Management) and reopens Resolved rows. */
-app.post("/api/seed/open-negative-tickets", async (_req, res) => {
+/**
+ * Roles and the capability catalog that drives the RBAC screen.
+ * Readable by anyone signed in (the user admin screen needs the role list);
+ * only roles.manage may change a grant.
+ */
+app.get("/api/roles", requireAuth, async (_req, res) => {
+  try {
+    return res.json({
+      roles: listCachedRoles().map(serializeRole),
+      capabilityCatalog: CAPABILITY_CATALOG,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to load roles" });
+  }
+});
+
+app.patch(
+  "/api/roles/:key",
+  requireCapability(CAPABILITIES.ROLES_MANAGE),
+  async (req, res) => {
+    try {
+      const key = String(req.params.key || "").toLowerCase();
+      const role = getCachedRole(key);
+      if (!role) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+      if (isProtectedRole(key)) {
+        return res.status(409).json({
+          message:
+            "Super Admin always holds every capability and cannot be restricted — that would lock everyone out of role management.",
+        });
+      }
+
+      const incoming = Array.isArray(req.body?.capabilities) ? req.body.capabilities : null;
+      if (!incoming) {
+        return res.status(400).json({ message: "capabilities must be an array" });
+      }
+      const unknown = incoming.filter((cap) => !ALL_CAPABILITIES.includes(cap));
+      if (unknown.length) {
+        return res.status(400).json({ message: `Unknown capability: ${unknown[0]}` });
+      }
+
+      // De-duplicate and store in catalog order so the screen renders stably.
+      const capabilities = ALL_CAPABILITIES.filter((cap) => incoming.includes(cap));
+      const label = typeof req.body.label === "string" && req.body.label.trim()
+        ? req.body.label.trim().slice(0, 80)
+        : role.label;
+      const description =
+        typeof req.body.description === "string"
+          ? req.body.description.trim().slice(0, 400)
+          : role.description || "";
+
+      await Role.updateOne(
+        { key },
+        { $set: { capabilities, label, description } },
+        { upsert: false }
+      );
+      await refreshRoleCache();
+      return res.json(serializeRole(getCachedRole(key)));
+    } catch (error) {
+      return res.status(500).json({ message: "Failed to update role" });
+    }
+  }
+);
+
+app.post("/api/seed/open-negative-tickets", requireCapability(CAPABILITIES.MAINTENANCE_RUN), async (_req, res) => {
   try {
     const rows = await Feedback.find({ aiSentiment: "negative" }).lean();
     let updated = 0;
@@ -1357,7 +1542,7 @@ app.post("/api/seed/open-negative-tickets", async (_req, res) => {
 });
 
 /** Create separate DB rows for each AI split issue so tickets can be assigned to different HODs. */
-app.post("/api/feedback/repair-split-children", async (_req, res) => {
+app.post("/api/feedback/repair-split-children", requireCapability(CAPABILITIES.MAINTENANCE_RUN), async (_req, res) => {
   try {
     const result = await repairAllMissingSplitChildren();
     return res.json(result);
@@ -1942,7 +2127,10 @@ app.post("/api/feedback", (req, res, next) => {
       }
     }
 
-    const patientName = req.body.patientName;
+    // Defense-in-depth: the Feedback schema also sanitizes patientName on save, but
+    // sanitizing here means ticket-signature generation and the AI prompt below see
+    // the clean name too, not just the DB record.
+    const patientName = sanitizePatientName(req.body.patientName);
     let comments = req.body.comments;
     const source = req.body.source;
     const staffRemarks = String(req.body.staffRemarks || "").trim().slice(0, 2000);
@@ -2420,13 +2608,21 @@ app.post("/api/feedback/:id/voice-recording", (req, res, next) => {
   }
 });
 
-app.get("/api/feedback", async (req, res) => {
+app.get("/api/feedback", requireAuth, async (req, res) => {
   try {
     const mongoFilter = buildFeedbackInsightsFilter(req.query);
+    // A user who can only read their own queue gets it enforced here. This used
+    // to be a client-side filter, so a HOD could read every ticket by calling the
+    // API directly.
+    if (!userHasCapability(req, CAPABILITIES.FEEDBACK_READ_ALL)) {
+      mongoFilter.assignedToUserId = new mongoose.Types.ObjectId(req.user.id);
+    }
     const lite = String(req.query.lite || "").trim() === "1";
     // Sort by insertion time from ObjectId to avoid skew from synthetic createdAt values.
-    const feedback = await Feedback.find(mongoFilter).sort({ _id: -1 }).lean();
-    const enriched = await enrichFeedbackListWithGroupDonor(feedback);
+    const query = Feedback.find(mongoFilter).sort({ _id: -1 });
+    if (lite) query.select(LITE_LIST_PROJECTION);
+    const feedback = await query.lean();
+    const enriched = await enrichFeedbackListWithGroupDonor(feedback, { lite });
     if (lite) {
       return res.json(enriched.map(toFeedbackListRow));
     }
@@ -2436,7 +2632,7 @@ app.get("/api/feedback", async (req, res) => {
   }
 });
 
-app.get("/api/feedback/:id", async (req, res) => {
+app.get("/api/feedback/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const query = mongoose.Types.ObjectId.isValid(id)
@@ -2446,15 +2642,47 @@ app.get("/api/feedback/:id", async (req, res) => {
     if (!row) {
       return res.status(404).json({ message: "Feedback not found" });
     }
+    // Queue-scoped users may only open a ticket assigned to them.
+    if (
+      !userHasCapability(req, CAPABILITIES.FEEDBACK_READ_ALL) &&
+      String(row.assignedToUserId || "") !== req.user.id
+    ) {
+      return res.status(403).json({ message: "You do not have access to this ticket" });
+    }
     return res.json(await enrichFeedbackWithGroupDonor(row));
   } catch (error) {
     return res.status(500).json({ message: "Failed to fetch feedback" });
   }
 });
 
-app.get("/api/analytics", async (_req, res) => {
+/**
+ * Only the fields the analytics reducers below actually read. The heavy parts of
+ * a feedback document (bot Q&A transcripts, patient identifiers, TMS sync fields)
+ * are never touched here, so loading them was pure overhead.
+ */
+const ANALYTICS_PROJECTION = [
+  "aiSentiment",
+  "aiSummary",
+  "aiTopics",
+  "isSplitChild",
+  "rating",
+  "status",
+  "source",
+  "lookupDepartment",
+  "department",
+  "service",
+  "feedbackIssues",
+  "createdAt",
+].join(" ");
+
+app.get("/api/analytics", requireCapability(CAPABILITIES.INSIGHTS_VIEW), async (req, res) => {
   try {
-    const rows = await Feedback.find().lean();
+    // Accepts the same date/encounter/assignee filters as /api/feedback so the
+    // dashboard can be scoped to the period the user selected. With no query
+    // params the filter is empty and this returns whole-collection totals,
+    // exactly as before.
+    const mongoFilter = buildFeedbackInsightsFilter(req.query);
+    const rows = await Feedback.find(mongoFilter).select(ANALYTICS_PROJECTION).lean();
     const sessions = rows.filter((item) => !item.isSplitChild);
 
     const totals = {
@@ -2569,7 +2797,7 @@ async function loadSummaryReportResponse(periodType, periodKey) {
   };
 }
 
-app.get("/api/summary-reports/periods", async (req, res) => {
+app.get("/api/summary-reports/periods", requireCapability(CAPABILITIES.INSIGHTS_VIEW), async (req, res) => {
   try {
     const periodType = req.query.periodType === "monthly" ? "monthly" : "weekly";
     const grouped = await SummaryReport.aggregate([
@@ -2609,7 +2837,7 @@ app.get("/api/summary-reports/periods", async (req, res) => {
   }
 });
 
-app.get("/api/summary-reports", async (req, res) => {
+app.get("/api/summary-reports", requireCapability(CAPABILITIES.INSIGHTS_VIEW), async (req, res) => {
   try {
     const periodType = req.query.periodType === "monthly" ? "monthly" : "weekly";
     const periodKey = String(req.query.periodKey || currentPeriodKey(periodType)).trim();
@@ -2622,7 +2850,7 @@ app.get("/api/summary-reports", async (req, res) => {
   }
 });
 
-app.post("/api/summary-reports/generate", async (req, res) => {
+app.post("/api/summary-reports/generate", requireCapability(CAPABILITIES.REPORTS_GENERATE), async (req, res) => {
   try {
     const periodType = req.body.periodType === "monthly" ? "monthly" : "weekly";
     const periodKey = String(req.body.periodKey || currentPeriodKey(periodType)).trim();
@@ -2644,7 +2872,44 @@ app.post("/api/summary-reports/generate", async (req, res) => {
   }
 });
 
-app.patch("/api/feedback/:id/status", async (req, res) => {
+// Bulk "Acknowledge" only — New -> In Progress, no CAPA. Deliberately does not
+// accept "Resolved": that transition needs a CAPA per ticket (the gate below
+// in /:id/status), which can't be satisfied for a batch. Path is a sibling of
+// /:id/status rather than nested under it so it can never collide with that
+// route's :id param matching.
+app.post("/api/feedback/bulk-acknowledge", requireCapability(CAPABILITIES.FEEDBACK_RESOLVE), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    const validIds = [...new Set(ids)].filter((id) => mongoose.Types.ObjectId.isValid(id));
+
+    if (!validIds.length) {
+      return res.status(400).json({ message: "ids must be a non-empty array of feedback ids" });
+    }
+    if (validIds.length > 500) {
+      return res.status(400).json({ message: "Acknowledge at most 500 tickets per request" });
+    }
+
+    const filter = { _id: { $in: validIds }, status: "New" };
+    if (!userHasCapability(req, CAPABILITIES.FEEDBACK_READ_ALL)) {
+      // Queue-scoped caller — same restriction as the single-ticket endpoint,
+      // applied as a query filter instead of a per-id check.
+      filter.assignedToUserId = new mongoose.Types.ObjectId(req.user.id);
+    }
+
+    const result = await Feedback.updateMany(filter, { $set: { status: "In Progress" } });
+    const acknowledged = result.modifiedCount || 0;
+
+    return res.json({
+      requested: validIds.length,
+      acknowledged,
+      skipped: validIds.length - acknowledged,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: "Failed to bulk-acknowledge feedback" });
+  }
+});
+
+app.patch("/api/feedback/:id/status", requireCapability(CAPABILITIES.FEEDBACK_RESOLVE), async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -2660,10 +2925,57 @@ app.patch("/api/feedback/:id/status", async (req, res) => {
       });
     }
 
+    const capaInput = req.body.capa && typeof req.body.capa === "object" ? req.body.capa : {};
+    const capaText = (value) => String(value || "").trim().slice(0, 2000);
+    const rootCause = capaText(capaInput.rootCause);
+    const correctiveAction = capaText(capaInput.correctiveAction);
+    const preventiveAction = capaText(capaInput.preventiveAction);
+
+    if (status === "Resolved") {
+      const missing = [];
+      if (!rootCause) missing.push("root cause");
+      if (!correctiveAction) missing.push("corrective action");
+      if (!preventiveAction) missing.push("preventive action");
+      if (missing.length) {
+        return res.status(400).json({
+          message: `CAPA is required to resolve a ticket — please fill in ${missing.join(", ")}.`,
+        });
+      }
+    }
+
+    // Queue-scoped users may only act on their own tickets — nothing previously
+    // stopped any caller from resolving any ticket.
+    const target = await Feedback.findById(id).select("assignedToUserId").lean();
+    if (!target) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+    if (
+      !userHasCapability(req, CAPABILITIES.FEEDBACK_READ_ALL) &&
+      String(target.assignedToUserId || "") !== req.user.id
+    ) {
+      return res.status(403).json({ message: "This ticket is not assigned to you" });
+    }
+
     const update = { status };
     if (status === "Resolved") {
       update.resolutionNote = resolutionNote;
       update.resolutionNoteAt = new Date();
+
+      // The CAPA author is the authenticated user, never the request body. This
+      // is a quality audit record: a client-supplied id let anyone attribute a
+      // CAPA to any user.
+      const writtenByUserId = new mongoose.Types.ObjectId(req.user.id);
+      const writtenByUsername = req.user.username;
+
+      update.capa = {
+        rootCause,
+        correctiveAction,
+        preventiveAction,
+        targetDate: String(capaInput.targetDate || "").trim().slice(0, 40),
+        writtenByUserId,
+        writtenByUsername,
+        writtenAt: new Date(),
+      };
     }
 
     const updated = await Feedback.findByIdAndUpdate(id, { $set: update }, {
@@ -2681,7 +2993,46 @@ app.patch("/api/feedback/:id/status", async (req, res) => {
   }
 });
 
-app.patch("/api/feedback/:id/assign", async (req, res) => {
+/** Loose label compare: case, punctuation and spacing collapse (Front Office ↔ front-office). */
+function labelKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+/**
+ * Does this HOD own the department (or service) the ticket sits under?
+ * Ownership comes from the catalog maps that the admin screens maintain.
+ */
+async function hodOwnershipForTicket(feedbackId, hodUserId) {
+  const ticket = await Feedback.findById(feedbackId)
+    .select("department lookupDepartment service feedbackIssues")
+    .lean();
+  const ticketLabels = [
+    ticket?.lookupDepartment,
+    ticket?.department,
+    ticket?.service,
+    ticket?.feedbackIssues?.[0]?.department,
+    ticket?.feedbackIssues?.[0]?.recommendedService,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  const [departments, services] = await Promise.all([
+    Department.find({ hodUserId }).select("name").lean(),
+    RoutingService.find({ hodUserId }).select("name").lean(),
+  ]);
+  const owns = [...departments, ...services].map((row) => row.name).filter(Boolean);
+
+  const ownedKeys = new Set(owns.map(labelKey));
+  const matches = ticketLabels.some((label) => ownedKeys.has(labelKey(label)));
+
+  return { matches, owns, ticketLabel: ticketLabels[0] || "" };
+}
+
+app.patch("/api/feedback/:id/assign", requireCapability(CAPABILITIES.FEEDBACK_ASSIGN), async (req, res) => {
   try {
     const { id } = req.params;
     const { userId } = req.body;
@@ -2704,9 +3055,30 @@ app.patch("/api/feedback/:id/assign", async (req, res) => {
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
-      if (user.role !== "hod") {
-        return res.status(400).json({ message: "Tickets can only be assigned to HOD users" });
+      // A ticket owner must be able to actually work it — i.e. hold the
+      // "assigned queue" capability. Checked by capability rather than by the
+      // literal role name so a renamed or custom queue role still works.
+      if (!capabilitiesForRole(user.role).includes(CAPABILITIES.FEEDBACK_READ_ASSIGNED)) {
+        return res.status(400).json({
+          message: "Tickets can only be assigned to a department head",
+        });
       }
+
+      // Warn — do not block — when the target does not own the ticket's
+      // department or service. Complaints legitimately route to service owners
+      // (Housekeeping, Transport) rather than the clinical department of the
+      // visit, so a hard block would break real workflows. The client confirms
+      // deliberate cross-department routing.
+      const ownership = await hodOwnershipForTicket(id, user._id);
+      if (!ownership.matches && req.body?.confirmCrossDepartment !== true) {
+        return res.status(409).json({
+          requiresConfirmation: true,
+          message: ownership.owns.length
+            ? `${user.username} owns ${ownership.owns.join(", ")}, but this ticket is under ${ownership.ticketLabel || "no department"}. Assign anyway?`
+            : `${user.username} has no department or service mapped yet. Assign this ${ownership.ticketLabel || "ticket"} anyway?`,
+        });
+      }
+
       assignFields = {
         assignedToUserId: user._id,
         assignedToUsername: user.username,
@@ -2724,7 +3096,7 @@ app.patch("/api/feedback/:id/assign", async (req, res) => {
   }
 });
 
-app.delete("/api/feedback/:id", async (req, res) => {
+app.delete("/api/feedback/:id", requireCapability(CAPABILITIES.FEEDBACK_DELETE), async (req, res) => {
   try {
     const { id } = req.params;
     const deleted = await Feedback.findByIdAndDelete(id).lean();
@@ -2760,7 +3132,7 @@ app.get("/api/branding", async (_req, res) => {
   }
 });
 
-app.put("/api/branding", async (req, res) => {
+app.put("/api/branding", requireCapability(CAPABILITIES.BRANDING_MANAGE), async (req, res) => {
   try {
     const {
       primaryColor,
@@ -2798,7 +3170,7 @@ app.put("/api/branding", async (req, res) => {
   }
 });
 
-app.delete("/api/branding", async (_req, res) => {
+app.delete("/api/branding", requireCapability(CAPABILITIES.BRANDING_MANAGE), async (_req, res) => {
   try {
     const reset = await Branding.findOneAndUpdate(
       { key: "global" },
@@ -2826,6 +3198,14 @@ async function startServer() {
     await mongoose.connect(MONGODB_URI);
     // eslint-disable-next-line no-console
     console.log(`[feedback] MongoDB connected: ${mongoose.connection.db.databaseName}`);
+    // Roles must be loaded before the server accepts traffic — every capability
+    // check reads the cache this populates.
+    await ensureRolesSeeded();
+    await refreshRoleCache();
+    // eslint-disable-next-line no-console
+    console.log(
+      `[auth] roles loaded: ${listCachedRoles().map((r) => r.key).join(", ")}`
+    );
     await ensureDefaults();
     await repairClientSubmissionIds();
     await repairMissingSplitVoiceRecordings();
