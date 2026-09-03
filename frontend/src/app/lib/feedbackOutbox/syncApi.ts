@@ -1,5 +1,4 @@
 import type { OutboxPayload } from "./types";
-import { apiFetch } from "../apiClient";
 
 const API_BASE = "";
 
@@ -35,7 +34,7 @@ export async function postFeedbackText(
   payload: OutboxPayload,
   clientSubmissionId: string
 ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; status: number; message: string }> {
-  const response = await apiFetch(`${API_BASE}/api/feedback`, {
+  const response = await fetch(`${API_BASE}/api/feedback`, {
     method: "POST",
     body: buildFeedbackFormData(payload, clientSubmissionId),
   });
@@ -59,7 +58,7 @@ export async function postFeedbackVoice(
   const ext = mime.includes("mp4") ? "m4a" : "webm";
   fd.append("voiceRecording", audioBlob, `voice-feedback.${ext}`);
 
-  const response = await apiFetch(`${API_BASE}/api/feedback/${serverFeedbackId}/voice-recording`, {
+  const response = await fetch(`${API_BASE}/api/feedback/${serverFeedbackId}/voice-recording`, {
     method: "POST",
     body: fd,
   });

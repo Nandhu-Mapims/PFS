@@ -1,21 +1,16 @@
 import {
-  AlertOctagon,
   Building2,
   CircleAlert,
   LayoutGrid,
   Layers,
   LoaderCircle,
-  Minus,
   Search,
-  ThumbsDown,
-  ThumbsUp,
   Users,
   CheckCircle2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import {
-  bulkAcknowledgeFeedback,
   getFeedback,
   getFeedbackAnalytics,
   updateFeedbackStatus,
@@ -28,7 +23,6 @@ import { ticketAiSummaryForItem } from "../lib/feedbackDisplay";
 import { visibleToHod } from "../lib/hodRouting";
 import { matchesEncounterType, type EncounterTypeFilter } from "../lib/insightsFilters";
 import { EncounterTypeFilterTabs } from "./EncounterTypeFilterTabs";
-import { CAPABILITY, hasCapability } from "./RouteGuards";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
@@ -359,67 +353,38 @@ export function Dashboard() {
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterCombined, setFilterCombined] = useState("All");
   const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
-  // Independent of filterStatus -- these read AI urgency/sentiment rather than
-  // workflow status, so a New ticket can be both "needs attention" and "New".
-  const [attentionFilter, setAttentionFilter] = useState<
-    "all" | "urgent" | "negative" | "neutral" | "positive"
-  >("all");
   const [viewMode, setViewMode] = useState<ViewMode>("department");
   const [error, setError] = useState<string | null>(null);
-  const [bulkAckConfirming, setBulkAckConfirming] = useState(false);
-  const [bulkAckRunning, setBulkAckRunning] = useState(false);
-  const [bulkAckResult, setBulkAckResult] = useState<string | null>(null);
-
-  // Checks the actual capability, not a role name -- roles are admin-editable
-  // data (see AdminRolesPage), so a hardcoded role list would drift the moment
-  // someone customizes who holds feedback.resolve.
-  const canAcknowledge = hasCapability(CAPABILITY.FEEDBACK_RESOLVE);
-
-  async function loadData() {
-    try {
-      setIsLoading(true);
-      setError(null);
-      const [data, analyticsData] = await Promise.all([
-        getFeedback(
-          isHod && hodUserId
-            ? { lite: true, assignedToUserId: hodUserId }
-            : { lite: true }
-        ),
-        isHod ? Promise.resolve(null) : getFeedbackAnalytics(),
-      ]);
-      setItems(data);
-      if (analyticsData) setAnalytics(analyticsData);
-    } catch {
-      setError("Failed to load staff queue.");
-    } finally {
-      setIsLoading(false);
-    }
-  }
 
   useEffect(() => {
+    async function loadData() {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const [data, analyticsData] = await Promise.all([
+          getFeedback(
+            isHod && hodUserId
+              ? { lite: true, assignedToUserId: hodUserId }
+              : { lite: true }
+          ),
+          isHod ? Promise.resolve(null) : getFeedbackAnalytics(),
+        ]);
+        setItems(data);
+        if (analyticsData) setAnalytics(analyticsData);
+      } catch {
+        setError("Failed to load staff queue.");
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
     void loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHod, hodUserId]);
 
   const visibleItems = useMemo(() => {
     if (!isHod) return items;
     return items.filter((item) => visibleToHod(item, hodUserId));
   }, [items, isHod, hodUserId]);
-
-  const attentionCounts = useMemo(() => {
-    let urgentUnassigned = 0;
-    let negativeUnassigned = 0;
-    let neutral = 0;
-    let positive = 0;
-    for (const item of visibleItems) {
-      const unassigned = !item.assignedToUserId;
-      if (item.aiUrgency === "high" && unassigned) urgentUnassigned += 1;
-      if (item.aiSentiment === "negative" && unassigned) negativeUnassigned += 1;
-      if (item.aiSentiment === "neutral") neutral += 1;
-      if (item.aiSentiment === "positive") positive += 1;
-    }
-    return { urgentUnassigned, negativeUnassigned, neutral, positive };
-  }, [visibleItems]);
 
   const departments = useMemo(() => {
     const keys = new Set<string>();
@@ -463,31 +428,15 @@ export function Dashboard() {
       const matchesService = filterService === "All" || svc === filterService;
       const matchesStatus = filterStatus === "All" || item.status === filterStatus;
       const matchesEncounter = matchesEncounterType(item.patientEncounterType, encounterFilter);
-      const unassigned = !item.assignedToUserId;
-      const matchesAttention =
-        attentionFilter === "all" ||
-        (attentionFilter === "urgent" && item.aiUrgency === "high" && unassigned) ||
-        (attentionFilter === "negative" && item.aiSentiment === "negative" && unassigned) ||
-        (attentionFilter === "neutral" && item.aiSentiment === "neutral") ||
-        (attentionFilter === "positive" && item.aiSentiment === "positive");
       return (
         matchesSearch &&
         matchesDepartment &&
         matchesService &&
         matchesStatus &&
-        matchesEncounter &&
-        matchesAttention
+        matchesEncounter
       );
     });
-  }, [
-    visibleItems,
-    searchTerm,
-    filterDepartment,
-    filterService,
-    filterStatus,
-    encounterFilter,
-    attentionFilter,
-  ]);
+  }, [visibleItems, searchTerm, filterDepartment, filterService, filterStatus, encounterFilter]);
 
   const departmentSummary = useMemo(() => {
     const map = new Map<string, { count: number; newCount: number }>();
@@ -599,45 +548,6 @@ export function Dashboard() {
     }
   }
 
-  // Only "New" tickets are eligible -- acknowledging an already-touched ticket
-  // has no meaning, and this must never step on a ticket someone is actively
-  // resolving.
-  const bulkAckEligible = useMemo(
-    () => filteredItems.filter((item) => item.status === "New"),
-    [filteredItems]
-  );
-
-  async function handleBulkAcknowledge() {
-    const ids = bulkAckEligible.map((item) => item._id);
-    if (!ids.length) return;
-    setBulkAckConfirming(false);
-    setBulkAckRunning(true);
-    setBulkAckResult(null);
-    setError(null);
-    try {
-      let acknowledged = 0;
-      let skipped = 0;
-      // The server caps a single request at 500 ids -- chunk larger filtered
-      // views (e.g. all 7,000+ positive tickets) into sequential batches.
-      for (let i = 0; i < ids.length; i += 500) {
-        const chunk = ids.slice(i, i + 500);
-        const result = await bulkAcknowledgeFeedback(chunk);
-        acknowledged += result.acknowledged;
-        skipped += result.skipped;
-      }
-      setBulkAckResult(
-        skipped > 0
-          ? `Acknowledged ${acknowledged} ticket(s); ${skipped} were skipped (already updated, or not yours).`
-          : `Acknowledged ${acknowledged} ticket(s).`
-      );
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Bulk acknowledge failed.");
-    } finally {
-      setBulkAckRunning(false);
-    }
-  }
-
   const activeFilterKey =
     viewMode === "department"
       ? filterDepartment
@@ -679,118 +589,6 @@ export function Dashboard() {
             ? "Tickets assigned to you by admin or staff"
             : "View and resolve feedback by hospital department and routing service"}
         </p>
-      </div>
-
-      <div className="rounded-2xl border border-gray-200/80 bg-white p-4 shadow-sm sm:p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-gray-800">Needs attention</h3>
-          {attentionFilter !== "all" ? (
-            <button
-              type="button"
-              onClick={() => setAttentionFilter("all")}
-              className="text-xs font-medium text-muted-foreground hover:text-gray-700"
-            >
-              Clear
-            </button>
-          ) : null}
-        </div>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <button
-            type="button"
-            onClick={() =>
-              setAttentionFilter((prev) => (prev === "urgent" ? "all" : "urgent"))
-            }
-            aria-pressed={attentionFilter === "urgent"}
-            className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${
-              attentionFilter === "urgent"
-                ? "border-red-300 bg-red-50 ring-2 ring-red-200"
-                : "border-red-200/70 bg-red-50/40 hover:bg-red-50"
-            }`}
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-red-100 text-red-600">
-              <AlertOctagon size={17} />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-xl font-bold leading-none text-red-700">
-                {attentionCounts.urgentUnassigned}
-              </span>
-              <span className="mt-1 block truncate text-xs text-red-700/80">
-                Urgent, unassigned
-              </span>
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() =>
-              setAttentionFilter((prev) => (prev === "negative" ? "all" : "negative"))
-            }
-            aria-pressed={attentionFilter === "negative"}
-            className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${
-              attentionFilter === "negative"
-                ? "border-amber-300 bg-amber-50 ring-2 ring-amber-200"
-                : "border-amber-200/70 bg-amber-50/40 hover:bg-amber-50"
-            }`}
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-amber-100 text-amber-700">
-              <ThumbsDown size={16} />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-xl font-bold leading-none text-amber-800">
-                {attentionCounts.negativeUnassigned}
-              </span>
-              <span className="mt-1 block truncate text-xs text-amber-800/80">
-                Negative, unassigned
-              </span>
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() =>
-              setAttentionFilter((prev) => (prev === "neutral" ? "all" : "neutral"))
-            }
-            aria-pressed={attentionFilter === "neutral"}
-            className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${
-              attentionFilter === "neutral"
-                ? "border-gray-300 bg-gray-100 ring-2 ring-gray-300"
-                : "border-gray-200 bg-gray-50 hover:bg-gray-100"
-            }`}
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gray-200 text-gray-600">
-              <Minus size={17} />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-xl font-bold leading-none text-gray-700">
-                {attentionCounts.neutral}
-              </span>
-              <span className="mt-1 block truncate text-xs text-gray-500">Neutral</span>
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() =>
-              setAttentionFilter((prev) => (prev === "positive" ? "all" : "positive"))
-            }
-            aria-pressed={attentionFilter === "positive"}
-            className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${
-              attentionFilter === "positive"
-                ? "border-emerald-300 bg-emerald-50 ring-2 ring-emerald-200"
-                : "border-emerald-200/70 bg-emerald-50/40 hover:bg-emerald-50"
-            }`}
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-100 text-emerald-700">
-              <ThumbsUp size={16} />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-xl font-bold leading-none text-emerald-700">
-                {attentionCounts.positive}
-              </span>
-              <span className="mt-1 block truncate text-xs text-emerald-700/80">Positive</span>
-            </span>
-          </button>
-        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -894,55 +692,6 @@ export function Dashboard() {
           </div>
         </CardContent>
       </Card>
-
-      {canAcknowledge && bulkAckEligible.length > 0 ? (
-        <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-blue-900">
-            <span className="font-semibold tabular-nums">{bulkAckEligible.length}</span> ticket
-            {bulkAckEligible.length === 1 ? "" : "s"} in this view{" "}
-            {bulkAckEligible.length === 1 ? "is" : "are"} still New.
-            {bulkAckResult ? (
-              <span className="block text-xs text-blue-700 mt-0.5">{bulkAckResult}</span>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-2">
-            {bulkAckConfirming ? (
-              <>
-                <span className="text-sm text-blue-900">
-                  Mark all {bulkAckEligible.length} as In Progress?
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void handleBulkAcknowledge()}
-                  disabled={bulkAckRunning}
-                  className="rounded-lg bg-[#2A6FDB] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  {bulkAckRunning ? "Acknowledging…" : "Confirm"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBulkAckConfirming(false)}
-                  disabled={bulkAckRunning}
-                  className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setBulkAckConfirming(true);
-                  setBulkAckResult(null);
-                }}
-                className="rounded-lg bg-[#2A6FDB] px-3 py-2 text-sm font-semibold text-white"
-              >
-                Acknowledge all {bulkAckEligible.length}
-              </button>
-            )}
-          </div>
-        </div>
-      ) : null}
 
       {isLoading ? (
         <p className="text-muted-foreground p-6">Loading staff queue…</p>

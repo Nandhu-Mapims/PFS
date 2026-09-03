@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import {
   assignFeedbackTicket,
-  CrossDepartmentAssignmentError,
   deleteFeedback,
   getFeedbackById,
   getHospitalDepartments,
@@ -59,10 +58,6 @@ export function TicketDetail() {
   const [assigneeId, setAssigneeId] = useState<string>("");
   const [status, setStatus] = useState<FeedbackItem["status"]>("New");
   const [resolutionNote, setResolutionNote] = useState("");
-  const [capaRootCause, setCapaRootCause] = useState("");
-  const [capaCorrectiveAction, setCapaCorrectiveAction] = useState("");
-  const [capaPreventiveAction, setCapaPreventiveAction] = useState("");
-  const [capaTargetDate, setCapaTargetDate] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,20 +66,6 @@ export function TicketDetail() {
   const isHod = session?.role === "hod";
   const canUpdateStatus = isHod;
   const showDeleteAction = location.pathname.includes("/delete");
-  // Decision-rail quick actions scroll+focus here rather than duplicating the
-  // CAPA form -- Resolve still goes through the same required fields below.
-  const resolveSectionRef = useRef<HTMLDivElement | null>(null);
-  const resolutionNoteRef = useRef<HTMLTextAreaElement | null>(null);
-
-  /** CAPA is mandatory to close a ticket — target date stays optional. */
-  const isCapaComplete = Boolean(
-    capaRootCause.trim() && capaCorrectiveAction.trim() && capaPreventiveAction.trim()
-  );
-  const capaChanged =
-    capaRootCause.trim() !== (ticket?.capa?.rootCause || "").trim() ||
-    capaCorrectiveAction.trim() !== (ticket?.capa?.correctiveAction || "").trim() ||
-    capaPreventiveAction.trim() !== (ticket?.capa?.preventiveAction || "").trim() ||
-    capaTargetDate.trim() !== (ticket?.capa?.targetDate || "").trim();
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -142,10 +123,6 @@ export function TicketDetail() {
         setTicket(row);
         setStatus(row.status);
         setResolutionNote(row.resolutionNote || "");
-        setCapaRootCause(row.capa?.rootCause || "");
-        setCapaCorrectiveAction(row.capa?.correctiveAction || "");
-        setCapaPreventiveAction(row.capa?.preventiveAction || "");
-        setCapaTargetDate(row.capa?.targetDate || "");
         const assignedId = row.assignedToUserId || "";
         setAssigneeId(assignedId);
         assignSuggestDone.current = null;
@@ -174,53 +151,14 @@ export function TicketDetail() {
     try {
       setIsSaving(true);
       setError(null);
-      let updated;
-      try {
-        updated = await assignFeedbackTicket(ticket._id, userId);
-      } catch (err) {
-        // The head does not own this ticket's department. That is allowed —
-        // service complaints route this way — but it must be deliberate.
-        if (err instanceof CrossDepartmentAssignmentError) {
-          if (!window.confirm(err.message)) {
-            return;
-          }
-          updated = await assignFeedbackTicket(ticket._id, userId, {
-            confirmCrossDepartment: true,
-          });
-        } else {
-          throw err;
-        }
-      }
+      const updated = await assignFeedbackTicket(ticket._id, userId);
       setTicket(updated);
       setAssigneeId(updated.assignedToUserId || "");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update assignment.");
+    } catch {
+      setError("Could not update assignment.");
     } finally {
       setIsSaving(false);
     }
-  }
-
-  /** One click, no CAPA -- the fast path off "New" for the 8,832 tickets that
-   *  have never been touched. Resolving still requires the full CAPA form. */
-  async function handleAcknowledge() {
-    if (!ticket) return;
-    try {
-      setIsSaving(true);
-      setError(null);
-      const updated = await updateFeedbackStatus(ticket._id, "In Progress");
-      setTicket(updated);
-      setStatus(updated.status);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update status.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  function focusResolveSection() {
-    setStatus("Resolved");
-    resolveSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => resolutionNoteRef.current?.focus(), 350);
   }
 
   async function handleSave() {
@@ -229,27 +167,11 @@ export function TicketDetail() {
       setError("Please add a resolution comment before marking this ticket Resolved.");
       return;
     }
-    if (status === "Resolved" && !isCapaComplete) {
-      setError("Please complete the CAPA (root cause, corrective and preventive action) before resolving.");
-      return;
-    }
     try {
       setIsSaving(true);
       setError(null);
       const updated = await updateFeedbackStatus(ticket._id, status, {
-        ...(status === "Resolved"
-          ? {
-              resolutionNote: resolutionNote.trim(),
-              capa: {
-                rootCause: capaRootCause.trim(),
-                correctiveAction: capaCorrectiveAction.trim(),
-                preventiveAction: capaPreventiveAction.trim(),
-                targetDate: capaTargetDate.trim(),
-                writtenByUserId: session?._id ?? null,
-                writtenByUsername: session?.username ?? "",
-              },
-            }
-          : {}),
+        ...(status === "Resolved" ? { resolutionNote: resolutionNote.trim() } : {}),
       });
       setTicket(updated);
       setResolutionNote(updated.resolutionNote || resolutionNote.trim());
@@ -362,11 +284,6 @@ export function TicketDetail() {
     ];
   }, [ticket, createdAt, isAssignedToHod, assignedAtLabel, currentAssigneeIsHod]);
 
-  const daysOpen = createdAt
-    ? Math.max(0, Math.floor((Date.now() - createdAt.getTime()) / 86400000))
-    : null;
-  const isHighUrgency = ticket?.aiUrgency === "high";
-
   const assignButtonLabel = !assigneeId
     ? ticket?.assignedToUserId
       ? "Unassign"
@@ -443,84 +360,6 @@ export function TicketDetail() {
             <p>{createdAt?.toLocaleTimeString()}</p>
           </div>
         </div>
-      </div>
-
-      {/* Decision rail -- status, assignment and the three actions in one
-          glance, pinned above the two-column detail so reaching them never
-          requires scrolling past the read-only sections below. */}
-      <div
-        className={`rounded-xl p-4 sm:p-5 mb-6 border shadow-sm flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${
-          isHighUrgency
-            ? "bg-red-50 border-red-200"
-            : sentimentNegative
-              ? "bg-amber-50 border-amber-200"
-              : "bg-white border-gray-200"
-        }`}
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          {isHighUrgency ? (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-red-600 text-white">
-              <AlertCircle size={12} /> High urgency
-            </span>
-          ) : null}
-          <span
-            className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-              ticket.status === "Resolved"
-                ? "bg-emerald-100 text-emerald-800"
-                : ticket.status === "In Progress"
-                  ? "bg-blue-100 text-blue-800"
-                  : "bg-gray-100 text-gray-700"
-            }`}
-          >
-            {ticket.status}
-          </span>
-          <span
-            className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-              isAssignedToHod ? "bg-gray-100 text-gray-700" : "bg-amber-100 text-amber-800"
-            }`}
-          >
-            {isAssignedToHod ? `Assigned · ${ticket.assignedToUsername}` : "Unassigned"}
-          </span>
-          {daysOpen !== null ? (
-            <span className="text-xs text-gray-500">
-              {daysOpen === 0 ? "Opened today" : `${daysOpen} day${daysOpen === 1 ? "" : "s"} open`}
-            </span>
-          ) : null}
-        </div>
-
-        {isAdmin || isHod ? (
-          <div className="flex flex-wrap items-center gap-2">
-            {isAdmin && !ticket.assignedToUserId && defaultHodUser ? (
-              <button
-                type="button"
-                onClick={() => void handleAssign(defaultHodUser._id)}
-                disabled={isSaving}
-                className="px-3.5 py-2 rounded-lg text-sm font-semibold bg-[#2A6FDB] text-white disabled:opacity-50"
-              >
-                Assign to {defaultHodUser.username}
-              </button>
-            ) : null}
-            {isHod && ticket.status === "New" ? (
-              <button
-                type="button"
-                onClick={() => void handleAcknowledge()}
-                disabled={isSaving}
-                className="px-3.5 py-2 rounded-lg text-sm font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                Acknowledge
-              </button>
-            ) : null}
-            {isHod && ticket.status !== "Resolved" ? (
-              <button
-                type="button"
-                onClick={focusResolveSection}
-                className="px-3.5 py-2 rounded-lg text-sm font-semibold bg-[#2FBF71] text-white"
-              >
-                Resolve
-              </button>
-            ) : null}
-          </div>
-        ) : null}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -705,52 +544,6 @@ export function TicketDetail() {
             </div>
           ) : null}
 
-          {ticket.capa?.writtenAt ? (
-            <div className="bg-violet-50 rounded-xl p-6 border border-violet-200 shadow-sm">
-              <h3 className="text-lg font-semibold text-violet-900 mb-3">
-                CAPA — corrective &amp; preventive action
-              </h3>
-              <dl className="space-y-3">
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wider text-violet-800/70">
-                    Root cause
-                  </dt>
-                  <dd className="text-gray-800 leading-relaxed whitespace-pre-wrap">
-                    {ticket.capa.rootCause || "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wider text-violet-800/70">
-                    Corrective action
-                  </dt>
-                  <dd className="text-gray-800 leading-relaxed whitespace-pre-wrap">
-                    {ticket.capa.correctiveAction || "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wider text-violet-800/70">
-                    Preventive action
-                  </dt>
-                  <dd className="text-gray-800 leading-relaxed whitespace-pre-wrap">
-                    {ticket.capa.preventiveAction || "—"}
-                  </dd>
-                </div>
-                {ticket.capa.targetDate ? (
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wider text-violet-800/70">
-                      Target completion
-                    </dt>
-                    <dd className="text-gray-800">{ticket.capa.targetDate}</dd>
-                  </div>
-                ) : null}
-              </dl>
-              <p className="text-xs text-violet-800/80 mt-3">
-                Written by {ticket.capa.writtenByUsername || "unknown"} on{" "}
-                {new Date(ticket.capa.writtenAt).toLocaleString()}
-              </p>
-            </div>
-          ) : null}
-
           {ticket.feedbackIssues && ticket.feedbackIssues.length > 0 && (
             <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
               <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center gap-2">
@@ -904,7 +697,7 @@ export function TicketDetail() {
           )}
 
           {canUpdateStatus && (
-          <div ref={resolveSectionRef} className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+          <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
             <h3 className="text-lg font-semibold text-gray-800 mb-4">Update Status</h3>
             {isHod ? (
               <p className="text-sm text-gray-600 mb-4">
@@ -927,7 +720,6 @@ export function TicketDetail() {
                   Resolution comment <span className="text-red-600">*</span>
                 </label>
                 <textarea
-                  ref={resolutionNoteRef}
                   value={resolutionNote}
                   onChange={(e) => setResolutionNote(e.target.value)}
                   rows={4}
@@ -939,91 +731,14 @@ export function TicketDetail() {
               </div>
             ) : null}
 
-            {status === "Resolved" ? (
-              <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50/60 p-4">
-                <h4 className="text-sm font-semibold text-violet-900">
-                  CAPA <span className="text-red-600">*</span>
-                </h4>
-                <p className="text-xs text-violet-800/80 mt-0.5 mb-3">
-                  Corrective and preventive action. Required to close the ticket and reported on
-                  the management dashboard.
-                </p>
-
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Root cause <span className="text-red-600">*</span>
-                    </label>
-                    <textarea
-                      value={capaRootCause}
-                      onChange={(e) => setCapaRootCause(e.target.value)}
-                      rows={2}
-                      required
-                      placeholder="Why did this happen?"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white focus:border-violet-500 focus:ring-2 focus:ring-violet-200 outline-none resize-y"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Corrective action <span className="text-red-600">*</span>
-                    </label>
-                    <textarea
-                      value={capaCorrectiveAction}
-                      onChange={(e) => setCapaCorrectiveAction(e.target.value)}
-                      rows={2}
-                      required
-                      placeholder="What was done to fix this specific issue?"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white focus:border-violet-500 focus:ring-2 focus:ring-violet-200 outline-none resize-y"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Preventive action <span className="text-red-600">*</span>
-                    </label>
-                    <textarea
-                      value={capaPreventiveAction}
-                      onChange={(e) => setCapaPreventiveAction(e.target.value)}
-                      rows={2}
-                      required
-                      placeholder="What will stop it from happening again?"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white focus:border-violet-500 focus:ring-2 focus:ring-violet-200 outline-none resize-y"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Target completion date
-                    </label>
-                    <input
-                      type="date"
-                      value={capaTargetDate}
-                      onChange={(e) => setCapaTargetDate(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white focus:border-violet-500 focus:ring-2 focus:ring-violet-200 outline-none"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Optional.</p>
-                  </div>
-                </div>
-
-                {ticket.capa?.writtenAt ? (
-                  <p className="text-xs text-violet-800 mt-3">
-                    CAPA recorded by {ticket.capa.writtenByUsername || "unknown"} on{" "}
-                    {new Date(ticket.capa.writtenAt).toLocaleString()}.
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-
             <button
               onClick={handleSave}
               disabled={
                 isSaving ||
                 (status === ticket.status &&
                   (status !== "Resolved" ||
-                    (resolutionNote.trim() === (ticket.resolutionNote || "").trim() &&
-                      !capaChanged))) ||
-                (status === "Resolved" && (!resolutionNote.trim() || !isCapaComplete))
+                    resolutionNote.trim() === (ticket.resolutionNote || "").trim())) ||
+                (status === "Resolved" && !resolutionNote.trim())
               }
               className="w-full bg-[#2FBF71] text-white py-3 rounded-lg font-bold shadow-lg hover:bg-[#28a962] hover:shadow-xl hover:scale-[1.02] transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:hover:scale-100"
             >

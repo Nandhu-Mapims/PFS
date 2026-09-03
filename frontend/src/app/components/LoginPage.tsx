@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { login } from "../lib/auth";
+import { login, type UserRole } from "../lib/auth";
 import feedbackLogo from "./image/feedback_logo.png";
 
 export function LoginPage() {
@@ -12,25 +12,12 @@ export function LoginPage() {
 
   const nextPath = (location.state as { from?: string } | null)?.from;
 
-  /**
-   * Land the user on the first screen their capabilities actually allow. Keyed
-   * off capabilities rather than role names, so Super Admin and Management (and
-   * any future role) route correctly without another branch here.
-   */
-  function continueAfterLogin(capabilities: string[]) {
-    if (capabilities.includes("roles.manage") || capabilities.includes("users.manage")) {
+  function continueAfterLogin(role: UserRole) {
+    if (role === "admin") {
       navigate("/admin", { replace: true });
       return;
     }
-    if (capabilities.includes("insights.view")) {
-      navigate(nextPath || "/management/overview", { replace: true });
-      return;
-    }
-    if (capabilities.includes("feedback.read.assigned")) {
-      navigate(nextPath || "/dashboard", { replace: true });
-      return;
-    }
-    if (capabilities.includes("feedback.read.all")) {
+    if (role === "hod") {
       navigate(nextPath || "/dashboard", { replace: true });
       return;
     }
@@ -46,7 +33,7 @@ export function LoginPage() {
       return;
     }
 
-    continueAfterLogin(session.capabilities ?? []);
+    continueAfterLogin(session.role);
   }
 
   return (

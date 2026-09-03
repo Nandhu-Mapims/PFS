@@ -36,16 +36,6 @@ function canonWords(value: string | null | undefined): string[] {
 }
 
 /**
- * Stable grouping key for a department/service label: case, punctuation,
- * British spelling and plurals all collapse, so PAEDIATRIC / PAEDIATRICS /
- * Paediatric share one key. Word count is preserved, so PAEDIATRIC DENTISTRY
- * keeps its own key and is never folded into PAEDIATRIC.
- */
-export function canonLabelKey(value: string | null | undefined): string {
-  return canonWords(value).join(" ");
-}
-
-/**
  * Fuzzy match for department/service labels.
  * Matches: PAEDIATRICS ↔ Paediatric, Orthopaedics ↔ Orthopedics,
  * Housekeeping ↔ House Keeping, Front Office ↔ Reception / Front Office.

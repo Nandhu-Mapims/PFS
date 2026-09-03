@@ -27,7 +27,7 @@ export function InsightsHub() {
     location.pathname === "/analytics" ||
     location.pathname === "/insights"
   ) {
-    return <Navigate to={`${basePath}/overview`} replace />;
+    return <Navigate to={`${basePath}/submissions`} replace />;
   }
 
   if (data.isLoading && !data.hasData) {
@@ -60,7 +60,7 @@ export function InsightsHub() {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Insights</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Management overview, submissions, tickets, and department/service sentiment rankings (includes split issues).
+            Submissions, tickets, and department/service sentiment rankings (includes split issues).
           </p>
         </div>
         <InsightsViewTabs basePath={basePath} />

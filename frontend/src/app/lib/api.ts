@@ -1,4 +1,3 @@
-import { apiFetch } from "./apiClient";
 export interface FeedbackIssue {
   department: string;
   recommendedService: string;
@@ -110,27 +109,6 @@ export interface CreateFeedbackResponse extends FeedbackItem {
   feedbackIssues?: FeedbackIssue[];
 }
 
-/** Corrective and preventive action recorded by the HOD when closing a ticket. */
-export interface CapaRecord {
-  rootCause: string;
-  correctiveAction: string;
-  preventiveAction: string;
-  /** Free-text target date (YYYY-MM-DD from the date input). */
-  targetDate?: string;
-  writtenByUserId?: string | null;
-  writtenByUsername?: string;
-  writtenAt?: string | null;
-}
-
-/** What the client sends when resolving a ticket. */
-export type CapaInput = Pick<
-  CapaRecord,
-  "rootCause" | "correctiveAction" | "preventiveAction" | "targetDate"
-> & {
-  writtenByUserId?: string | null;
-  writtenByUsername?: string;
-};
-
 export interface FeedbackItem extends Omit<FeedbackPayload, "voiceRecording"> {
   _id: string;
   status: "New" | "In Progress" | "Resolved";
@@ -160,8 +138,6 @@ export interface FeedbackItem extends Omit<FeedbackPayload, "voiceRecording"> {
   /** HOD comment when resolving — visible to admin */
   resolutionNote?: string;
   resolutionNoteAt?: string | null;
-  /** Structured CAPA captured on resolve; writtenAt is the "CAPA written" marker. */
-  capa?: CapaRecord | null;
   assignedToUserId?: string | null;
   assignedToUsername?: string;
   assignedAt?: string | null;
@@ -210,7 +186,7 @@ export function resolveUploadUrl(path: string | null | undefined): string | null
 }
 
 export async function getApiHealth(): Promise<{ ok: boolean; openRouterConfigured?: boolean }> {
-  const response = await apiFetch(`${API_BASE_URL}/api/health`, { cache: "no-store" });
+  const response = await fetch(`${API_BASE_URL}/api/health`, { cache: "no-store" });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     return { ok: false, openRouterConfigured: false };
@@ -265,7 +241,7 @@ export async function createFeedback(payload: FeedbackPayload): Promise<CreateFe
     fd.append("voiceRecording", voiceRecording, `voice-feedback.${ext}`);
   }
 
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback`, {
+  const response = await fetch(`${API_BASE_URL}/api/feedback`, {
     method: "POST",
     body: fd,
   });
@@ -296,7 +272,7 @@ export async function uploadFeedbackVoiceRecording(
   const ext = mime.includes("mp4") ? "m4a" : "webm";
   fd.append("voiceRecording", voiceRecording, `voice-feedback.${ext}`);
 
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback/${feedbackId}/voice-recording`, {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/${feedbackId}/voice-recording`, {
     method: "POST",
     body: fd,
   });
@@ -316,7 +292,7 @@ export async function uploadFeedbackVoiceRecording(
 }
 
 export async function getBotConversationConfig(): Promise<BotConversationConfig> {
-  const response = await apiFetch(`${API_BASE_URL}/api/bot-conversation`, { cache: "no-store" });
+  const response = await fetch(`${API_BASE_URL}/api/bot-conversation`, { cache: "no-store" });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(readApiErrorMessage(body) || "Could not load bot conversation");
@@ -325,7 +301,7 @@ export async function getBotConversationConfig(): Promise<BotConversationConfig>
 }
 
 export async function getAdminBotConversationConfig(): Promise<BotConversationConfig> {
-  const response = await apiFetch(`${API_BASE_URL}/api/admin/bot-conversation`, { cache: "no-store" });
+  const response = await fetch(`${API_BASE_URL}/api/admin/bot-conversation`, { cache: "no-store" });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(readApiErrorMessage(body) || "Could not load bot conversation");
@@ -342,7 +318,7 @@ export async function saveAdminBotConversationConfig(payload: {
     audioUrl?: string | null;
   }>;
 }): Promise<BotConversationConfig> {
-  const response = await apiFetch(`${API_BASE_URL}/api/admin/bot-conversation`, {
+  const response = await fetch(`${API_BASE_URL}/api/admin/bot-conversation`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -357,7 +333,7 @@ export async function saveAdminBotConversationConfig(payload: {
 export async function uploadBotIntroAudio(file: File): Promise<BotConversationConfig> {
   const fd = new FormData();
   fd.append("audio", file, file.name);
-  const response = await apiFetch(`${API_BASE_URL}/api/admin/bot-conversation/intro-audio`, {
+  const response = await fetch(`${API_BASE_URL}/api/admin/bot-conversation/intro-audio`, {
     method: "POST",
     body: fd,
   });
@@ -374,7 +350,7 @@ export async function uploadBotQuestionAudio(
 ): Promise<BotConversationConfig> {
   const fd = new FormData();
   fd.append("audio", file, file.name);
-  const response = await apiFetch(
+  const response = await fetch(
     `${API_BASE_URL}/api/admin/bot-conversation/questions/${order}/audio`,
     { method: "POST", body: fd }
   );
@@ -418,7 +394,7 @@ export async function createBotFeedback(
     fd.append("answerAudio", blob, `answer-${i}.${ext}`);
   }
 
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback`, { method: "POST", body: fd });
+  const response = await fetch(`${API_BASE_URL}/api/feedback`, { method: "POST", body: fd });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(readApiErrorMessage(body) || "Could not save feedback");
@@ -432,7 +408,7 @@ export async function lookupPatientRecords(payload: {
   frmDate?: string;
   toDate?: string;
 }): Promise<{ frmDate: string; toDate: string; matches: PatientLookupMatch[] }> {
-  const response = await apiFetch(`${API_BASE_URL}/api/patient/lookup`, {
+  const response = await fetch(`${API_BASE_URL}/api/patient/lookup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -483,7 +459,7 @@ function feedbackQueryString(query?: FeedbackInsightsQuery): string {
 }
 
 export async function getFeedback(query?: FeedbackInsightsQuery): Promise<FeedbackItem[]> {
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback${feedbackQueryString(query)}`, {
+  const response = await fetch(`${API_BASE_URL}/api/feedback${feedbackQueryString(query)}`, {
     cache: "no-store",
   });
 
@@ -495,7 +471,7 @@ export async function getFeedback(query?: FeedbackInsightsQuery): Promise<Feedba
 }
 
 export async function getFeedbackById(id: string): Promise<FeedbackItem> {
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback/${encodeURIComponent(id)}`, {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/${encodeURIComponent(id)}`, {
     cache: "no-store",
   });
   const body = await response.json().catch(() => ({}));
@@ -508,9 +484,9 @@ export async function getFeedbackById(id: string): Promise<FeedbackItem> {
 export async function updateFeedbackStatus(
   id: string,
   status: FeedbackItem["status"],
-  options?: { resolutionNote?: string; capa?: CapaInput }
+  options?: { resolutionNote?: string }
 ): Promise<FeedbackItem> {
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback/${id}/status`, {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/${id}/status`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -518,7 +494,6 @@ export async function updateFeedbackStatus(
       ...(options?.resolutionNote != null
         ? { resolutionNote: options.resolutionNote }
         : {}),
-      ...(options?.capa ? { capa: options.capa } : {}),
     }),
   });
 
@@ -530,72 +505,24 @@ export async function updateFeedbackStatus(
   return body as FeedbackItem;
 }
 
-export type BulkAcknowledgeResult = {
-  requested: number;
-  acknowledged: number;
-  skipped: number;
-};
-
-/**
- * New -> In Progress for many tickets in one request, no CAPA (bulk-Resolved
- * isn't offered — that needs a CAPA per ticket). Tickets not currently "New",
- * or not owned by a queue-scoped caller, are silently excluded server-side and
- * counted in `skipped` rather than causing the whole batch to fail.
- */
-export async function bulkAcknowledgeFeedback(ids: string[]): Promise<BulkAcknowledgeResult> {
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback/bulk-acknowledge`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids }),
-  });
-
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(readApiErrorMessage(body) || "Could not acknowledge tickets");
-  }
-
-  return body as BulkAcknowledgeResult;
-}
-
-/**
- * Thrown when the chosen head does not own the ticket's department or service.
- * The assignment is legal (complaints often route to Housekeeping or Transport
- * rather than the clinical department) but the caller has to confirm it.
- */
-export class CrossDepartmentAssignmentError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CrossDepartmentAssignmentError";
-  }
-}
-
 export async function assignFeedbackTicket(
   id: string,
-  userId: string | null,
-  options: { confirmCrossDepartment?: boolean } = {}
+  userId: string | null
 ): Promise<FeedbackItem> {
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback/${id}/assign`, {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/${id}/assign`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      userId,
-      ...(options.confirmCrossDepartment ? { confirmCrossDepartment: true } : {}),
-    }),
+    body: JSON.stringify({ userId }),
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 409 && (body as { requiresConfirmation?: boolean }).requiresConfirmation) {
-      throw new CrossDepartmentAssignmentError(
-        readApiErrorMessage(body) || "This head does not own the ticket's department."
-      );
-    }
     throw new Error(readApiErrorMessage(body) || "Could not update assignment");
   }
   return body as FeedbackItem;
 }
 
 export async function deleteFeedback(id: string): Promise<void> {
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/${id}`, {
     method: "DELETE",
   });
 
@@ -605,7 +532,7 @@ export async function deleteFeedback(id: string): Promise<void> {
 }
 
 export async function getFeedbackAnalytics(): Promise<FeedbackAnalytics> {
-  const response = await apiFetch(`${API_BASE_URL}/api/analytics`, {
+  const response = await fetch(`${API_BASE_URL}/api/analytics`, {
     cache: "no-store",
   });
 
@@ -649,7 +576,7 @@ export interface SummaryReport {
 export async function fetchSummaryReportPeriods(
   periodType: SummaryReportPeriodType
 ): Promise<SummaryReportPeriod[]> {
-  const response = await apiFetch(
+  const response = await fetch(
     `${API_BASE_URL}/api/summary-reports/periods?periodType=${periodType}`,
     { cache: "no-store" }
   );
@@ -664,7 +591,7 @@ export async function fetchSummaryReport(
   periodType: SummaryReportPeriodType,
   periodKey: string
 ): Promise<SummaryReport> {
-  const response = await apiFetch(
+  const response = await fetch(
     `${API_BASE_URL}/api/summary-reports?periodType=${periodType}&periodKey=${encodeURIComponent(periodKey)}`,
     { cache: "no-store" }
   );
@@ -679,7 +606,7 @@ export async function triggerSummaryReportGenerate(
   periodType: SummaryReportPeriodType,
   periodKey: string
 ): Promise<SummaryReport> {
-  const response = await apiFetch(`${API_BASE_URL}/api/summary-reports/generate`, {
+  const response = await fetch(`${API_BASE_URL}/api/summary-reports/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ periodType, periodKey }),
@@ -695,7 +622,7 @@ export async function seedOpenNegativeTickets(): Promise<{
   updated: number;
   negativeWithTicket: number;
 }> {
-  const response = await apiFetch(`${API_BASE_URL}/api/seed/open-negative-tickets`, {
+  const response = await fetch(`${API_BASE_URL}/api/seed/open-negative-tickets`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -705,7 +632,7 @@ export async function seedOpenNegativeTickets(): Promise<{
 }
 
 export async function repairSplitTickets(): Promise<{ scanned: number; created: number }> {
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback/repair-split-children`, {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/repair-split-children`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -732,7 +659,7 @@ export interface Department {
 
 /** Hospital departments stored in MongoDB (staff assignment, local catalog). */
 export async function getHospitalDepartments(): Promise<Department[]> {
-  const response = await apiFetch(`${API_BASE_URL}/api/hospital-departments`, {
+  const response = await fetch(`${API_BASE_URL}/api/hospital-departments`, {
     cache: "no-store",
   });
   if (!response.ok) throw new Error("Could not load departments");
@@ -741,7 +668,7 @@ export async function getHospitalDepartments(): Promise<Department[]> {
 
 /** @deprecated alias — use getHospitalDepartments */
 export async function getDepartments(): Promise<Department[]> {
-  const response = await apiFetch(`${API_BASE_URL}/api/departments`, { cache: "no-store" });
+  const response = await fetch(`${API_BASE_URL}/api/departments`, { cache: "no-store" });
   if (!response.ok) throw new Error("Could not load departments");
   return response.json();
 }
@@ -757,7 +684,7 @@ export interface ServiceCatalogItem {
 
 /** Routing catalog for AI / tickets (TMS + local services). */
 export async function getServices(): Promise<ServiceCatalogItem[]> {
-  const response = await apiFetch(`${API_BASE_URL}/api/services`, { cache: "no-store" });
+  const response = await fetch(`${API_BASE_URL}/api/services`, { cache: "no-store" });
   if (!response.ok) throw new Error("Could not load services");
   return response.json();
 }
@@ -766,7 +693,7 @@ export async function createService(payload: {
   name: string;
   description?: string;
 }): Promise<ServiceCatalogItem> {
-  const response = await apiFetch(`${API_BASE_URL}/api/services`, {
+  const response = await fetch(`${API_BASE_URL}/api/services`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -782,7 +709,7 @@ export async function updateService(
   id: string,
   payload: { name: string; description?: string; hodUserId?: string | null }
 ): Promise<ServiceCatalogItem> {
-  const response = await apiFetch(`${API_BASE_URL}/api/services/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/api/services/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -795,7 +722,7 @@ export async function updateService(
 }
 
 export async function deleteService(id: string): Promise<void> {
-  const response = await apiFetch(`${API_BASE_URL}/api/services/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/api/services/${id}`, {
     method: "DELETE",
   });
   if (!response.ok) throw new Error("Delete failed");
@@ -806,7 +733,7 @@ export async function createHospitalDepartment(payload: {
   description?: string;
   services?: DepartmentService[];
 }): Promise<Department> {
-  const response = await apiFetch(`${API_BASE_URL}/api/hospital-departments`, {
+  const response = await fetch(`${API_BASE_URL}/api/hospital-departments`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -827,7 +754,7 @@ export async function updateHospitalDepartment(
     hodUserId?: string | null;
   }
 ): Promise<Department> {
-  const response = await apiFetch(`${API_BASE_URL}/api/hospital-departments/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/api/hospital-departments/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -840,7 +767,7 @@ export async function updateHospitalDepartment(
 }
 
 export async function deleteHospitalDepartment(id: string): Promise<void> {
-  const response = await apiFetch(`${API_BASE_URL}/api/hospital-departments/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/api/hospital-departments/${id}`, {
     method: "DELETE",
   });
   if (!response.ok) throw new Error("Delete failed");
@@ -850,7 +777,7 @@ export async function createDepartment(payload: {
   name: string;
   description?: string;
 }): Promise<Department> {
-  const response = await apiFetch(`${API_BASE_URL}/api/departments`, {
+  const response = await fetch(`${API_BASE_URL}/api/departments`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -863,7 +790,7 @@ export async function createDepartment(payload: {
 }
 
 export async function deleteDepartment(id: string): Promise<void> {
-  const response = await apiFetch(`${API_BASE_URL}/api/departments/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/api/departments/${id}`, {
     method: "DELETE",
   });
   if (!response.ok) throw new Error("Delete failed");
@@ -876,7 +803,7 @@ export async function updateDepartment(
     description?: string;
   }
 ): Promise<Department> {
-  const response = await apiFetch(`${API_BASE_URL}/api/departments/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/api/departments/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -891,63 +818,15 @@ export async function updateDepartment(
 export interface UserRow {
   _id: string;
   username: string;
-  /** Role key. Roles are stored in the database, so this is not a fixed union. */
-  role: string;
+  role: "admin" | "staff" | "hod";
   departmentId?: { _id: string; name: string } | null;
   serviceId?: { _id: string; name: string } | null;
   hodDepartments?: Array<{ _id: string; name: string }>;
   hodServices?: Array<{ _id: string; name: string }>;
 }
 
-export interface RoleCapabilityItem {
-  key: string;
-  label: string;
-  description: string;
-}
-
-export interface RoleCapabilityGroup {
-  group: string;
-  items: RoleCapabilityItem[];
-}
-
-export interface RoleRow {
-  key: string;
-  label: string;
-  description: string;
-  capabilities: string[];
-  isSystem: boolean;
-  /** Super Admin: always holds everything, cannot be edited. */
-  isProtected: boolean;
-  sortOrder: number;
-}
-
-export async function getRoles(): Promise<{
-  roles: RoleRow[];
-  capabilityCatalog: RoleCapabilityGroup[];
-}> {
-  const response = await apiFetch(`${API_BASE_URL}/api/roles`);
-  if (!response.ok) throw new Error("Could not load roles");
-  return response.json();
-}
-
-export async function updateRoleCapabilities(
-  key: string,
-  capabilities: string[]
-): Promise<RoleRow> {
-  const response = await apiFetch(`${API_BASE_URL}/api/roles/${encodeURIComponent(key)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ capabilities }),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error((err as { message?: string }).message || "Could not update role");
-  }
-  return response.json();
-}
-
 export async function getUsers(): Promise<UserRow[]> {
-  const response = await apiFetch(`${API_BASE_URL}/api/users`);
+  const response = await fetch(`${API_BASE_URL}/api/users`);
   if (!response.ok) throw new Error("Could not load users");
   return response.json();
 }
@@ -955,13 +834,13 @@ export async function getUsers(): Promise<UserRow[]> {
 export async function createUser(payload: {
   username: string;
   password: string;
-  role: string;
+  role: "admin" | "staff" | "hod";
   departmentId?: string | null;
   serviceId?: string | null;
   departmentIds?: string[];
   serviceIds?: string[];
 }): Promise<UserRow> {
-  const response = await apiFetch(`${API_BASE_URL}/api/users`, {
+  const response = await fetch(`${API_BASE_URL}/api/users`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -977,7 +856,7 @@ export async function updateUser(
   id: string,
   payload: {
     username: string;
-    role: string;
+    role: "admin" | "staff" | "hod";
     departmentId?: string | null;
     serviceId?: string | null;
     departmentIds?: string[];
@@ -985,7 +864,7 @@ export async function updateUser(
     password?: string;
   }
 ): Promise<UserRow> {
-  const response = await apiFetch(`${API_BASE_URL}/api/users/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/api/users/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -998,7 +877,7 @@ export async function updateUser(
 }
 
 export async function deleteUser(id: string): Promise<void> {
-  const response = await apiFetch(`${API_BASE_URL}/api/users/${id}`, {
+  const response = await fetch(`${API_BASE_URL}/api/users/${id}`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -1008,7 +887,7 @@ export async function deleteUser(id: string): Promise<void> {
 }
 
 export async function getBrandingSettingsApi(): Promise<BrandingSettings> {
-  const response = await apiFetch(`${API_BASE_URL}/api/branding`, {
+  const response = await fetch(`${API_BASE_URL}/api/branding`, {
     cache: "no-store",
   });
   if (!response.ok) {
@@ -1020,7 +899,7 @@ export async function getBrandingSettingsApi(): Promise<BrandingSettings> {
 export async function saveBrandingSettingsApi(
   payload: BrandingSettings
 ): Promise<BrandingSettings> {
-  const response = await apiFetch(`${API_BASE_URL}/api/branding`, {
+  const response = await fetch(`${API_BASE_URL}/api/branding`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1033,7 +912,7 @@ export async function saveBrandingSettingsApi(
 }
 
 export async function resetBrandingSettingsApi(): Promise<BrandingSettings> {
-  const response = await apiFetch(`${API_BASE_URL}/api/branding`, {
+  const response = await fetch(`${API_BASE_URL}/api/branding`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -1097,7 +976,7 @@ export function coerceTranscriptText(raw: unknown): string {
 export async function inferVoiceRatingFromTranscript(
   transcript: string
 ): Promise<{ rating: number; sentiment: string }> {
-  const response = await apiFetch(`${API_BASE_URL}/api/feedback/infer-voice-rating`, {
+  const response = await fetch(`${API_BASE_URL}/api/feedback/infer-voice-rating`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ transcript }),
@@ -1120,7 +999,7 @@ export async function transcribeVoiceRecording(
   formData.append("mode", "codemix");
   formData.append("language_code", languageCode);
 
-  const response = await apiFetch(`${API_BASE_URL}/api/speech-to-text`, {
+  const response = await fetch(`${API_BASE_URL}/api/speech-to-text`, {
     method: "POST",
     body: formData,
   });

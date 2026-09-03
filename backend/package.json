@@ -15,21 +15,13 @@
     "reanalyze-pending": "node scripts/reanalyzePendingFeedback.js",
     "uploads:check": "node scripts/checkUploadsHealth.js",
     "reset-db": "node scripts/resetDatabase.js --yes",
-    "test-emr-lookup": "node scripts/testEmrLookup.js",
-    "repair-orphan-assignments": "node scripts/repairOrphanedAssignments.js",
-    "seed-superadmin": "node scripts/seedSuperadmin.js",
-    "reset-password": "node scripts/resetUserPassword.js",
-    "dedupe-departments": "node scripts/dedupeDepartments.js",
-    "dedupe-services": "node scripts/dedupeServices.js",
-    "test-sanitize-patient-name": "node scripts/testSanitizePatientName.js"
+    "test-emr-lookup": "node scripts/testEmrLookup.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
-    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
-    "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.19.3",
     "multer": "^2.1.1"
   }
