@@ -1,6 +1,7 @@
 import path from "path";
 import fs from "fs/promises";
 import { BotConversationConfig } from "./models.js";
+import { CAPABILITIES, requireCapability } from "./auth.js";
 import {
   AI_VOICE_FILES,
   DEFAULT_BOT_CONVERSATION,
@@ -185,7 +186,7 @@ export function registerBotConversationRoutes(app, { uploadsRoot, botAudioUpload
     }
   });
 
-  app.get("/api/admin/bot-conversation", async (_req, res) => {
+  app.get("/api/admin/bot-conversation", requireCapability(CAPABILITIES.SETTINGS_MANAGE), async (_req, res) => {
     try {
       const doc = await ensureBotConversationConfig();
       return res.json(serializeBotConfig(doc));
@@ -194,7 +195,7 @@ export function registerBotConversationRoutes(app, { uploadsRoot, botAudioUpload
     }
   });
 
-  app.put("/api/admin/bot-conversation", async (req, res) => {
+  app.put("/api/admin/bot-conversation", requireCapability(CAPABILITIES.SETTINGS_MANAGE), async (req, res) => {
     try {
       const { introText, questions } = req.body || {};
       const doc = await ensureBotConversationConfig();
@@ -244,6 +245,7 @@ export function registerBotConversationRoutes(app, { uploadsRoot, botAudioUpload
 
   app.post(
     "/api/admin/bot-conversation/intro-audio",
+    requireCapability(CAPABILITIES.SETTINGS_MANAGE),
     botAudioUpload.single("audio"),
     async (req, res) => {
       try {
@@ -271,6 +273,7 @@ export function registerBotConversationRoutes(app, { uploadsRoot, botAudioUpload
 
   app.post(
     "/api/admin/bot-conversation/questions/:order/audio",
+    requireCapability(CAPABILITIES.SETTINGS_MANAGE),
     botAudioUpload.single("audio"),
     async (req, res) => {
       try {

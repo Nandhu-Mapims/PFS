@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { CATEGORICAL_PALETTE, colorsForKeys, STATUS_COLORS } from "../../lib/chartPalette";
 import {
   Bar,
   BarChart,
@@ -7,8 +8,6 @@ import {
   Legend,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -30,7 +29,8 @@ import { TicketsKpiDetailDialog } from "./TicketsKpiDetailDialog";
 import type { TicketChartFilter, TicketKpiKind, TicketSelection } from "./ticketsKpiDetail";
 import type { InsightsDataState } from "./useInsightsData";
 
-const DEPT_COLORS = ["#2A6FDB", "#2FBF71", "#8B5CF6", "#F4A261", "#E5533D", "#6B7280"];
+// Colour comes from the shared, validated chart palette (see chartPalette.ts) --
+// keyed to the department name, not to array position.
 const CHART_CARD = "rounded-2xl shadow-sm border border-gray-100 transition-shadow hover:shadow-md hover:border-teal-200";
 
 type Props = Pick<
@@ -96,14 +96,11 @@ export function TicketsTrendsDashboard({
       if (!key) continue;
       byDept[key] = (byDept[key] || 0) + 1;
     }
-    return Object.entries(byDept)
+    const top = Object.entries(byDept)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([name, value], index) => ({
-        name,
-        value,
-        color: DEPT_COLORS[index % DEPT_COLORS.length],
-      }));
+      .slice(0, 6);
+    const colors = colorsForKeys(top.map(([name]) => name));
+    return top.map(([name, value]) => ({ name, value, color: colors[name] }));
   }, [ticketRows]);
 
   const serviceVolume = useMemo(() => {
@@ -113,20 +110,17 @@ export function TicketsTrendsDashboard({
       if (!key) continue;
       byService[key] = (byService[key] || 0) + 1;
     }
-    return Object.entries(byService)
+    const top = Object.entries(byService)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([name, value], index) => ({
-        name,
-        value,
-        color: DEPT_COLORS[index % DEPT_COLORS.length],
-      }));
+      .slice(0, 6);
+    const colors = colorsForKeys(top.map(([name]) => name));
+    return top.map(([name, value]) => ({ name, value, color: colors[name] }));
   }, [ticketRows]);
 
   const statusPie = [
-    { name: "New", value: statusNew, color: "#3b82f6" },
-    { name: "In Progress", value: statusInProgress, color: "#f59e0b" },
-    { name: "Resolved", value: statusResolved, color: "#10b981" },
+    { name: "New", value: statusNew, color: STATUS_COLORS.new },
+    { name: "In Progress", value: statusInProgress, color: STATUS_COLORS.inProgress },
+    { name: "Resolved", value: statusResolved, color: STATUS_COLORS.resolved },
   ].filter((s) => s.value > 0);
 
   const openPeriod = (point: VolumePoint) => {
@@ -234,7 +228,7 @@ export function TicketsTrendsDashboard({
                     <Line
                       type="monotone"
                       dataKey="count"
-                      stroke="#0d9488"
+                      stroke={CATEGORICAL_PALETTE[0]}
                       strokeWidth={3}
                       name="Tickets"
                       dot={(props) => {
@@ -249,7 +243,7 @@ export function TicketsTrendsDashboard({
                             cx={cx}
                             cy={cy}
                             r={payload.count > 0 ? 5 : 3}
-                            fill="#0d9488"
+                            fill={CATEGORICAL_PALETTE[0]}
                             style={{ cursor: payload.count > 0 ? "pointer" : "default" }}
                             onClick={() => openPeriod(payload)}
                           />
@@ -287,7 +281,7 @@ export function TicketsTrendsDashboard({
                     <Legend />
                     <Bar
                       dataKey="new"
-                      fill="#3b82f6"
+                      fill={STATUS_COLORS.new}
                       name="New"
                       stackId="s"
                       cursor="pointer"
@@ -301,7 +295,7 @@ export function TicketsTrendsDashboard({
                     />
                     <Bar
                       dataKey="inProgress"
-                      fill="#f59e0b"
+                      fill={STATUS_COLORS.inProgress}
                       name="In progress"
                       stackId="s"
                       cursor="pointer"
@@ -315,7 +309,7 @@ export function TicketsTrendsDashboard({
                     />
                     <Bar
                       dataKey="resolved"
-                      fill="#10b981"
+                      fill={STATUS_COLORS.resolved}
                       name="Resolved"
                       stackId="s"
                       radius={[6, 6, 0, 0]}
@@ -345,26 +339,23 @@ export function TicketsTrendsDashboard({
               {statusPie.length === 0 ? (
                 <p className="text-muted-foreground text-sm py-12 text-center">No tickets.</p>
               ) : (
-                <ResponsiveContainer width="100%" height={280}>
-                  <PieChart>
-                    <Pie
-                      data={statusPie}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) =>
-                        `${name} ${((percent ?? 0) * 100).toFixed(0)}%`
-                      }
-                      outerRadius={90}
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart
+                    data={statusPie}
+                    layout="vertical"
+                    margin={{ left: 8, right: 24, top: 4, bottom: 4 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
+                    <XAxis type="number" allowDecimals={false} />
+                    <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 11 }} />
+                    <Tooltip formatter={(value: number) => [`${value} ticket(s)`, "Count"]} />
+                    <Bar
                       dataKey="value"
+                      radius={[0, 4, 4, 0]}
                       cursor="pointer"
                       onClick={(d) => {
-                        const name = String(d?.name || "");
-                        if (
-                          name === "New" ||
-                          name === "In Progress" ||
-                          name === "Resolved"
-                        ) {
+                        const name = String((d.payload as { name?: string })?.name || "");
+                        if (name === "New" || name === "In Progress" || name === "Resolved") {
                           openChart({ type: "status", status: name });
                         }
                       }}
@@ -372,9 +363,8 @@ export function TicketsTrendsDashboard({
                       {statusPie.map((entry) => (
                         <Cell key={entry.name} fill={entry.color} />
                       ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
+                    </Bar>
+                  </BarChart>
                 </ResponsiveContainer>
               )}
             </CardContent>
@@ -399,7 +389,7 @@ export function TicketsTrendsDashboard({
                     <Tooltip />
                     <Bar
                       dataKey="count"
-                      fill="#0d9488"
+                      fill={CATEGORICAL_PALETTE[0]}
                       name="Tickets"
                       radius={[4, 4, 0, 0]}
                       cursor="pointer"
@@ -427,29 +417,30 @@ export function TicketsTrendsDashboard({
               {departmentVolume.length === 0 ? (
                 <p className="text-muted-foreground text-sm py-12 text-center">No department data.</p>
               ) : (
-                <ResponsiveContainer width="100%" height={280}>
-                  <PieChart>
-                    <Pie
-                      data={departmentVolume}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) =>
-                        `${name} ${((percent ?? 0) * 100).toFixed(0)}%`
-                      }
-                      outerRadius={90}
+                <ResponsiveContainer width="100%" height={Math.max(220, departmentVolume.length * 40)}>
+                  <BarChart
+                    data={departmentVolume}
+                    layout="vertical"
+                    margin={{ left: 8, right: 24, top: 8, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false} />
+                    <XAxis type="number" allowDecimals={false} />
+                    <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11 }} />
+                    <Tooltip formatter={(value: number) => [`${value} ticket(s)`, "Count"]} />
+                    <Bar
                       dataKey="value"
+                      radius={[0, 4, 4, 0]}
                       cursor="pointer"
                       onClick={(d) => {
-                        if (d?.name) openChart({ type: "department", name: String(d.name) });
+                        const name = (d.payload as { name?: string })?.name;
+                        if (name) openChart({ type: "department", name });
                       }}
                     >
                       {departmentVolume.map((entry) => (
                         <Cell key={entry.name} fill={entry.color} />
                       ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
+                    </Bar>
+                  </BarChart>
                 </ResponsiveContainer>
               )}
             </CardContent>
@@ -472,7 +463,7 @@ export function TicketsTrendsDashboard({
                     <Tooltip />
                     <Bar
                       dataKey="value"
-                      fill="#0d9488"
+                      fill={CATEGORICAL_PALETTE[0]}
                       name="Tickets"
                       radius={[0, 8, 8, 0]}
                       cursor="pointer"
