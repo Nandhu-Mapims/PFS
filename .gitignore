@@ -32,3 +32,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Local data backups / dumps — never commit patient data
+/feedbacksystem_backup.tar.gz
+/feedbacksystem_dump/
+/REMOTE_FULL_BACKUP/
+/image.png
+
