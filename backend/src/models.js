@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { sanitizePatientName } from "./fieldSanitize.js";
 
 const departmentServiceSchema = new mongoose.Schema(
   {
@@ -40,7 +41,7 @@ const userSchema = new mongoose.Schema(
 
 const feedbackSchema = new mongoose.Schema(
   {
-    patientName: { type: String, required: true, trim: true },
+    patientName: { type: String, required: true, trim: true, set: sanitizePatientName },
     patientRegNo: { type: String, default: "", trim: true },
     patientEncounterType: { type: String, enum: ["", "op", "ip"], default: "" },
     ward: { type: String, default: "", trim: true },

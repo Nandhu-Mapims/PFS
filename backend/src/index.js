@@ -19,7 +19,7 @@ import {
   newSubmissionGroupId,
   resolveServiceHeuristic,
 } from "./feedbackIssueProcessing.js";
-import { sanitizeOptionalLabel } from "./fieldSanitize.js";
+import { sanitizeOptionalLabel, sanitizePatientName } from "./fieldSanitize.js";
 import {
   analyticsDepartmentFromFeedback,
   analyticsSlicesFromFeedback,
@@ -1942,7 +1942,7 @@ app.post("/api/feedback", (req, res, next) => {
       }
     }
 
-    const patientName = req.body.patientName;
+    const patientName = sanitizePatientName(req.body.patientName);
     let comments = req.body.comments;
     const source = req.body.source;
     const staffRemarks = String(req.body.staffRemarks || "").trim().slice(0, 2000);
