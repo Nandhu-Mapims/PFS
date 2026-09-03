@@ -130,6 +130,9 @@ function parseLooseDate(s) {
 /** @param {Record<string, unknown>} row */
 function mapOpRow(row, frmDate, toDate) {
   const regNo = getFromRow(row, "REG NO", "REGNO", "REG_NO");
+  // The EMR's front-office report grid sometimes returns NAME pre-formatted as
+  // HTML for its own web UI (a clickable <a> wrapped in a <div>) — strip that
+  // down to the visible name here, at the point it enters this app.
   const patientName = sanitizePatientName(getFromRow(row, "NAME", "PATIENT NAME"));
   const department = sanitizeOptionalLabel(getFromRow(row, "DEPARTMENT"));
   const ward = getFromRow(row, "WARD");

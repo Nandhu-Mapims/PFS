@@ -1,16 +1,30 @@
+import {
+  apiFetch,
+  clearStoredSession,
+  readStoredSession,
+  writeStoredSession,
+} from "./apiClient";
+
 export type UserRole = "admin" | "staff" | "hod";
 
 export interface SessionUser {
   _id: string;
   username: string;
   role: UserRole;
+  /** Bearer token issued by the API; sent on every authenticated request. */
+  token?: string;
+  /**
+   * Capabilities granted to this role, as returned by the server at login.
+   * These drive what the UI offers — the API re-derives and enforces them from
+   * the token on every request, so tampering with them here changes nothing.
+   */
+  capabilities?: string[];
   departmentId?: string | null;
   departmentName?: string | null;
   serviceId?: string | null;
   serviceName?: string | null;
 }
 
-const SESSION_KEY = "feedback_auth_session";
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
 
 export async function login(
@@ -18,6 +32,7 @@ export async function login(
   password: string
 ): Promise<SessionUser | null> {
   try {
+    // Deliberately a plain fetch: there is no token to attach yet.
     const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -31,12 +46,14 @@ export async function login(
       _id: data._id,
       username: data.username,
       role: data.role,
+      token: data.token,
+      capabilities: data.capabilities ?? [],
       departmentId: data.departmentId ?? null,
       departmentName: data.departmentName ?? null,
       serviceId: data.serviceId ?? null,
       serviceName: data.serviceName ?? null,
     };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    writeStoredSession(session);
     return session;
   } catch {
     return null;
@@ -44,28 +61,29 @@ export async function login(
 }
 
 export function getSession(): SessionUser | null {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as SessionUser;
-  } catch {
-    return null;
-  }
+  return readStoredSession() as SessionUser | null;
 }
 
 export function logout(): void {
-  localStorage.removeItem(SESSION_KEY);
+  clearStoredSession();
+}
+
+/** True when the signed-in user holds the capability. UI hint only — the API enforces. */
+export function hasCapability(capability: string): boolean {
+  return Boolean(getSession()?.capabilities?.includes(capability));
 }
 
 export async function changeHodPassword(
-  userId: string,
+  _userId: string,
   currentPassword: string,
   newPassword: string
 ): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/auth/change-password`, {
+  // The API derives the account from the bearer token, so no user id is sent —
+  // passing one used to let a caller target somebody else's password.
+  const response = await apiFetch(`${API_BASE_URL}/api/auth/change-password`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, currentPassword, newPassword }),
+    body: JSON.stringify({ currentPassword, newPassword }),
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { message?: string };

@@ -28,11 +28,38 @@ const routingServiceSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+/**
+ * A role is a named bundle of capabilities. Storing them makes the RBAC screen
+ * edit data instead of code, so adding a role no longer means touching the four
+ * places the old enum was duplicated.
+ */
+const roleSchema = new mongoose.Schema(
+  {
+    /** Stable identifier stored on User.role and in the auth token. */
+    key: { type: String, required: true, trim: true, lowercase: true, unique: true },
+    label: { type: String, required: true, trim: true },
+    description: { type: String, default: "", trim: true },
+    capabilities: { type: [String], default: [] },
+    /** Built-in roles cannot be deleted or re-keyed; their capabilities are still editable. */
+    isSystem: { type: Boolean, default: false },
+    /**
+     * Superadmin. Its capability set is locked (it always holds everything) so
+     * the RBAC screen cannot be used to lock every administrator out.
+     */
+    isProtected: { type: Boolean, default: false },
+    /** Guards the "exactly one management user" style constraints in the UI. */
+    sortOrder: { type: Number, default: 100 },
+  },
+  { timestamps: true }
+);
+
 const userSchema = new mongoose.Schema(
   {
     username: { type: String, required: true, trim: true, unique: true, lowercase: true },
     passwordHash: { type: String, required: true },
-    role: { type: String, enum: ["admin", "staff", "hod"], required: true },
+    // Validated against the roles collection at the API layer — an enum here
+    // would defeat the point of storing roles as data.
+    role: { type: String, required: true, trim: true, lowercase: true },
     departmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Department", default: null },
     serviceId: { type: mongoose.Schema.Types.ObjectId, ref: "RoutingService", default: null },
   },
@@ -41,6 +68,8 @@ const userSchema = new mongoose.Schema(
 
 const feedbackSchema = new mongoose.Schema(
   {
+    // set() runs on every assignment (create, insertMany, doc.field=) so no
+    // write path — including future ones — can persist HTML/markup here.
     patientName: { type: String, required: true, trim: true, set: sanitizePatientName },
     patientRegNo: { type: String, default: "", trim: true },
     patientEncounterType: { type: String, enum: ["", "op", "ip"], default: "" },
@@ -79,6 +108,20 @@ const feedbackSchema = new mongoose.Schema(
     /** HOD note required when marking a ticket Resolved (visible to admin). */
     resolutionNote: { type: String, default: "", trim: true },
     resolutionNoteAt: { type: Date, default: null },
+    /**
+     * Structured CAPA the HOD records when closing a ticket (quality audit trail).
+     * writtenAt is the "CAPA written" marker — tickets resolved before this field
+     * existed keep it null, so coverage on the management dashboard stays honest.
+     */
+    capa: {
+      rootCause: { type: String, default: "", trim: true },
+      correctiveAction: { type: String, default: "", trim: true },
+      preventiveAction: { type: String, default: "", trim: true },
+      targetDate: { type: String, default: "", trim: true },
+      writtenByUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+      writtenByUsername: { type: String, default: "", trim: true },
+      writtenAt: { type: Date, default: null },
+    },
     assignedToUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     assignedToUsername: { type: String, default: "", trim: true },
     assignedAt: { type: Date, default: null },
@@ -140,6 +183,11 @@ const feedbackSchema = new mongoose.Schema(
 
 feedbackSchema.index({ createdAt: -1 });
 feedbackSchema.index({ createdAt: -1, patientEncounterType: 1 });
+/** HOD queue: filtered by assignee, sorted newest-first. Without this the
+ *  dashboard collection-scans every feedback row on each load. */
+feedbackSchema.index({ assignedToUserId: 1, createdAt: -1 });
+/** Ticket Management boards filter by status over a date window. */
+feedbackSchema.index({ status: 1, createdAt: -1 });
 feedbackSchema.index({ updatedAt: -1 });
 feedbackSchema.index(
   { clientSubmissionId: 1 },
@@ -228,6 +276,7 @@ summaryReportSchema.index(
   { unique: true }
 );
 
+export const Role = mongoose.model("Role", roleSchema);
 export const Department = mongoose.model("Department", departmentSchema);
 export const RoutingService = mongoose.model("RoutingService", routingServiceSchema);
 export const User = mongoose.model("User", userSchema);

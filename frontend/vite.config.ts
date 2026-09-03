@@ -50,6 +50,22 @@ export default defineConfig({
     },
   },
 
+  build: {
+    rollupOptions: {
+      output: {
+        // Only the framework is pinned to a chunk — it is genuinely needed for
+        // first paint, and isolating it keeps it cached across app deploys.
+        // Recharts and xlsx are deliberately NOT listed: naming a chunk here
+        // hoists it into the entry's preload group even when only lazy routes
+        // import it. Left alone, Rollup splits them into async chunks that load
+        // on demand with the routes that actually chart or export.
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router'],
+        },
+      },
+    },
+  },
+
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 })

@@ -21,7 +21,16 @@ export function Layout() {
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   const session = getSession();
-  const isAdmin = session?.role === "admin";
+  const capabilities = session?.capabilities ?? [];
+  const canManageRoles = capabilities.includes("roles.manage");
+  // Any role that can reach the admin console — no longer just the literal "admin".
+  const isAdmin =
+    capabilities.includes("users.manage") ||
+    capabilities.includes("roles.manage") ||
+    capabilities.includes("departments.manage") ||
+    capabilities.includes("services.manage") ||
+    capabilities.includes("settings.manage") ||
+    capabilities.includes("branding.manage");
   const isHod = session?.role === "hod";
   const path = location.pathname;
   const isPatientKioskScreen = isUserFeedPath(path);
@@ -53,6 +62,7 @@ export function Layout() {
         "/admin/departments",
         "/admin/services",
         "/admin/users",
+        "/admin/roles",
         "/admin/tickets",
         "/admin/settings",
         "/admin/bot-conversation",
@@ -179,6 +189,22 @@ export function Layout() {
                     >
                       Users
                     </button>
+                    {canManageRoles ? (
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={path === "/admin/roles"}
+                        onClick={() => navigate("/admin/roles")}
+                        className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold transition-all ${
+                          path === "/admin/roles"
+                            ? "bg-white shadow-sm"
+                            : "text-gray-600 hover:text-gray-900"
+                        }`}
+                        style={path === "/admin/roles" ? activePrimaryStyle : undefined}
+                      >
+                        Roles
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       role="tab"

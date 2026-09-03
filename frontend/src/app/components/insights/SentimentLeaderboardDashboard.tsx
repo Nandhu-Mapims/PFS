@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { SENTIMENT_COLORS } from "../../lib/chartPalette";
 import {
   Bar,
   BarChart,
@@ -242,9 +243,9 @@ function LeaderboardColumn({
                   <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11 }} />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="positive" stackId="s" fill="#10b981" name="Positive" />
-                  <Bar dataKey="neutral" stackId="s" fill="#fbbf24" name="Neutral" />
-                  <Bar dataKey="negative" stackId="s" fill="#ef4444" name="Negative" radius={[0, 4, 4, 0]} />
+                  <Bar dataKey="positive" stackId="s" fill={SENTIMENT_COLORS.positive} name="Positive" />
+                  <Bar dataKey="neutral" stackId="s" fill={SENTIMENT_COLORS.neutral} name="Neutral" />
+                  <Bar dataKey="negative" stackId="s" fill={SENTIMENT_COLORS.negative} name="Negative" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
