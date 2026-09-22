@@ -46,6 +46,7 @@ export function FeedbackForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<"idle" | "text" | "voice">("idle");
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [transcriptionPending, setTranscriptionPending] = useState(false);
   const [primaryColor, setPrimaryColor] = useState("#2A6FDB");
   const prevModeBucketRef = useRef<string | null>(null);
   const outboxIdRef = useRef<string | null>(null);
@@ -68,6 +69,7 @@ export function FeedbackForm() {
     setVoiceReady(false);
     setVoiceRecordingBlob(null);
     setVoiceRevision((r) => r + 1);
+    setTranscriptionPending(false);
     outboxIdRef.current = null;
     identity.reset();
   }, [modeParam, identity.reset]);
@@ -135,11 +137,14 @@ export function FeedbackForm() {
     (blob: Blob | null) => {
       voiceBlobRef.current = blob;
       setVoiceRecordingBlob(blob);
+      if (!blob) return;
+      // Save the raw recording to IndexedDB the instant it's available — before
+      // transcription finishes — so a dropped connection during transcription
+      // never loses the audio. onVoiceSuccess overwrites this same draft (same
+      // outbox id) with the final transcript/rating once ready.
       const transcript = draftCommentsRef.current.trim();
-      const rating = draftRatingRef.current;
-      if (transcript && rating != null) {
-        void persistVoiceDraft(transcript, rating, blob);
-      }
+      const rating = draftRatingRef.current ?? 3;
+      void persistVoiceDraft(transcript, rating, blob);
     },
     [persistVoiceDraft]
   );
@@ -159,6 +164,12 @@ export function FeedbackForm() {
     } else {
       if (!voiceReady || selectedEmotion == null) {
         setSubmitError("Please speak your feedback first.");
+        return;
+      }
+      if (transcriptionPending) {
+        setSubmitError(
+          "Still finishing transcription — your recording is saved and this will complete automatically once you're back online."
+        );
         return;
       }
       const c = comments.trim();
@@ -237,7 +248,9 @@ export function FeedbackForm() {
   };
 
   const canSubmitType = Boolean(selectedEmotion && identity.identityReady);
-  const canSubmitVoice = Boolean(voiceReady && selectedEmotion != null && identity.identityReady);
+  const canSubmitVoice = Boolean(
+    voiceReady && selectedEmotion != null && identity.identityReady && !transcriptionPending
+  );
 
   const submitEnabled =
     identity.identityReady &&
@@ -307,6 +320,7 @@ export function FeedbackForm() {
             onVoiceCleared={onVoiceCleared}
             onVoiceError={onVoiceError}
             onVoiceRecordingReady={onVoiceRecordingReady}
+            onTranscriptionPendingChange={setTranscriptionPending}
           />
         )}
 

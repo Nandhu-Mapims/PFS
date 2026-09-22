@@ -53,6 +53,8 @@ export interface FeedbackVoiceSectionProps {
   skipRatingInference?: boolean;
   /** Restore transcript when returning from the remark step. */
   restoredTranscript?: string;
+  /** Fires when one or more segments are stuck waiting for a connection to transcribe. */
+  onTranscriptionPendingChange?: (pending: boolean) => void;
 }
 
 export function FeedbackVoiceSection({
@@ -67,6 +69,7 @@ export function FeedbackVoiceSection({
   skipRatingInference = false,
   maxRecordingSecondsOverride,
   restoredTranscript,
+  onTranscriptionPendingChange,
 }: FeedbackVoiceSectionProps) {
   const isStaffRemarks = variant === "staffRemarks";
   const [speechLanguageCode, setSpeechLanguageCode] =
@@ -77,6 +80,7 @@ export function FeedbackVoiceSection({
   const [segmentsDoneUi, setSegmentsDoneUi] = useState(0);
   const [maxRecordingSeconds, setMaxRecordingSeconds] = useState(120);
   const [secondsRemaining, setSecondsRemaining] = useState(120);
+  const [transcriptionPending, setTranscriptionPending] = useState(false);
 
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -90,6 +94,9 @@ export function FeedbackVoiceSection({
   const nextSegmentIdxRef = useRef(0);
   const transcriptsBySegmentRef = useRef(new Map<number, string>());
   const transcriptionJobsRef = useRef<Promise<void>[]>([]);
+  /** Segments whose transcription failed because of a dropped connection — kept so we can retry, never dropped. */
+  const pendingSegmentBlobsRef = useRef(new Map<number, { blob: Blob; filename: string }>());
+  const lastRatingRef = useRef(3);
 
   const rotateBusyRef = useRef(false);
   const finishingSessionRef = useRef(false);
@@ -102,8 +109,12 @@ export function FeedbackVoiceSection({
 
   const onVoiceRecordingReadyRef = useRef(onVoiceRecordingReady);
   const onVoiceErrorRef = useRef(onVoiceError);
+  const onVoiceSuccessRef = useRef(onVoiceSuccess);
+  const onTranscriptionPendingChangeRef = useRef(onTranscriptionPendingChange);
   onVoiceRecordingReadyRef.current = onVoiceRecordingReady;
   onVoiceErrorRef.current = onVoiceError;
+  onVoiceSuccessRef.current = onVoiceSuccess;
+  onTranscriptionPendingChangeRef.current = onTranscriptionPendingChange;
 
   const restoredAppliedRef = useRef(false);
   const skipResetForRestoreRef = useRef(Boolean(restoredTranscript?.trim()));
@@ -218,9 +229,16 @@ export function FeedbackVoiceSection({
     }, SEGMENT_MS);
   }
 
+  /** Segment transcription failed because we're offline (vs. the server rejecting the audio itself). */
+  function isNetworkFailure(err: unknown): boolean {
+    if (typeof navigator !== "undefined" && !navigator.onLine) return true;
+    return err instanceof TypeError;
+  }
+
   const enqueueTranscription = useCallback(async (segmentIdx: number, blob: Blob) => {
     if (!blob.size) {
       transcriptsBySegmentRef.current.set(segmentIdx, "");
+      setSegmentsDoneUi((n) => n + 1);
       return;
     }
     const ext =
@@ -230,16 +248,88 @@ export function FeedbackVoiceSection({
           ? "webm"
           : "audio";
     const filename = `seg-${segmentIdx}.${ext}`;
-    const { transcript: raw } = await transcribeVoiceRecordingChunked(
-      blob,
-      filename,
-      speechLanguageCode
-    );
-    const t = coerceTranscriptText(raw).trim();
-    transcriptsBySegmentRef.current.set(segmentIdx, t);
+
+    try {
+      const { transcript: raw } = await transcribeVoiceRecordingChunked(
+        blob,
+        filename,
+        speechLanguageCode
+      );
+      const t = coerceTranscriptText(raw).trim();
+      transcriptsBySegmentRef.current.set(segmentIdx, t);
+      pendingSegmentBlobsRef.current.delete(segmentIdx);
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        // Keep the audio around to retry once we're back online — never drop it.
+        pendingSegmentBlobsRef.current.set(segmentIdx, { blob, filename });
+      } else {
+        // The API rejected this clip's content (e.g. too short/silent) — only that
+        // segment's text is lost, the rest of the recording still comes through.
+        transcriptsBySegmentRef.current.set(segmentIdx, "");
+      }
+    }
     setSegmentsDoneUi((n) => n + 1);
     setLiveTranscript(mergeSegments(transcriptsBySegmentRef.current));
   }, [speechLanguageCode]);
+
+  /** Re-attempts any segments that failed only because the connection was down. */
+  const retryPendingSegments = useCallback(async () => {
+    if (!pendingSegmentBlobsRef.current.size) return;
+    const entries = [...pendingSegmentBlobsRef.current.entries()];
+    for (const [segmentIdx, { blob, filename }] of entries) {
+      try {
+        const { transcript: raw } = await transcribeVoiceRecordingChunked(
+          blob,
+          filename,
+          speechLanguageCode
+        );
+        const t = coerceTranscriptText(raw).trim();
+        transcriptsBySegmentRef.current.set(segmentIdx, t);
+        pendingSegmentBlobsRef.current.delete(segmentIdx);
+      } catch (err) {
+        if (!isNetworkFailure(err)) {
+          // Now reachable but the clip itself was rejected — stop retrying it.
+          transcriptsBySegmentRef.current.set(segmentIdx, "");
+          pendingSegmentBlobsRef.current.delete(segmentIdx);
+        }
+        // else: still offline — leave queued for the next online event.
+      }
+    }
+
+    const merged = mergeSegments(transcriptsBySegmentRef.current);
+    setLiveTranscript(merged);
+    const stillPending = pendingSegmentBlobsRef.current.size > 0;
+    setTranscriptionPending(stillPending);
+    onTranscriptionPendingChangeRef.current?.(stillPending);
+
+    if (
+      !stillPending &&
+      (recordingStateRef.current === "completed" || recordingStateRef.current === "processing")
+    ) {
+      const cleanedTranscript = merged.trim();
+      let rating = lastRatingRef.current;
+      if (!skipRatingInference && cleanedTranscript) {
+        try {
+          const inferred = await inferVoiceRatingFromTranscript(cleanedTranscript);
+          if (Number.isFinite(inferred.rating)) {
+            rating = Math.min(5, Math.max(1, Math.round(inferred.rating)));
+          }
+        } catch {
+          /* keep the earlier fallback rating */
+        }
+      }
+      lastRatingRef.current = rating;
+      const cleaned = cleanedTranscript || "(No speech detected.)";
+      setLocalTranscript(cleaned);
+      onVoiceErrorRef.current?.(null);
+      onVoiceSuccessRef.current?.(cleaned, rating);
+    }
+  }, [skipRatingInference, speechLanguageCode]);
+
+  useEffect(() => {
+    window.addEventListener("online", retryPendingSegments);
+    return () => window.removeEventListener("online", retryPendingSegments);
+  }, [retryPendingSegments]);
 
   const attachRecorderCallbacks = useCallback((recorder: MediaRecorder) => {
     recorder.ondataavailable = (e) => {
@@ -393,9 +483,12 @@ export function FeedbackVoiceSection({
     nextSegmentIdxRef.current = 0;
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
+    pendingSegmentBlobsRef.current.clear();
     finishingSessionRef.current = false;
     onVoiceErrorRef.current(null);
     onVoiceRecordingReadyRef.current?.(null);
+    setTranscriptionPending(false);
+    onTranscriptionPendingChangeRef.current?.(false);
   }, [resetRevision, stopTracks, clearCountdownTimer, clearSegmentTimer]);
 
   const finishRecordingPipeline = useCallback(async () => {
@@ -436,14 +529,18 @@ export function FeedbackVoiceSection({
       return;
     }
 
+    const hasPending = pendingSegmentBlobsRef.current.size > 0;
     const merged = mergeSegments(transcriptsBySegmentRef.current);
-    const cleaned = merged.trim() ? merged.trim() : "(No speech detected.)";
-    setLocalTranscript(cleaned);
+    const cleanedTranscript = merged.trim();
+    setLocalTranscript(
+      cleanedTranscript ||
+        (hasPending ? "Waiting for connection to finish transcribing…" : "(No speech detected.)")
+    );
 
     let rating = 3;
-    if (!skipRatingInference) {
+    if (!skipRatingInference && !hasPending && cleanedTranscript) {
       try {
-        const inferred = await inferVoiceRatingFromTranscript(cleaned);
+        const inferred = await inferVoiceRatingFromTranscript(cleanedTranscript);
         if (Number.isFinite(inferred.rating)) {
           rating = Math.min(5, Math.max(1, Math.round(inferred.rating)));
         }
@@ -451,9 +548,19 @@ export function FeedbackVoiceSection({
         rating = 3;
       }
     }
+    lastRatingRef.current = rating;
 
-    onVoiceSuccess(cleaned, rating);
-    onVoiceError(null);
+    // The full recording is already captured (archive blob went out via
+    // onVoiceRecordingReady before this point) — persist whatever transcript we
+    // have now so nothing is lost, even if some segments are still offline.
+    onVoiceSuccess(cleanedTranscript || (hasPending ? "" : "(No speech detected.)"), rating);
+    setTranscriptionPending(hasPending);
+    onTranscriptionPendingChangeRef.current?.(hasPending);
+    onVoiceError(
+      hasPending
+        ? "You're offline — part of your recording is saved and will finish transcribing automatically once you're back online."
+        : null
+    );
     setRecordingState("completed");
     setSegmentsDoneUi(0);
     finishingSessionRef.current = false;
@@ -472,11 +579,14 @@ export function FeedbackVoiceSection({
     onVoiceError(null);
     onVoiceCleared();
     onVoiceRecordingReadyRef.current?.(null);
+    setTranscriptionPending(false);
+    onTranscriptionPendingChangeRef.current?.(false);
     setLocalTranscript("");
     setLiveTranscript("");
     nextSegmentIdxRef.current = 0;
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
+    pendingSegmentBlobsRef.current.clear();
     setSegmentsDoneUi(0);
     finishingSessionRef.current = false;
 
@@ -545,9 +655,12 @@ export function FeedbackVoiceSection({
     onVoiceCleared();
     onVoiceError(null);
     onVoiceRecordingReadyRef.current?.(null);
+    setTranscriptionPending(false);
+    onTranscriptionPendingChangeRef.current?.(false);
     nextSegmentIdxRef.current = 0;
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
+    pendingSegmentBlobsRef.current.clear();
     finishingSessionRef.current = false;
   };
 
@@ -709,6 +822,13 @@ export function FeedbackVoiceSection({
           <div className="bg-[#F5F7FA] rounded-2xl p-5 md:p-6 border-2 border-gray-200 min-h-[100px] mb-4">
             <p className="text-base md:text-lg text-gray-700 leading-relaxed">{displayTranscript}</p>
           </div>
+          {transcriptionPending && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <Loader size={16} className="animate-spin shrink-0" />
+              Your recording is saved on this device. Finishing transcription automatically once
+              you're back online.
+            </div>
+          )}
           {recordingState === "completed" && (
             <p className="text-center">
               <button
