@@ -1109,6 +1109,18 @@ export async function inferVoiceRatingFromTranscript(
   return body as { rating: number; sentiment: string };
 }
 
+/** Thrown by transcribeVoiceRecording so callers can tell a transient
+ *  rate-limit/server error (retry later) apart from a permanent rejection
+ *  of the clip's content (e.g. too short/silent). */
+export class TranscribeApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "TranscribeApiError";
+    this.status = status;
+  }
+}
+
 export async function transcribeVoiceRecording(
   audioBlob: Blob,
   filename = "recording.webm",
@@ -1127,7 +1139,10 @@ export async function transcribeVoiceRecording(
 
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(readApiErrorMessage(body) || "Could not transcribe audio");
+    throw new TranscribeApiError(
+      readApiErrorMessage(body) || "Could not transcribe audio",
+      response.status
+    );
   }
 
   const row = body as Record<string, unknown>;

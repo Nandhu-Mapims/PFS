@@ -3,6 +3,7 @@ import { AudioLines, Check, Loader } from "lucide-react";
 import {
   coerceTranscriptText,
   inferVoiceRatingFromTranscript,
+  TranscribeApiError,
   type SpeechLanguageCode,
 } from "../lib/api";
 import { transcribeVoiceRecordingChunked } from "../lib/audioTranscription";
@@ -94,9 +95,11 @@ export function FeedbackVoiceSection({
   const nextSegmentIdxRef = useRef(0);
   const transcriptsBySegmentRef = useRef(new Map<number, string>());
   const transcriptionJobsRef = useRef<Promise<void>[]>([]);
-  /** Segments whose transcription failed because of a dropped connection — kept so we can retry, never dropped. */
+  /** Segments whose transcription failed transiently (offline, rate-limited, server error) — kept so we can retry, never dropped. */
   const pendingSegmentBlobsRef = useRef(new Map<number, { blob: Blob; filename: string }>());
   const lastRatingRef = useRef(3);
+  const retryTimerRef = useRef(0);
+  const retryAttemptRef = useRef(0);
 
   const rotateBusyRef = useRef(false);
   const finishingSessionRef = useRef(false);
@@ -229,11 +232,45 @@ export function FeedbackVoiceSection({
     }, SEGMENT_MS);
   }
 
-  /** Segment transcription failed because we're offline (vs. the server rejecting the audio itself). */
-  function isNetworkFailure(err: unknown): boolean {
+  /**
+   * Segment transcription failed for a transient reason (offline, Sarvam
+   * rate-limited us with 429, a server-side 5xx, or 403 which Sarvam also
+   * returns for plan/concurrency limits) — worth retrying — vs. the API
+   * permanently rejecting this clip's content (plain 400: too short/silent).
+   */
+  function isRetryableFailure(err: unknown): boolean {
     if (typeof navigator !== "undefined" && !navigator.onLine) return true;
-    return err instanceof TypeError;
+    if (err instanceof TypeError) return true;
+    if (err instanceof TranscribeApiError) {
+      return err.status === 429 || err.status === 403 || err.status >= 500;
+    }
+    return false;
   }
+
+  const retryPendingSegmentsRef = useRef<() => void>(() => {});
+  const scheduleRetryRef = useRef<() => void>(() => {});
+
+  const clearRetryTimer = useCallback(() => {
+    if (retryTimerRef.current) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = 0;
+    }
+  }, []);
+
+  /**
+   * 429/403/5xx aren't connectivity problems, so the browser's `online` event
+   * never fires for them — poll with backoff instead (4s, 8s, 16s, capped at 30s).
+   */
+  const scheduleRetry = useCallback(() => {
+    clearRetryTimer();
+    const attempt = retryAttemptRef.current;
+    const delayMs = Math.min(30000, 4000 * 2 ** attempt);
+    retryAttemptRef.current = attempt + 1;
+    retryTimerRef.current = window.setTimeout(() => {
+      retryPendingSegmentsRef.current();
+    }, delayMs);
+  }, [clearRetryTimer]);
+  scheduleRetryRef.current = scheduleRetry;
 
   const enqueueTranscription = useCallback(async (segmentIdx: number, blob: Blob) => {
     if (!blob.size) {
@@ -259,8 +296,8 @@ export function FeedbackVoiceSection({
       transcriptsBySegmentRef.current.set(segmentIdx, t);
       pendingSegmentBlobsRef.current.delete(segmentIdx);
     } catch (err) {
-      if (isNetworkFailure(err)) {
-        // Keep the audio around to retry once we're back online — never drop it.
+      if (isRetryableFailure(err)) {
+        // Offline, rate-limited, or a server hiccup — keep the audio to retry, never drop it.
         pendingSegmentBlobsRef.current.set(segmentIdx, { blob, filename });
       } else {
         // The API rejected this clip's content (e.g. too short/silent) — only that
@@ -270,9 +307,10 @@ export function FeedbackVoiceSection({
     }
     setSegmentsDoneUi((n) => n + 1);
     setLiveTranscript(mergeSegments(transcriptsBySegmentRef.current));
+    if (pendingSegmentBlobsRef.current.has(segmentIdx)) scheduleRetryRef.current();
   }, [speechLanguageCode]);
 
-  /** Re-attempts any segments that failed only because the connection was down. */
+  /** Re-attempts any segments that failed transiently (offline, rate-limited, server error). */
   const retryPendingSegments = useCallback(async () => {
     if (!pendingSegmentBlobsRef.current.size) return;
     const entries = [...pendingSegmentBlobsRef.current.entries()];
@@ -287,12 +325,12 @@ export function FeedbackVoiceSection({
         transcriptsBySegmentRef.current.set(segmentIdx, t);
         pendingSegmentBlobsRef.current.delete(segmentIdx);
       } catch (err) {
-        if (!isNetworkFailure(err)) {
-          // Now reachable but the clip itself was rejected — stop retrying it.
+        if (!isRetryableFailure(err)) {
+          // The clip itself was rejected — stop retrying it.
           transcriptsBySegmentRef.current.set(segmentIdx, "");
           pendingSegmentBlobsRef.current.delete(segmentIdx);
         }
-        // else: still offline — leave queued for the next online event.
+        // else: still failing transiently — leave queued for the next retry.
       }
     }
 
@@ -301,6 +339,13 @@ export function FeedbackVoiceSection({
     const stillPending = pendingSegmentBlobsRef.current.size > 0;
     setTranscriptionPending(stillPending);
     onTranscriptionPendingChangeRef.current?.(stillPending);
+
+    if (stillPending) {
+      scheduleRetryRef.current();
+    } else {
+      clearRetryTimer();
+      retryAttemptRef.current = 0;
+    }
 
     if (
       !stillPending &&
@@ -324,12 +369,19 @@ export function FeedbackVoiceSection({
       onVoiceErrorRef.current?.(null);
       onVoiceSuccessRef.current?.(cleaned, rating);
     }
-  }, [skipRatingInference, speechLanguageCode]);
+  }, [clearRetryTimer, skipRatingInference, speechLanguageCode]);
+  retryPendingSegmentsRef.current = () => {
+    void retryPendingSegments();
+  };
 
   useEffect(() => {
+    // Covers real connectivity drops immediately; the backoff timer above
+    // covers rate-limit/server errors where the browser never goes offline.
     window.addEventListener("online", retryPendingSegments);
     return () => window.removeEventListener("online", retryPendingSegments);
   }, [retryPendingSegments]);
+
+  useEffect(() => clearRetryTimer, [clearRetryTimer]);
 
   const attachRecorderCallbacks = useCallback((recorder: MediaRecorder) => {
     recorder.ondataavailable = (e) => {
@@ -484,12 +536,14 @@ export function FeedbackVoiceSection({
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
     pendingSegmentBlobsRef.current.clear();
+    clearRetryTimer();
+    retryAttemptRef.current = 0;
     finishingSessionRef.current = false;
     onVoiceErrorRef.current(null);
     onVoiceRecordingReadyRef.current?.(null);
     setTranscriptionPending(false);
     onTranscriptionPendingChangeRef.current?.(false);
-  }, [resetRevision, stopTracks, clearCountdownTimer, clearSegmentTimer]);
+  }, [resetRevision, stopTracks, clearCountdownTimer, clearSegmentTimer, clearRetryTimer]);
 
   const finishRecordingPipeline = useCallback(async () => {
     if (finishingSessionRef.current) return;
@@ -534,7 +588,7 @@ export function FeedbackVoiceSection({
     const cleanedTranscript = merged.trim();
     setLocalTranscript(
       cleanedTranscript ||
-        (hasPending ? "Waiting for connection to finish transcribing…" : "(No speech detected.)")
+        (hasPending ? "Still finishing transcription…" : "(No speech detected.)")
     );
 
     let rating = 3;
@@ -558,7 +612,7 @@ export function FeedbackVoiceSection({
     onTranscriptionPendingChangeRef.current?.(hasPending);
     onVoiceError(
       hasPending
-        ? "You're offline — part of your recording is saved and will finish transcribing automatically once you're back online."
+        ? "Part of your recording is saved and still finishing transcription — this will complete automatically in a moment."
         : null
     );
     setRecordingState("completed");
@@ -587,6 +641,8 @@ export function FeedbackVoiceSection({
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
     pendingSegmentBlobsRef.current.clear();
+    clearRetryTimer();
+    retryAttemptRef.current = 0;
     setSegmentsDoneUi(0);
     finishingSessionRef.current = false;
 
@@ -661,6 +717,8 @@ export function FeedbackVoiceSection({
     transcriptsBySegmentRef.current.clear();
     transcriptionJobsRef.current = [];
     pendingSegmentBlobsRef.current.clear();
+    clearRetryTimer();
+    retryAttemptRef.current = 0;
     finishingSessionRef.current = false;
   };
 
@@ -825,8 +883,8 @@ export function FeedbackVoiceSection({
           {transcriptionPending && (
             <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               <Loader size={16} className="animate-spin shrink-0" />
-              Your recording is saved on this device. Finishing transcription automatically once
-              you're back online.
+              Your recording is saved on this device and is still finishing transcription — this
+              will complete automatically.
             </div>
           )}
           {recordingState === "completed" && (

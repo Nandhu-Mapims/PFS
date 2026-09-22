@@ -168,7 +168,7 @@ export function FeedbackForm() {
       }
       if (transcriptionPending) {
         setSubmitError(
-          "Still finishing transcription — your recording is saved and this will complete automatically once you're back online."
+          "Still finishing transcription — your recording is saved and this will complete automatically in a moment."
         );
         return;
       }
