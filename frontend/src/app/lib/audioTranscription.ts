@@ -66,8 +66,41 @@ async function decodeAudioBlob(blob: Blob): Promise<AudioBuffer> {
   }
 }
 
+/** Sarvam's recommended input rate; also keeps 25s WAV chunks ~800 KB instead of ~2.4 MB at 48 kHz. */
+const STT_SAMPLE_RATE = 16000;
+
+async function resampleMono(
+  samples: Float32Array,
+  fromRate: number
+): Promise<{ samples: Float32Array; sampleRate: number }> {
+  if (fromRate === STT_SAMPLE_RATE || typeof OfflineAudioContext === "undefined") {
+    return { samples, sampleRate: fromRate };
+  }
+  try {
+    const length = Math.max(1, Math.ceil((samples.length * STT_SAMPLE_RATE) / fromRate));
+    const offline = new OfflineAudioContext(1, length, STT_SAMPLE_RATE);
+    const src = offline.createBuffer(1, samples.length, fromRate);
+    src.copyToChannel(samples, 0);
+    const node = offline.createBufferSource();
+    node.buffer = src;
+    node.connect(offline.destination);
+    node.start();
+    const rendered = await offline.startRendering();
+    return { samples: rendered.getChannelData(0).slice(), sampleRate: STT_SAMPLE_RATE };
+  } catch {
+    return { samples, sampleRate: fromRate };
+  }
+}
+
 /**
- * Transcribe audio via Sarvam REST. Splits clips longer than ~25s into WAV chunks.
+ * Transcribe audio via Sarvam REST.
+ *
+ * MediaRecorder WebM has no duration header, so Sarvam has to guess the clip
+ * length — and it regularly misjudges the first segment of a session as longer
+ * than 30s and rejects it with a 400 ("Audio duration exceeds the maximum limit
+ * of 30 seconds"), silently dropping the opening seconds of the feedback.
+ * Whenever the browser can decode the clip we therefore always send WAV (exact
+ * length in the header), split into chunks under the 30s limit.
  */
 export async function transcribeVoiceRecordingChunked(
   audioBlob: Blob,
@@ -84,13 +117,16 @@ export async function transcribeVoiceRecordingChunked(
     audioBuffer = null;
   }
 
-  if (!audioBuffer || audioBuffer.duration <= maxChunkSeconds) {
+  if (!audioBuffer) {
     const { transcript } = await transcribeVoiceRecording(audioBlob, filename, languageCode);
     return { transcript: coerceTranscriptText(transcript) };
   }
 
-  const sampleRate = audioBuffer.sampleRate;
-  const mono = mixToMono(audioBuffer);
+  const { samples: mono, sampleRate } = await resampleMono(
+    mixToMono(audioBuffer),
+    audioBuffer.sampleRate
+  );
+  const baseName = filename.replace(/\.[^.]+$/, "") || "recording";
   const chunkSamples = Math.max(1, Math.floor(maxChunkSeconds * sampleRate));
   const parts: string[] = [];
 
@@ -101,7 +137,7 @@ export async function transcribeVoiceRecordingChunked(
     const chunkIdx = Math.floor(offset / chunkSamples);
     const { transcript: raw } = await transcribeVoiceRecording(
       wavBlob,
-      `chunk-${chunkIdx}.wav`,
+      `${baseName}-${chunkIdx}.wav`,
       languageCode
     );
     const text = coerceTranscriptText(raw).trim();
