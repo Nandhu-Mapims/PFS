@@ -2549,11 +2549,57 @@ app.post("/api/feedback", (req, res, next) => {
       feedbackIssues: outDoc.feedbackIssues || [],
     });
   } catch (error) {
+    // The offline outbox's foreground quick-retry and its background-sync
+    // retry can both fire for the same entry before either has recorded a
+    // serverFeedbackId, so both pass the clientSubmissionId findOne-check
+    // above and race to insert. The loser hits this unique-index violation
+    // even though the feedback was actually saved by the winner — replay
+    // that saved record instead of reporting a failure the client (and the
+    // patient watching "Failed to create feedback") would otherwise retry
+    // forever without ever seeing it succeed.
+    const raceClientSubmissionId = String(req.body.clientSubmissionId || "").trim().slice(0, 128);
+    if (error?.code === 11000 && error?.keyPattern?.clientSubmissionId && raceClientSubmissionId) {
+      try {
+        const existing = await Feedback.findOne({
+          clientSubmissionId: raceClientSubmissionId,
+        }).lean();
+        if (existing) {
+          const outDoc = attachVoicePlaybackUrl(existing);
+          return res.status(200).json({
+            ...outDoc,
+            ticketRaised: Boolean(outDoc.ticketId),
+            aiPending: false,
+            tmsConfigured: false,
+            tmsOutboundEnabled: false,
+            tmsSyncHint: null,
+            splitTickets: [],
+            feedbackIssues: outDoc.feedbackIssues || [],
+            idempotentReplay: true,
+          });
+        }
+      } catch {
+        // Fall through to the generic response below.
+      }
+    }
+
     // eslint-disable-next-line no-console
     console.error("[feedback] create failed", {
       message: error?.message || String(error),
+      name: error?.name,
+      code: error?.code,
     });
-    return res.status(500).json({ message: "Failed to create feedback" });
+
+    // Mongoose validation messages describe which field/constraint failed
+    // (e.g. "rating: Path `rating` is required") and never include secrets —
+    // safe to forward so the offline queue and the UI show something actionable
+    // instead of a dead-end "Failed to create feedback".
+    if (error?.name === "ValidationError") {
+      return res.status(400).json({ message: error.message });
+    }
+
+    return res.status(500).json({
+      message: "Failed to create feedback. Please try again — your answers have not been lost.",
+    });
   }
 });
 

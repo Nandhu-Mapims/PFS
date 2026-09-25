@@ -12,6 +12,7 @@ services:
     # ports:
     #   - "27017:27017"
     environment:
+      TZ: Asia/Kolkata
       MONGO_INITDB_DATABASE: feedbacksystem
     volumes:
       - pfs_mongo_data:/data/db
