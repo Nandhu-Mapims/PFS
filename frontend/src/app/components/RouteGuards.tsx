@@ -19,6 +19,7 @@ export const CAPABILITY = {
   FEEDBACK_DELETE: "feedback.delete",
   CAPA_WRITE: "capa.write",
   INSIGHTS_VIEW: "insights.view",
+  INSIGHTS_OVERVIEW: "insights.overview",
   REPORTS_GENERATE: "reports.generate",
   USERS_MANAGE: "users.manage",
   ROLES_MANAGE: "roles.manage",
@@ -73,6 +74,13 @@ export function RequireCapability({ anyOf }: { anyOf: string[] }) {
   return <Outlet />;
 }
 
+/** First insights tab the session may open: the overview when allowed, else submissions. */
+export function insightsLandingPath(basePath: string): string {
+  return hasCapability(CAPABILITY.INSIGHTS_OVERVIEW)
+    ? `${basePath}/overview`
+    : `${basePath}/submissions`;
+}
+
 /** Where a user belongs after login, based on what they can actually do. */
 export function landingRouteForSession(): string {
   const session = getSession();
@@ -81,7 +89,7 @@ export function landingRouteForSession(): string {
   if (held.includes(CAPABILITY.ROLES_MANAGE) || held.includes(CAPABILITY.USERS_MANAGE)) {
     return "/admin";
   }
-  if (held.includes(CAPABILITY.INSIGHTS_VIEW)) return "/management/overview";
+  if (held.includes(CAPABILITY.INSIGHTS_VIEW)) return insightsLandingPath("/management");
   if (held.includes(CAPABILITY.FEEDBACK_READ_ASSIGNED)) return "/dashboard";
   if (held.includes(CAPABILITY.FEEDBACK_READ_ALL)) return "/dashboard";
   return patientRoutes.home;

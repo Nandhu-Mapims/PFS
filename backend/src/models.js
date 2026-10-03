@@ -49,6 +49,8 @@ const roleSchema = new mongoose.Schema(
     isProtected: { type: Boolean, default: false },
     /** Guards the "exactly one management user" style constraints in the UI. */
     sortOrder: { type: Number, default: 100 },
+    /** One-time capability migrations already applied, so RBAC edits made afterwards stick. */
+    appliedMigrations: { type: [String], default: [] },
   },
   { timestamps: true }
 );

@@ -17,6 +17,7 @@ export const CAPABILITIES = {
   FEEDBACK_DELETE: "feedback.delete",
   CAPA_WRITE: "capa.write",
   INSIGHTS_VIEW: "insights.view",
+  INSIGHTS_OVERVIEW: "insights.overview",
   REPORTS_GENERATE: "reports.generate",
   USERS_MANAGE: "users.manage",
   ROLES_MANAGE: "roles.manage",
@@ -47,6 +48,7 @@ export const CAPABILITY_CATALOG = [
     group: "Insights & reporting",
     items: [
       { key: CAPABILITIES.INSIGHTS_VIEW, label: "View insights", description: "Open the management dashboards and analytics." },
+      { key: CAPABILITIES.INSIGHTS_OVERVIEW, label: "View overview screen", description: "Open the Management overview tab of the insights dashboards." },
       { key: CAPABILITIES.REPORTS_GENERATE, label: "Generate reports", description: "Trigger summary report generation." },
     ],
   },

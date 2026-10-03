@@ -32,7 +32,7 @@ export const DEFAULT_ROLES = [
     label: "Management",
     description:
       "Read-only executive view: dashboards, scorecards and summary reports. Cannot change any record.",
-    capabilities: [C.FEEDBACK_READ_ALL, C.INSIGHTS_VIEW, C.REPORTS_GENERATE],
+    capabilities: [C.FEEDBACK_READ_ALL, C.INSIGHTS_VIEW, C.INSIGHTS_OVERVIEW, C.REPORTS_GENERATE],
     isSystem: true,
     isProtected: false,
     sortOrder: 20,
@@ -47,6 +47,7 @@ export const DEFAULT_ROLES = [
       C.FEEDBACK_ASSIGN,
       C.FEEDBACK_DELETE,
       C.INSIGHTS_VIEW,
+      C.INSIGHTS_OVERVIEW,
       C.REPORTS_GENERATE,
       C.USERS_MANAGE,
       C.DEPARTMENTS_MANAGE,
@@ -73,12 +74,38 @@ export const DEFAULT_ROLES = [
     key: "staff",
     label: "Staff",
     description: "Submits feedback on behalf of patients and views the feedback log.",
-    capabilities: [C.FEEDBACK_READ_ALL, C.INSIGHTS_VIEW],
+    capabilities: [C.FEEDBACK_READ_ALL, C.INSIGHTS_VIEW, C.INSIGHTS_OVERVIEW],
     isSystem: true,
     isProtected: false,
     sortOrder: 50,
   },
 ];
+
+/**
+ * One-time grants for capabilities added after roles were seeded. Each runs once
+ * per role (tracked in appliedMigrations) so a later removal in the RBAC screen
+ * is not undone on the next boot.
+ */
+const CAPABILITY_MIGRATIONS = [
+  // The overview screen used to be implied by insights.view; keep it visible
+  // for roles that could already see it.
+  { id: "insights.overview.v1", grant: C.INSIGHTS_OVERVIEW, ifHolds: C.INSIGHTS_VIEW },
+];
+
+async function applyCapabilityMigrations() {
+  const rows = await Role.find({ isProtected: { $ne: true } }).lean();
+  for (const row of rows) {
+    const applied = row.appliedMigrations || [];
+    for (const migration of CAPABILITY_MIGRATIONS) {
+      if (applied.includes(migration.id)) continue;
+      const update = { $addToSet: { appliedMigrations: migration.id } };
+      if ((row.capabilities || []).includes(migration.ifHolds)) {
+        update.$addToSet.capabilities = migration.grant;
+      }
+      await Role.updateOne({ _id: row._id }, update);
+    }
+  }
+}
 
 /** key -> role document (plain object). Populated by refreshRoleCache(). */
 let roleCache = new Map();
@@ -103,8 +130,12 @@ export async function ensureRolesSeeded() {
       }
       continue;
     }
-    await Role.create(role);
+    await Role.create({
+      ...role,
+      appliedMigrations: CAPABILITY_MIGRATIONS.map((migration) => migration.id),
+    });
   }
+  await applyCapabilityMigrations();
 }
 
 export async function refreshRoleCache() {

@@ -23,7 +23,13 @@ export function LoginPage() {
       return;
     }
     if (capabilities.includes("insights.view")) {
-      navigate(nextPath || "/management/overview", { replace: true });
+      navigate(
+        nextPath ||
+          (capabilities.includes("insights.overview")
+            ? "/management/overview"
+            : "/management/submissions"),
+        { replace: true }
+      );
       return;
     }
     if (capabilities.includes("feedback.read.assigned")) {

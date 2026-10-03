@@ -1,6 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { getSession } from "../../lib/auth";
+import { CAPABILITY, hasCapability, insightsLandingPath } from "../RouteGuards";
 import { InsightsPeriodFilterBar } from "./InsightsPeriodFilterBar";
 import { InsightsViewTabs } from "./InsightsViewTabs";
 import { useInsightsData } from "./useInsightsData";
@@ -27,7 +28,14 @@ export function InsightsHub() {
     location.pathname === "/analytics" ||
     location.pathname === "/insights"
   ) {
-    return <Navigate to={`${basePath}/overview`} replace />;
+    return <Navigate to={insightsLandingPath(basePath)} replace />;
+  }
+
+  if (
+    location.pathname.startsWith(`${basePath}/overview`) &&
+    !hasCapability(CAPABILITY.INSIGHTS_OVERVIEW)
+  ) {
+    return <Navigate to={`${basePath}/submissions`} replace />;
   }
 
   if (data.isLoading && !data.hasData) {

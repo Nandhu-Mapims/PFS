@@ -1,5 +1,6 @@
 import { BarChart2, ClipboardList, FileText, LayoutDashboard, TrendingUp } from "lucide-react";
 import { NavLink } from "react-router";
+import { CAPABILITY, hasCapability } from "../RouteGuards";
 
 function tabClass({ isActive }: { isActive: boolean }) {
   return `inline-flex w-full items-center justify-center gap-1.5 rounded-lg px-2 sm:px-3 py-2 text-[11px] sm:text-sm font-semibold transition-all ${
@@ -15,17 +16,20 @@ export function InsightsViewTabs({ basePath }: { basePath: string }) {
   const ticketsPath = `${basePath}/tickets`;
   const sentimentPath = `${basePath}/sentiment`;
   const summaryReportPath = `${basePath}/summary-report`;
+  const showOverview = hasCapability(CAPABILITY.INSIGHTS_OVERVIEW);
 
   return (
     <div
-      className="grid w-full grid-cols-5 rounded-xl border border-gray-200 bg-gray-50 p-1"
+      className={`grid w-full ${showOverview ? "grid-cols-5" : "grid-cols-4"} rounded-xl border border-gray-200 bg-gray-50 p-1`}
       role="tablist"
       aria-label="Insights views"
     >
-      <NavLink to={overviewPath} className={tabClass}>
-        <LayoutDashboard size={16} className="shrink-0" />
-        Management
-      </NavLink>
+      {showOverview && (
+        <NavLink to={overviewPath} className={tabClass}>
+          <LayoutDashboard size={16} className="shrink-0" />
+          Management
+        </NavLink>
+      )}
       <NavLink to={submissionsPath} className={tabClass} end>
         <TrendingUp size={16} className="shrink-0" />
         Submissions
