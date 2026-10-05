@@ -32,6 +32,7 @@ export function Layout() {
     capabilities.includes("settings.manage") ||
     capabilities.includes("branding.manage");
   const isHod = session?.role === "hod";
+  const hodCanSeeOverview = isHod && capabilities.includes("insights.overview");
   const path = location.pathname;
   const isPatientKioskScreen = isUserFeedPath(path);
   const isStaffRoute =
@@ -41,7 +42,8 @@ export function Layout() {
     path.includes("management") ||
     path.includes("analytics") ||
     path.includes("ticket") ||
-    path.includes("admin"));
+    path.includes("admin") ||
+    path.startsWith("/hod/"));
   const showHeaderActions = Boolean(session) && isStaffRoute;
   const onInsightsArea =
     path.startsWith("/management") ||
@@ -270,7 +272,34 @@ export function Layout() {
                       Operations
                     </button>
                   </>
-                ) : isHod ? null : (
+                ) : isHod ? (
+                  hodCanSeeOverview ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => navigate("/hod/overview")}
+                        className={`px-4 py-2 rounded-lg border transition-all duration-200 ${
+                          path === "/hod/overview"
+                            ? "border-[#2A6FDB] text-[#2A6FDB] bg-blue-50"
+                            : "border-gray-300 text-gray-700 hover:bg-gray-100"
+                        }`}
+                      >
+                        Overview
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => navigate("/dashboard")}
+                        className={`px-4 py-2 rounded-lg border transition-all duration-200 ${
+                          path === "/dashboard"
+                            ? "border-[#2A6FDB] text-[#2A6FDB] bg-blue-50"
+                            : "border-gray-300 text-gray-700 hover:bg-gray-100"
+                        }`}
+                      >
+                        My queue
+                      </button>
+                    </>
+                  ) : null
+                ) : (
                   <>
                     <button
                       type="button"

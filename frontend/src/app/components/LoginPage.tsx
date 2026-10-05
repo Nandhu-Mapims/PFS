@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { useLocation, useNavigate } from "react-router";
 import { login } from "../lib/auth";
 import feedbackLogo from "./image/feedback_logo.png";
@@ -8,6 +9,7 @@ export function LoginPage() {
   const location = useLocation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const nextPath = (location.state as { from?: string } | null)?.from;
@@ -17,9 +19,13 @@ export function LoginPage() {
    * off capabilities rather than role names, so Super Admin and Management (and
    * any future role) route correctly without another branch here.
    */
-  function continueAfterLogin(capabilities: string[]) {
+  function continueAfterLogin(capabilities: string[], role?: string) {
     if (capabilities.includes("roles.manage") || capabilities.includes("users.manage")) {
       navigate("/admin", { replace: true });
+      return;
+    }
+    if (role === "hod" && capabilities.includes("insights.overview")) {
+      navigate(nextPath || "/hod/overview", { replace: true });
       return;
     }
     if (capabilities.includes("insights.view")) {
@@ -52,7 +58,7 @@ export function LoginPage() {
       return;
     }
 
-    continueAfterLogin(session.capabilities ?? []);
+    continueAfterLogin(session.capabilities ?? [], session.role);
   }
 
   return (
@@ -87,13 +93,23 @@ export function LoginPage() {
             <label className="block text-sm font-semibold text-gray-700 mb-1">
               Password
             </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Enter password"
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-[#2A6FDB] outline-none"
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Enter password"
+                className="w-full p-3 pr-12 border-2 border-gray-300 rounded-lg focus:border-[#2A6FDB] outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                className="absolute inset-y-0 right-0 px-3 text-gray-500 hover:text-gray-700"
+              >
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
+            </div>
           </div>
 
           {error && <p className="text-red-600 text-sm">{error}</p>}

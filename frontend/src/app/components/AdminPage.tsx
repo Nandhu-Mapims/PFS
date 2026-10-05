@@ -74,7 +74,7 @@ const BRAND_QR = {
   borderGold: "#C9A227",
 };
 
-export function AdminPage() {
+export function AdminPage({ readOnly = false }: { readOnly?: boolean } = {}) {
   const navigate = useNavigate();
   const location = useLocation();
   const isDeleteMode = location.pathname.includes("/delete");
@@ -527,7 +527,9 @@ export function AdminPage() {
     <div className="w-full">
       <div className="mb-5 sm:mb-6 flex flex-col gap-3 sm:gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-800">Admin Panel</h2>
+          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-gray-800">
+            {readOnly ? "Overview" : "Admin Panel"}
+          </h2>
           <p className="text-sm sm:text-base md:text-lg text-gray-600 mt-1.5 sm:mt-2">
             SaaS-level analytics for patient feedback performance
           </p>
@@ -536,6 +538,7 @@ export function AdminPage() {
             {listScope.allTime ? "all submissions" : `${listScope.from} to ${listScope.to}`} only
           </p>
         </div>
+        {!readOnly && (
         <div className="grid grid-cols-2 gap-2 w-full sm:w-auto sm:flex sm:items-center">
           <button
             type="button"
@@ -552,6 +555,7 @@ export function AdminPage() {
             Ticket management
           </button>
         </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 sm:gap-4 mb-6">
@@ -659,6 +663,7 @@ export function AdminPage() {
         </div>
       </div>
 
+      {!readOnly && (
       <div className="rounded-2xl border-2 border-[#C9A227] bg-gradient-to-br from-[#FFFBF7] via-[#FFF8F0] to-[#FFF0F0] p-6 sm:p-8 shadow-md mb-6">
         <h3 className="text-xl font-bold text-[#8B1538] mb-1">Feedback QR Code</h3>
         <p className="text-sm text-[#6b1229] mb-6">
@@ -716,20 +721,21 @@ export function AdminPage() {
           </div>
         </div>
       </div>
+      )}
 
       <RecentFeedbackBySentiment
         items={items}
         isLoading={isLoading}
         isRefreshing={isRefreshing}
         error={error}
-        isDeleteMode={isDeleteMode}
+        isDeleteMode={!readOnly && isDeleteMode}
         listScope={listScope}
         onListScopeChange={handleListScopeChange}
         onRefresh={() => void loadFeedback({ silent: true, incremental: true })}
         onDownloadAll={downloadAllFeedbackExcel}
         excelDownloadBusy={excelDownloadBusy}
         onDownloadRange={downloadFilteredFeedbackExcel}
-        onDeleteItem={isDeleteMode ? (item) => void handleDeleteFeedback(item) : undefined}
+        onDeleteItem={!readOnly && isDeleteMode ? (item) => void handleDeleteFeedback(item) : undefined}
       />
     </div>
   );

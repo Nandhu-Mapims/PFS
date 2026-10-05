@@ -65,7 +65,13 @@ export const DEFAULT_ROLES = [
     label: "Head of Department",
     description:
       "Owns the tickets assigned to their department: resolves them and records the CAPA.",
-    capabilities: [C.FEEDBACK_READ_ASSIGNED, C.FEEDBACK_RESOLVE, C.CAPA_WRITE],
+    capabilities: [
+      C.FEEDBACK_READ_ASSIGNED,
+      C.FEEDBACK_RESOLVE,
+      C.CAPA_WRITE,
+      C.INSIGHTS_VIEW,
+      C.INSIGHTS_OVERVIEW,
+    ],
     isSystem: true,
     isProtected: false,
     sortOrder: 40,
@@ -90,6 +96,8 @@ const CAPABILITY_MIGRATIONS = [
   // The overview screen used to be implied by insights.view; keep it visible
   // for roles that could already see it.
   { id: "insights.overview.v1", grant: C.INSIGHTS_OVERVIEW, ifHolds: C.INSIGHTS_VIEW },
+  // Every HOD sees the overview screen.
+  { id: "hod.overview.v1", role: "hod", grant: [C.INSIGHTS_VIEW, C.INSIGHTS_OVERVIEW] },
 ];
 
 async function applyCapabilityMigrations() {
@@ -99,8 +107,11 @@ async function applyCapabilityMigrations() {
     for (const migration of CAPABILITY_MIGRATIONS) {
       if (applied.includes(migration.id)) continue;
       const update = { $addToSet: { appliedMigrations: migration.id } };
-      if ((row.capabilities || []).includes(migration.ifHolds)) {
-        update.$addToSet.capabilities = migration.grant;
+      if (migration.role && migration.role !== row.key) continue;
+      if (!migration.ifHolds || (row.capabilities || []).includes(migration.ifHolds)) {
+        update.$addToSet.capabilities = Array.isArray(migration.grant)
+          ? { $each: migration.grant }
+          : migration.grant;
       }
       await Role.updateOne({ _id: row._id }, update);
     }

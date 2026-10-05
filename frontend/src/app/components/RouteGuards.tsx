@@ -89,6 +89,9 @@ export function landingRouteForSession(): string {
   if (held.includes(CAPABILITY.ROLES_MANAGE) || held.includes(CAPABILITY.USERS_MANAGE)) {
     return "/admin";
   }
+  if (session.role === "hod" && held.includes(CAPABILITY.INSIGHTS_OVERVIEW)) {
+    return "/hod/overview";
+  }
   if (held.includes(CAPABILITY.INSIGHTS_VIEW)) return insightsLandingPath("/management");
   if (held.includes(CAPABILITY.FEEDBACK_READ_ASSIGNED)) return "/dashboard";
   if (held.includes(CAPABILITY.FEEDBACK_READ_ALL)) return "/dashboard";

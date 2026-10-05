@@ -92,6 +92,19 @@ export const router = createBrowserRouter([
             }),
           },
           {
+            // HODs get the Admin Panel overview (charts and stats), read-only.
+            element: <RequireCapability anyOf={["insights.overview"]} />,
+            children: [
+              {
+                path: "hod/overview",
+                lazy: async () => {
+                  const { AdminPage } = await import("./components/AdminPage");
+                  return { Component: () => <AdminPage readOnly /> };
+                },
+              },
+            ],
+          },
+          {
             // Pathless layout route: gates every /management screen on
             // insights.view without adding a URL segment.
             element: <RequireCapability anyOf={["insights.view"]} />,
