@@ -2659,8 +2659,13 @@ app.get("/api/feedback", requireAuth, async (req, res) => {
     const mongoFilter = buildFeedbackInsightsFilter(req.query);
     // A user who can only read their own queue gets it enforced here. This used
     // to be a client-side filter, so a HOD could read every ticket by calling the
-    // API directly.
-    if (!userHasCapability(req, CAPABILITIES.FEEDBACK_READ_ALL)) {
+    // API directly. Dashboard viewers (e.g. HODs on the Overview) may list the
+    // whole hospital, matching the hospital-wide /api/analytics they already see;
+    // opening or changing a ticket is still restricted to its assignee below.
+    if (
+      !userHasCapability(req, CAPABILITIES.FEEDBACK_READ_ALL) &&
+      !userHasCapability(req, CAPABILITIES.INSIGHTS_VIEW)
+    ) {
       mongoFilter.assignedToUserId = new mongoose.Types.ObjectId(req.user.id);
     }
     const lite = String(req.query.lite || "").trim() === "1";
