@@ -2693,9 +2693,12 @@ app.get("/api/feedback/:id", requireAuth, async (req, res) => {
     if (!row) {
       return res.status(404).json({ message: "Feedback not found" });
     }
-    // Queue-scoped users may only open a ticket assigned to them.
+    // Queue-scoped users may only open a ticket assigned to them. Dashboard
+    // viewers (insights.view) can already list every row, so they may read its
+    // details too; changing status is still restricted to the assignee.
     if (
       !userHasCapability(req, CAPABILITIES.FEEDBACK_READ_ALL) &&
+      !userHasCapability(req, CAPABILITIES.INSIGHTS_VIEW) &&
       String(row.assignedToUserId || "") !== req.user.id
     ) {
       return res.status(403).json({ message: "You do not have access to this ticket" });
