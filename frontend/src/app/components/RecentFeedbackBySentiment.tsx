@@ -79,6 +79,7 @@ export function RecentFeedbackBySentiment({
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [serviceFilter, setServiceFilter] = useState("all");
   const [encounterFilter, setEncounterFilter] = useState<EncounterTypeFilter>("all");
+  const [uhidSearch, setUhidSearch] = useState("");
   const [draftFrom, setDraftFrom] = useState(listScope.from);
   const [draftTo, setDraftTo] = useState(listScope.to);
   const [page, setPage] = useState(1);
@@ -107,7 +108,9 @@ export function RecentFeedbackBySentiment({
   );
 
   const filtered = useMemo(() => {
+    const uhid = uhidSearch.trim().toLowerCase();
     return sorted.filter((item) => {
+      if (uhid && !(item.patientRegNo || "").toLowerCase().includes(uhid)) return false;
       if (!matchesSentiment(item, sentimentFilter)) return false;
       if (statusFilter !== "all" && item.status !== statusFilter) return false;
 
@@ -121,13 +124,13 @@ export function RecentFeedbackBySentiment({
 
       return true;
     });
-  }, [sorted, sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter]);
+  }, [sorted, uhidSearch, sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter]);
 
   const patientGroups = useMemo(() => buildPatientFeedbackGroups(filtered), [filtered]);
 
   useEffect(() => {
     setPage(1);
-  }, [sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter, pageSize, listScope]);
+  }, [uhidSearch, sentimentFilter, statusFilter, departmentFilter, serviceFilter, encounterFilter, pageSize, listScope]);
 
   const listScopeLabel = listScope.allTime
     ? "all time"
@@ -155,6 +158,7 @@ export function RecentFeedbackBySentiment({
   );
 
   const hasActiveFilters =
+    uhidSearch.trim() !== "" ||
     sentimentFilter !== "all" ||
     statusFilter !== "all" ||
     departmentFilter !== "all" ||
@@ -162,6 +166,7 @@ export function RecentFeedbackBySentiment({
     encounterFilter !== "all";
 
   const clearFilters = () => {
+    setUhidSearch("");
     setSentimentFilter("all");
     setStatusFilter("all");
     setDepartmentFilter("all");
@@ -289,6 +294,19 @@ export function RecentFeedbackBySentiment({
         />
 
         <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
+              UHID
+            </label>
+            <input
+              type="text"
+              value={uhidSearch}
+              onChange={(e) => setUhidSearch(e.target.value)}
+              placeholder="Search UHID…"
+              className="h-9 px-2 border border-gray-200 rounded-lg text-sm w-[160px]"
+            />
+          </div>
+
           <div className="flex flex-col gap-1">
             <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
               AI sentiment
