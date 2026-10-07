@@ -454,6 +454,7 @@ export function Dashboard() {
       const matchesSearch =
         !search ||
         item.patientName.toLowerCase().includes(search) ||
+        (item.patientRegNo || "").toLowerCase().includes(search) ||
         (item.aiSummary || "").toLowerCase().includes(search) ||
         (item.staffRemarks || "").toLowerCase().includes(search);
       const dept = departmentKey(item);
@@ -848,7 +849,7 @@ export function Dashboard() {
               />
               <Input
                 type="text"
-                placeholder="Search patient or AI summary…"
+                placeholder="Search patient, UHID or AI summary…"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-9"
