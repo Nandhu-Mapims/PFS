@@ -77,7 +77,11 @@ import {
   serializeRole,
 } from "./roles.js";
 import { createPendingAiWorker } from "./pendingAiWorker.js";
-import { createM4aPlaybackMiddleware } from "./audioPlayback.js";
+import {
+  backfillM4aPlayback,
+  createM4aPlaybackMiddleware,
+  prepareM4aPlayback,
+} from "./audioPlayback.js";
 import { buildFeedbackInsightsFilter } from "./insightsFeedbackQuery.js";
 import { createSummaryReportWorker } from "./summaryReportScheduler.js";
 import { generateSummaryReports } from "./summaryReportBuilder.js";
@@ -331,6 +335,7 @@ async function saveFeedbackVoiceRecording(feedbackId, fileBuffer, mimeHint = "")
   await fs.mkdir(dir, { recursive: true });
   const rel = path.join("feedback-voice", `${feedbackId}.${ext}`).replace(/\\/g, "/");
   await fs.writeFile(path.join(UPLOADS_ROOT, rel), fileBuffer);
+  prepareM4aPlayback(UPLOADS_ROOT, rel);
   return rel;
 }
 
@@ -3284,6 +3289,9 @@ async function startServer() {
     const server = app.listen(PORT, () => {
       // eslint-disable-next-line no-console
       console.log(`API running on http://localhost:${PORT}`);
+      backfillM4aPlayback(UPLOADS_ROOT).catch((err) => {
+        console.error("[audio] m4a backfill failed:", err?.message || err);
+      });
     });
     server.timeout = 0;
     server.requestTimeout = 0;

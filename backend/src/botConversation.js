@@ -1,6 +1,7 @@
 import path from "path";
 import fs from "fs/promises";
 import { BotConversationConfig } from "./models.js";
+import { prepareM4aPlayback } from "./audioPlayback.js";
 import { CAPABILITIES, requireCapability } from "./auth.js";
 import {
   AI_VOICE_FILES,
@@ -110,6 +111,7 @@ export async function saveBotAnswerRecording(uploadsRoot, feedbackId, questionOr
     .join("feedback-voice", `${feedbackId}-q${questionOrder}.${ext}`)
     .replace(/\\/g, "/");
   await fs.writeFile(path.join(uploadsRoot, rel), fileBuffer);
+  prepareM4aPlayback(uploadsRoot, rel);
   return rel;
 }
 
