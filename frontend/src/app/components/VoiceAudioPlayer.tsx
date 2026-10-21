@@ -10,19 +10,16 @@ const isWebm = (src: string) => /\.webm(?:[?#]|$)/i.test(src);
 
 const withM4aFormat = (src: string) => `${src}${src.includes("?") ? "&" : "?"}format=m4a`;
 
-// iOS Safari can't play MediaRecorder WebM/Opus; the backend serves an AAC copy instead.
-function canPlayWebm(): boolean {
-  if (typeof document === "undefined") return true;
-  return document.createElement("audio").canPlayType('audio/webm; codecs="opus"') === "probably";
-}
-
 export function VoiceAudioPlayer({
   src,
   className = "w-full max-w-xl",
   onUnavailable,
 }: VoiceAudioPlayerProps) {
   const [missing, setMissing] = useState(false);
-  const [m4aFallbackFor, setM4aFallbackFor] = useState<string | null>(null);
+  // WebM recordings play from the backend's AAC copy: iOS Safari claims WebM support
+  // (canPlayType says "probably") yet can't play MediaRecorder WebM, often without
+  // firing an error. The original WebM is only used if the copy fails to load.
+  const [webmFallbackFor, setWebmFallbackFor] = useState<string | null>(null);
   // MediaRecorder WebM has no duration header, so browsers report Infinity and the
   // seek bar / start position misbehave. Seeking far past the end forces the browser
   // to scan the file for the real duration; we then rewind to 0.
@@ -30,7 +27,7 @@ export function VoiceAudioPlayer({
 
   if (missing) return null;
 
-  const useM4a = isWebm(src) && (m4aFallbackFor === src || !canPlayWebm());
+  const useM4a = isWebm(src) && webmFallbackFor !== src;
   const playbackSrc = useM4a ? withM4aFormat(src) : src;
 
   const rewindIfResolved = (el: HTMLAudioElement) => {
@@ -57,8 +54,8 @@ export function VoiceAudioPlayer({
       onDurationChange={(e) => rewindIfResolved(e.currentTarget)}
       onTimeUpdate={(e) => rewindIfResolved(e.currentTarget)}
       onError={() => {
-        if (isWebm(src) && !useM4a) {
-          setM4aFallbackFor(src);
+        if (useM4a) {
+          setWebmFallbackFor(src);
           return;
         }
         setMissing(true);
