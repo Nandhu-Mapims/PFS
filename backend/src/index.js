@@ -77,6 +77,7 @@ import {
   serializeRole,
 } from "./roles.js";
 import { createPendingAiWorker } from "./pendingAiWorker.js";
+import { createM4aPlaybackMiddleware } from "./audioPlayback.js";
 import { buildFeedbackInsightsFilter } from "./insightsFeedbackQuery.js";
 import { createSummaryReportWorker } from "./summaryReportScheduler.js";
 import { generateSummaryReports } from "./summaryReportBuilder.js";
@@ -149,7 +150,12 @@ function uploadsCorsAndOptions(req, res, next) {
   next();
 }
 
-app.use("/uploads", uploadsCorsAndOptions, express.static(UPLOADS_ROOT));
+app.use(
+  "/uploads",
+  uploadsCorsAndOptions,
+  createM4aPlaybackMiddleware(UPLOADS_ROOT),
+  express.static(UPLOADS_ROOT)
+);
 
 function attachVoicePlaybackUrl(doc) {
   if (!doc) return doc;

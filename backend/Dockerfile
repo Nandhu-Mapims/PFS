@@ -1,6 +1,9 @@
 FROM node:20-alpine
 WORKDIR /app
 
+# ffmpeg converts WebM voice recordings to M4A for iOS Safari playback.
+RUN apk add --no-cache ffmpeg
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 

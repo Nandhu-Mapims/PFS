@@ -32,3 +32,6 @@ Thumbs.db
 .vscode/
 .idea/
 
+
+# Generated M4A copies of voice recordings (iOS playback)
+backend/uploads/playback-cache/
