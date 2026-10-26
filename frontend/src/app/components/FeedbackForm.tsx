@@ -28,20 +28,45 @@ const emotions = [
   { id: 1, emoji: "😡", label: "Very Poor", prompt: "What went wrong?" },
 ];
 
+/** Query param lookup that tolerates stray spaces/case in shared links (e.g. "?%20star=4"). */
+function getLooseParam(params: URLSearchParams, name: string): string | null {
+  for (const [key, value] of params) {
+    if (key.trim().toLowerCase() === name) return value;
+  }
+  return null;
+}
+
+/**
+ * Prefill from a shared link: /feedback/give?star=4&msg=Great%20care.
+ * The patient still reviews, edits and submits it themselves.
+ */
+function readPrefill(params: URLSearchParams) {
+  const rawStar = getLooseParam(params, "star") ?? getLooseParam(params, "rating");
+  const star = Number(rawStar?.trim());
+  const rating = Number.isInteger(star) && star >= 1 && star <= 5 ? star : null;
+  const message = (getLooseParam(params, "msg") ?? getLooseParam(params, "message") ?? "")
+    .trim()
+    .slice(0, 2000);
+  return { rating, message };
+}
+
 export function FeedbackForm() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
   const modeParam = searchParams.get("mode");
   const inputKind: InputKind = modeParam === "voice" ? "voice" : "type";
+  const [prefill] = useState(() =>
+    inputKind === "type" ? readPrefill(searchParams) : { rating: null, message: "" }
+  );
 
   const [voiceReady, setVoiceReady] = useState(false);
   const [voiceRecordingBlob, setVoiceRecordingBlob] = useState<Blob | null>(null);
   const [voiceRevision, setVoiceRevision] = useState(0);
-  const [selectedEmotion, setSelectedEmotion] = useState<number | null>(null);
+  const [selectedEmotion, setSelectedEmotion] = useState<number | null>(prefill.rating);
   const identity = usePatientIdentity();
 
-  const [comments, setComments] = useState("");
+  const [comments, setComments] = useState(prefill.message);
   const [remark, setRemark] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<"idle" | "text" | "voice">("idle");
