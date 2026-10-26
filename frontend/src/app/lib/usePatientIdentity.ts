@@ -21,9 +21,9 @@ export type PatientIdentitySubmitFields = Pick<
   | "visitOrAdmissionDate"
 >;
 
-export function usePatientIdentity() {
+export function usePatientIdentity(initialPatientName = "") {
   const [identificationMode, setIdentificationMode] = useState<IdentificationMode>("name");
-  const [manualPatientName, setManualPatientName] = useState("");
+  const [manualPatientName, setManualPatientName] = useState(initialPatientName);
   const [manualDepartment, setManualDepartment] = useState("");
   const [manualWard, setManualWard] = useState("");
   const [hospitalDepartments, setHospitalDepartments] = useState<Department[]>([]);

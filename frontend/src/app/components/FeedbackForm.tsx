@@ -37,7 +37,7 @@ function getLooseParam(params: URLSearchParams, name: string): string | null {
 }
 
 /**
- * Prefill from a shared link: /feedback/give?star=4&msg=Great%20care.
+ * Prefill from a shared link: /feedback/give?star=4&msg=Great%20care&name=Shreya.
  * The patient still reviews, edits and submits it themselves.
  */
 function readPrefill(params: URLSearchParams) {
@@ -47,7 +47,8 @@ function readPrefill(params: URLSearchParams) {
   const message = (getLooseParam(params, "msg") ?? getLooseParam(params, "message") ?? "")
     .trim()
     .slice(0, 2000);
-  return { rating, message };
+  const name = (getLooseParam(params, "name") ?? "").trim().slice(0, 200);
+  return { rating, message, name };
 }
 
 export function FeedbackForm() {
@@ -56,15 +57,17 @@ export function FeedbackForm() {
 
   const modeParam = searchParams.get("mode");
   const inputKind: InputKind = modeParam === "voice" ? "voice" : "type";
-  const [prefill] = useState(() =>
-    inputKind === "type" ? readPrefill(searchParams) : { rating: null, message: "" }
-  );
+  const [prefill] = useState(() => {
+    const fromLink = readPrefill(searchParams);
+    // Voice mode infers the rating and text from the recording; only the name carries over.
+    return inputKind === "type" ? fromLink : { rating: null, message: "", name: fromLink.name };
+  });
 
   const [voiceReady, setVoiceReady] = useState(false);
   const [voiceRecordingBlob, setVoiceRecordingBlob] = useState<Blob | null>(null);
   const [voiceRevision, setVoiceRevision] = useState(0);
   const [selectedEmotion, setSelectedEmotion] = useState<number | null>(prefill.rating);
-  const identity = usePatientIdentity();
+  const identity = usePatientIdentity(prefill.name);
 
   const [comments, setComments] = useState(prefill.message);
   const [remark, setRemark] = useState("");
